@@ -53,6 +53,13 @@ pub struct Model {
     pub ports: Vec<WorktreePorts>,
     /// Open pull request per worktree id, looked up with `gh`.
     pub prs: HashMap<String, PrInfo>,
+    /// Every account's latest plan usage (`ServerEvent::AccountUsage`),
+    /// keyed by account: a profile's name, or `@<harness>` for a CLI's
+    /// own login.
+    pub accounts: HashMap<String, nebula_core::usage::AccountUsage>,
+    /// Each session's context window, keyed by agent id
+    /// (`ServerEvent::SessionContexts`).
+    pub contexts: HashMap<String, nebula_core::usage::ContextUsage>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -340,6 +347,7 @@ impl Client {
                     EntityId::Project(id) => m.projects.retain(|x| x.id != id),
                     EntityId::Worktree(id) => m.worktrees.retain(|x| x.id != id),
                     EntityId::Agent(id) => {
+                        m.contexts.remove(&id.0);
                         m.subagents.retain(|s| s.parent_agent != id);
                         m.agents.retain(|x| x.id != id);
                     }
@@ -372,6 +380,21 @@ impl Client {
             }
             ServerEvent::WorktreePorts { ports } => {
                 self.model.lock().expect("model lock").ports = ports;
+                self.touch();
+            }
+            ServerEvent::AccountUsage { accounts } => {
+                self.model.lock().expect("model lock").accounts = accounts
+                    .into_iter()
+                    .map(|u| (u.account.clone(), u))
+                    .collect();
+                self.touch();
+            }
+            ServerEvent::SessionContexts { contexts } => {
+                let mut m = self.model.lock().expect("model lock");
+                for c in contexts {
+                    m.contexts.insert(c.agent.0, c.context);
+                }
+                drop(m);
                 self.touch();
             }
             ServerEvent::Ack { req_id, created } => {
@@ -789,6 +812,67 @@ mod tests {
         let model = client.snapshot();
         assert_eq!(model.subagents.len(), 1);
         assert_eq!(model.subagents[0].parent_agent, AgentId("lead".into()));
+    }
+
+    /// Usage events reach the frontend model: the account list replaces
+    /// the last, contexts fold in by agent and go with their row.
+    #[test]
+    fn account_usage_and_contexts_reach_the_frontend_model() {
+        use nebula_core::usage::{
+            AccountUsage, ContextUsage, SessionContext, UsageSource, UsageWindow, WindowKind,
+        };
+        let client = Client::new();
+        client.handle(ServerEvent::AccountUsage {
+            accounts: vec![AccountUsage {
+                account: "@claude".into(),
+                harness: "claude".into(),
+                windows: vec![UsageWindow {
+                    kind: WindowKind::Session,
+                    label: None,
+                    percent: 34.0,
+                    resets_at: Some(10),
+                }],
+                source: UsageSource::Statusline,
+                at: 1,
+                plan: None,
+            }],
+        });
+        let ctx = |p: f32| ContextUsage {
+            percent: Some(p),
+            tokens: None,
+            window: Some(200_000),
+            compactions: 2,
+            last_compact_at: None,
+            source: UsageSource::Statusline,
+            at: 1,
+        };
+        client.handle(ServerEvent::SessionContexts {
+            contexts: vec![
+                SessionContext {
+                    agent: AgentId("a".into()),
+                    context: ctx(10.0),
+                },
+                SessionContext {
+                    agent: AgentId("b".into()),
+                    context: ctx(20.0),
+                },
+            ],
+        });
+        client.handle(ServerEvent::SessionContexts {
+            contexts: vec![SessionContext {
+                agent: AgentId("a".into()),
+                context: ctx(96.0),
+            }],
+        });
+        let json = serde_json::to_value(client.snapshot()).unwrap();
+        assert_eq!(json["accounts"]["@claude"]["windows"][0]["kind"], "session");
+        assert_eq!(json["accounts"]["@claude"]["source"], "statusline");
+        assert_eq!(json["contexts"]["a"]["percent"], 96.0);
+        assert_eq!(json["contexts"]["b"]["compactions"], 2);
+        client.handle(ServerEvent::EntityRemoved {
+            id: EntityId::Agent(AgentId("b".into())),
+        });
+        assert!(!client.snapshot().contexts.contains_key("b"));
     }
 
     /// Mirrors the daemon's prune: per parent, the newest

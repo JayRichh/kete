@@ -41,6 +41,33 @@ pub struct Launched {
     pub worktree: String,
     pub agent: Option<String>,
     pub terminal: Option<String>,
+    /// Which account a launch naming none was given, and why
+    /// (`claude: home (failover: work at 92%)`), for the window's toast.
+    pub picked: Option<String>,
+}
+
+/// The ACCOUNT SPREAD's pick for a launch on `harness` that names no
+/// profile: the profile to send (None = the CLI's own login) and the line
+/// that says why. None when the harness has no profiles at all, so
+/// nothing changes and nothing is said.
+pub fn spread_pick(
+    cfg: &Config,
+    harness: &str,
+    now_secs: i64,
+    usage: impl Fn(&str) -> Option<nebula_core::usage::AccountUsage>,
+) -> Option<(Option<String>, String)> {
+    if nebula_core::profiles::for_harness(&cfg.profiles, harness).is_empty() {
+        return None;
+    }
+    let policy = nebula_core::accounts::Policy::from_words(
+        Some(&cfg.account_spread),
+        Some(&cfg.account_spread_threshold),
+    );
+    let pick = nebula_core::accounts::pick(&cfg.profiles, harness, policy, now_secs, usage);
+    Some((
+        pick.profile.map(|p| p.name.trim().to_string()),
+        pick.describe(harness),
+    ))
 }
 
 pub const TERMINAL: &str = "terminal";
@@ -75,7 +102,21 @@ pub async fn quick_launch_in(
             worktree,
             agent: None,
             terminal: Some(terminal),
+            picked: None,
         });
+    }
+    let mut profile = spec.profile.filter(|p| !p.trim().is_empty());
+    let mut picked = None;
+    if profile.is_none() {
+        if let Some((name, why)) = spread_pick(
+            cfg,
+            &spec.kind,
+            nebula_core::clock::now_secs() as i64,
+            nebula_core::usage::read_account,
+        ) {
+            profile = name;
+            picked = Some(why);
+        }
     }
     let agent = crate::spawn_agent_with(
         client,
@@ -83,7 +124,7 @@ pub async fn quick_launch_in(
         NewAgent {
             worktree: worktree.clone(),
             kind: spec.kind,
-            profile: spec.profile,
+            profile,
             prompt: Some(prompt),
             model: spec.model.filter(|m| !m.trim().is_empty()),
             effort: spec.effort.filter(|e| !e.trim().is_empty()),
@@ -94,6 +135,7 @@ pub async fn quick_launch_in(
         worktree,
         agent: Some(agent),
         terminal: None,
+        picked,
     })
 }
 
@@ -192,7 +234,8 @@ mod tests {
             Launched {
                 worktree: "w9".into(),
                 agent: Some("a9".into()),
-                terminal: None
+                terminal: None,
+                picked: None,
             }
         );
         let ClientRequest::CreateWorktree { branch, base, .. } = &seen[0] else {
@@ -237,6 +280,57 @@ mod tests {
         assert!(
             matches!(&seen[0], ClientRequest::CreateTerminal { worktree, .. } if worktree.0 == "w1")
         );
+    }
+
+    #[test]
+    fn the_spread_picks_for_a_launch_naming_no_profile() {
+        use nebula_core::profiles::Profile;
+        use nebula_core::usage::{AccountUsage, UsageSource, UsageWindow, WindowKind};
+        let p = |name: &str, default: bool| Profile {
+            name: name.into(),
+            harness: "claude".into(),
+            env: Default::default(),
+            default,
+            use_default: false,
+            disabled: false,
+        };
+        let mut cfg = Config::default();
+        assert_eq!(
+            spread_pick(&cfg, "claude", 0, |_| None),
+            None,
+            "no profiles: no say"
+        );
+        cfg.profiles = vec![p("work", true), p("home", false)];
+        let used = |name: &str| {
+            (name == "work").then(|| AccountUsage {
+                account: "work".into(),
+                harness: "claude".into(),
+                windows: vec![UsageWindow {
+                    kind: WindowKind::Weekly,
+                    label: None,
+                    percent: 92.0,
+                    resets_at: None,
+                }],
+                source: UsageSource::Statusline,
+                at: 0,
+                plan: None,
+            })
+        };
+        assert_eq!(
+            spread_pick(&cfg, "claude", 0, used),
+            Some((Some("work".into()), "claude: work (default)".into())),
+            "manual keeps the default"
+        );
+        cfg.account_spread = "failover".into();
+        cfg.account_spread_threshold = "90".into();
+        assert_eq!(
+            spread_pick(&cfg, "claude", 0, used),
+            Some((
+                Some("home".into()),
+                "claude: home (failover: work at 92%)".into()
+            ))
+        );
+        assert_eq!(spread_pick(&cfg, "codex", 0, used), None);
     }
 
     #[test]

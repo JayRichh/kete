@@ -150,10 +150,12 @@ pub fn update_at(
     keep_env: bool,
 ) -> Res<ProfileSaved> {
     let mut profile = profile_of(form, registry)?;
-    if keep_env {
-        if let Some(old) = load_at(config).into_iter().find(|p| p.name == profile.name) {
+    if let Some(old) = load_at(config).into_iter().find(|p| p.name == profile.name) {
+        if keep_env {
             profile.env = old.env;
         }
+        // The form has no enabled box: the accounts list's switch stays.
+        profile.disabled = old.disabled;
     }
     profiles::update_in_file(config, &profile)?;
     let home = profile.home_in(root);
@@ -301,6 +303,22 @@ mod tests {
         assert_eq!(saved.login, None);
         assert_eq!(saved.home, None);
         assert!(!root.join("main").exists());
+    }
+
+    #[test]
+    fn an_edit_keeps_a_disabled_profile_disabled() {
+        let (_d, config, root, registry) = setup();
+        add_at(&config, &root, &registry, form("off", "claude")).unwrap();
+        profiles::set_enabled_in_file(&config, "off", false).unwrap();
+        let mut edit = form("off", "claude");
+        edit.default = true;
+        update_at(&config, &root, &registry, edit, true).unwrap();
+        let raw: Value = serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+        assert_eq!(
+            raw["profiles"][0]["disabled"], true,
+            "the form has no enabled box"
+        );
+        assert_eq!(raw["profiles"][0]["default"], true);
     }
 
     #[test]

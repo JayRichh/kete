@@ -5,6 +5,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod accounts;
 mod ado;
 mod attribution;
 mod daemon;
@@ -427,6 +428,7 @@ fn launchables() -> Launchables {
     let default_harness = cfg.quick_prompt_kind().as_str().to_string();
     let profiles = nebula_core::profiles::load()
         .into_iter()
+        .filter(|p| !p.disabled)
         .map(|p| ProfileInfo {
             name: p.name,
             harness: p.harness,
@@ -790,6 +792,8 @@ fn main() {
             profiles::profile_update,
             profiles::profile_remove,
             profiles::profile_set_default,
+            accounts::accounts_list,
+            accounts::profile_set_enabled,
             settings::settings_schema,
             settings::settings_set,
             settings::settings_reset,
