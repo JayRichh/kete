@@ -3,6 +3,7 @@
   import { toneOf, terminalTone, harnessLabel, placeOf, age, lastPrompt } from './status';
   import Status from './Status.svelte';
   import Terminal from './Terminal.svelte';
+  import ContextBar from './accounts/ContextBar.svelte';
   import { agentMenu, terminalMenu } from './actions';
   import { openMenu } from './ui/ui.svelte';
 
@@ -61,6 +62,7 @@
         {#if where}
           <span class="flex-none font-mono text-[12px]" title={where.path}>{where.project} / {where.branch}</span>
         {/if}
+        {#if agent}<ContextBar context={app.model.contexts?.[agent.id]} wide />{/if}
         {#if prompt}<span class="min-w-0 truncate" title={prompt}>{prompt}</span>{/if}
         {#if agent}<span class="ml-auto flex-none font-mono text-[12px]">{age(agent.status_changed_at, app.now)}</span>{/if}
       </div>

@@ -83,6 +83,50 @@ export interface PrInfo {
   title: string;
   draft: boolean;
 }
+/** One measured plan limit (`nebula_core::usage::UsageWindow`). */
+export interface UsageWindow {
+  kind: 'session' | 'weekly' | 'model_weekly' | 'monthly';
+  /** The model or allowance where the kind alone doesn't say. */
+  label: string | null;
+  percent: number;
+  /** Epoch seconds. */
+  resets_at: number | null;
+}
+export type UsageSource = 'statusline' | 'transcript' | 'rollout' | 'copilot_api' | 'copilot_events' | 'screen';
+/** An account's latest plan usage, keyed by profile name or `@<harness>`. */
+export interface AccountUsage {
+  account: string;
+  harness: string;
+  windows: UsageWindow[];
+  source: UsageSource;
+  /** Epoch ms. */
+  at: number;
+  plan: string | null;
+}
+/** A session's context window. */
+export interface ContextUsage {
+  percent: number | null;
+  tokens: number | null;
+  window: number | null;
+  compactions: number;
+  last_compact_at: number | null;
+  source: UsageSource;
+  at: number;
+}
+/** One account in the rail (`accounts_list`). */
+export interface AccountRow {
+  key: string;
+  name: string;
+  harness: string;
+  /** False for a harness's own login, which has no profile. */
+  profile: boolean;
+  default: boolean;
+  disabled: boolean;
+  useDefault: boolean;
+  login: 'logged_in' | 'needs_login' | 'unknown';
+  loginHint: string | null;
+  usage: AccountUsage | null;
+}
 export interface Model {
   connected: boolean;
   error: string | null;
@@ -96,6 +140,10 @@ export interface Model {
   ports: WorktreePorts[];
   prs: Record<string, PrInfo>;
   subagents: Subagent[];
+  /** Plan usage by account key (a 55+ daemon pushes it). */
+  accounts?: Record<string, AccountUsage>;
+  /** Context by agent id. */
+  contexts?: Record<string, ContextUsage>;
 }
 
 /** `SessionRef` exactly as serde spells it: externally tagged. */
@@ -199,6 +247,8 @@ export interface Launched {
   worktree: string;
   agent: string | null;
   terminal: string | null;
+  /** The account spread's pick, when the launch named no profile. */
+  picked?: string | null;
 }
 
 /** Where a settings write lands, as the Rust side's `schema::Target`. */
@@ -309,6 +359,8 @@ export const api = {
   profileUpdate: (form: ProfileForm, keepEnv: boolean) => invoke<ProfileSaved>('profile_update', { form, keepEnv }),
   profileRemove: (name: string) => invoke<ProfileSaved>('profile_remove', { name }),
   profileSetDefault: (name: string) => invoke<ProfileRow[]>('profile_set_default', { name }),
+  accounts: () => invoke<AccountRow[]>('accounts_list'),
+  profileSetEnabled: (name: string, enabled: boolean) => invoke<null>('profile_set_enabled', { name, enabled }),
   createTerminal: (worktree: string) => invoke<string>('create_terminal', { worktree }),
   addProject: (path: string) => invoke<string>('add_project', { path }),
   startRun: (worktree: string) => invoke<string>('start_run', { worktree }),

@@ -2,7 +2,7 @@
 // and what the window is looking at. Where the window is lives in
 // `nav` (shell/history.svelte.ts); this file follows it.
 
-import { api, type Launchables, type Model, type SessionRef } from './api';
+import { api, type AccountRow, type Launchables, type Model, type SessionRef } from './api';
 import { ado, type AdoContextInfo } from './ado/api';
 import { nav, type Place } from './shell/history.svelte';
 import { diffItem, isDiffMode, parseDiffItem, type DiffMode, type DiffRange } from './diff-api';
@@ -34,6 +34,8 @@ const empty: Model = {
   ports: [],
   prs: {},
   subagents: [],
+  accounts: {},
+  contexts: {},
 };
 
 export const app = $state({
@@ -59,6 +61,8 @@ export const app = $state({
   now: Date.now(),
   toast: null as string | null,
   launch: { harnesses: [], profiles: [] } as Launchables,
+  /** The rail's accounts (`accounts_list`); live usage is `model.accounts`. */
+  accounts: [] as AccountRow[],
   /** Per project id: its ADO remote, null when none, absent until asked. */
   adoCtx: {} as Record<string, AdoContextInfo | null>,
   /** A repo picked in the rail, for the overview to scroll to; seq bumps per
@@ -116,6 +120,15 @@ export function refreshLaunchables() {
   api
     .launchables()
     .then((l) => (app.launch = l))
+    .catch(() => {});
+  refreshAccounts();
+}
+
+/** Ask again for the rail's accounts (after a profile edit or toggle). */
+export function refreshAccounts() {
+  api
+    .accounts()
+    .then((a) => (app.accounts = a))
     .catch(() => {});
 }
 

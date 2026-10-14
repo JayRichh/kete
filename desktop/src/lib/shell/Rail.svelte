@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { app, focusQuickPrompt, openSettings, revealRepo, setThemePref, toast, type ThemePref } from '../store.svelte';
+  import { app, openSettings, revealRepo, setThemePref, toast, type ThemePref } from '../store.svelte';
   import { api } from '../api';
   import { nav, type View } from './history.svelte';
   import { repoRows, tally } from '../overview/repos';
+  import AccountsSection from '../accounts/AccountsSection.svelte';
 
   const rows = $derived(repoRows(app.model));
   /** Projects in the user's own order: the rail is a map, not a ranking. */
@@ -122,19 +123,7 @@
       {/if}
     </div>
 
-    {#if app.launch.profiles.length}
-      <h2 class="m-0 {heading}">Profiles</h2>
-      {#each app.launch.profiles as p (p.harness + p.name)}
-        <button
-          class="{item} bg-transparent text-[13px]"
-          onclick={() => focusQuickPrompt({ harness: p.harness, profile: p.name })}
-          title="Start a session with {p.name}"
-        >
-          <span class="min-w-0 flex-1 truncate text-ink">{p.name}</span>
-          <span class="flex-none font-mono text-[12px] text-muted">{p.harness}{p.default ? ' *' : ''}</span>
-        </button>
-      {/each}
-    {/if}
+    <AccountsSection {heading} />
   </nav>
 
   <div class="flex h-10 flex-none items-center border-t border-rule px-2">

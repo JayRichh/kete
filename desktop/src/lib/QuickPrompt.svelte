@@ -163,6 +163,8 @@
       if (out.agent) {
         if (follow) openSession({ Agent: out.agent });
         else toast('Started. It is on the overview.');
+        // Which account the spread gave a launch that named none, and why.
+        if (out.picked) toast(follow ? out.picked : `Started on ${out.picked}. It is on the overview.`);
       } else if (out.terminal) openSession({ Terminal: out.terminal });
       if (worktree === NEW_WT && !app.launch.new_worktree) worktree = out.worktree;
       prompt = '';
