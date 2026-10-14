@@ -135,6 +135,9 @@ pub enum Action {
     ToggleLauncherPane,
     /// `F10`: toggle between the ORCHESTRATOR chat view and the grid.
     ToggleOrchestratorView,
+    /// `⇧U`: the ACCOUNTS OVERLAY — each account's plan usage, login,
+    /// and its on/off and default switches.
+    Accounts,
     /// `⇧K`: the KANBAN — the grid as lanes by status — or back to the
     /// bands; saved as Settings → Appearance → **Kanban**.
     ToggleKanban,
@@ -657,6 +660,15 @@ pub const ACTIONS: &[ActionSpec] = &[
         group: "GENERAL",
         scope: Scope::Global,
         defaults: &["f10"],
+    },
+    ActionSpec {
+        action: Action::Accounts,
+        id: "accounts",
+        label: "Accounts and usage",
+        hint: "Every account (profiles, and each CLI's own login) with its 5h and weekly plan usage, resets and login; Space switches a profile on or off, d makes it its harness's default",
+        group: "GENERAL",
+        scope: Scope::Global,
+        defaults: &["shift+u"],
     },
     ActionSpec {
         action: Action::ToggleFullScreen,
