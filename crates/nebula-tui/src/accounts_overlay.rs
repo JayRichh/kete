@@ -203,6 +203,9 @@ pub fn reading_tone(reading: Option<&AccountUsage>, now: i64) -> usage::Tone {
 
 /// `5m ago`, `2h ago` — how old a reading is.
 pub fn age(at_ms: i64, now_ms: i64) -> String {
+    if at_ms <= 0 {
+        return "time unknown".into();
+    }
     let secs = ((now_ms - at_ms) / 1000).max(0);
     match secs {
         0..=59 => "just now".into(),
@@ -342,7 +345,8 @@ mod tests {
             }),
             None
         );
-        assert_eq!(age(0, 30_000), "just now");
-        assert_eq!(age(0, 3 * 3_600_000), "3h ago");
+        assert_eq!(age(1, 30_000), "just now");
+        assert_eq!(age(1, 3 * 3_600_000 + 1), "3h ago");
+        assert_eq!(age(0, 5), "time unknown");
     }
 }

@@ -60,8 +60,13 @@ pub(crate) fn row_lines(
             Style::default().fg(th.accent),
         ),
         Span::styled(format!(" {} ", row.label()), name_style),
-        Span::styled(format!("  {}", row.harness), Style::default().fg(th.muted)),
     ];
+    if row.profile.is_some() {
+        head.push(Span::styled(
+            format!("  {}", row.harness),
+            Style::default().fg(th.muted),
+        ));
+    }
     if row.disabled() {
         head.push(Span::styled("  off", Style::default().fg(th.warn)));
     }

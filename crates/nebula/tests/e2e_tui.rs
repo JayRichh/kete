@@ -59,6 +59,12 @@ impl TuiHarness {
     /// a stub `gh` on PATH so the pull-request row can be driven without a
     /// GitHub account.
     fn spawn_with_env(extra_env: &[(&str, String)]) -> Self {
+        Self::spawn_with_setup(extra_env, |_| {})
+    }
+
+    /// `spawn_with_env`, with `setup` run on the data dir before kete
+    /// starts — files the daemon must find at boot.
+    fn spawn_with_setup(extra_env: &[(&str, String)], setup: impl FnOnce(&Path)) -> Self {
         // Socket paths must stay under SUN_LEN (~104 bytes) — keep the
         // runtime dir short. Tests share one process, so a per-harness
         // sequence keeps each test on its own daemon.
@@ -79,6 +85,7 @@ impl TuiHarness {
             r#"{"theme": "default", "icons": "off"}"#,
         )
         .unwrap();
+        setup(&data_dir);
         let repos = tempfile::tempdir().unwrap();
 
         let pty = native_pty_system()
@@ -451,6 +458,32 @@ fn tui_help_modal_grouped_keymap() {
 
     tui.send(ESC); // closes
     tui.wait_for_gone("NAVIGATE & SEARCH");
+}
+
+/// `Shift+U` opens the ACCOUNTS overlay on what the daemon kept: with no
+/// profiles at all, the CLI's own login (`@claude`) shows with its bars.
+#[test]
+fn tui_accounts_overlay_shows_the_own_login_with_its_bars() {
+    let mut tui = TuiHarness::spawn_with_setup(&[], |data| {
+        let dir = data.join("profiles").join(".usage");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("@claude.json"),
+            r#"{"percent": 41, "window": "weekly", "at": 0, "harness": "claude",
+                "windows": [{"kind": "session", "label": null, "percent": 21.0, "resets_at": null},
+                            {"kind": "weekly", "label": null, "percent": 41.0, "resets_at": null}],
+                "source": "statusline", "plan": null}"#,
+        )
+        .unwrap();
+    });
+    tui.wait_for_text("create your first project");
+    tui.send(b"U");
+    tui.wait_for_text("Accounts");
+    tui.wait_for_text("claude (own login)");
+    tui.wait_for_text(" 21%");
+    tui.wait_for_text(" 41%");
+    tui.send(ESC);
+    tui.wait_for_gone("claude (own login)");
 }
 
 /// `nebula open` typed into a live session's shell — the stand-in agent is
