@@ -45,6 +45,7 @@ impl Overlay {
             Overlay::Tree(view) => draw_tree_overlay(f, app, view),
             Overlay::Review(view) => draw_review_overlay(f, app, view),
             Overlay::OrchestratorStart(view) => draw_orchestrator_start_overlay(f, app, view),
+            Overlay::Accounts(view) => super::accounts_view::draw(f, app, view),
         }
     }
 }

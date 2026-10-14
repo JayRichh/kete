@@ -250,17 +250,26 @@ pub(crate) fn draft_of_return(back: &QuickReturn) -> Option<QuickDraft> {
 /// aimed somewhere else keeps the aim and spec it was opened with. Either
 /// way the slot is emptied: the draft is in this box now, and clearing it
 /// here and pressing Esc is how it is thrown away.
-/// Read the PROFILES list and each one's latest PLAN USAGE into the app,
-/// for the box's profile field: once as a box opens and again on `^A`,
-/// never per frame. A handful of small files, the usage ones written by
-/// the DAEMON as Claude prints its notice.
+/// Read the PROFILES list into the app, and every account's latest PLAN
+/// USAGE when the DAEMON is too old to push it
+/// (`ServerEvent::AccountUsage`), for the box's profile field: once as a
+/// box opens and again on `^A`, never per frame. The kept files are the
+/// DAEMON's (`nebula_core::usage`), and an older build's screen readings
+/// read back from them too.
 pub(crate) fn refresh_profiles(app: &mut App) {
-    let profiles = crate::config::Config::load().profiles;
-    app.launcher.profile_usage = profiles
-        .iter()
-        .filter_map(|p| Some((p.name.clone(), nebula_core::profiles::read_usage(p)?)))
-        .collect();
-    app.launcher.profiles = profiles;
+    if !app.launcher.usage_pushed {
+        app.launcher.account_usage =
+            nebula_core::usage::read_all_in(&nebula_core::profiles::profiles_root());
+    }
+    app.launcher.profiles = crate::config::Config::load().profiles;
+}
+
+/// The ACCOUNT SPREAD the config sets (Settings → Sessions → Accounts).
+pub(crate) fn spread_policy(cfg: &Config) -> nebula_core::accounts::Policy {
+    nebula_core::accounts::Policy::from_words(
+        Some(&cfg.account_spread),
+        Some(&cfg.account_spread_threshold),
+    )
 }
 
 /// `^A` in the box, or a click on its profile field: the launch steps to
@@ -358,8 +367,12 @@ impl QuickLaunch {
             effort.or_else(|| descriptor.default_effort().map(str::to_string)),
             custom.as_deref(),
         );
-        let profile = nebula_core::profiles::default_for(&cfg.profiles, &descriptor.id)
-            .map(|p| p.name.trim().to_string());
+        // The ACCOUNT SPREAD's pick (under `manual`, the default profile),
+        // so the field shows the account Enter will use.
+        let profile =
+            nebula_core::accounts::pick_now(&cfg.profiles, &descriptor.id, spread_policy(cfg))
+                .profile
+                .map(|p| p.name.trim().to_string());
         Self {
             target,
             kind,
@@ -400,7 +413,7 @@ impl QuickLaunch {
         &self,
         profiles: &[nebula_core::profiles::Profile],
     ) -> Vec<Option<String>> {
-        let all = nebula_core::profiles::for_harness(profiles, self.harness_id());
+        let all = nebula_core::profiles::enabled_for(profiles, self.harness_id());
         if all.is_empty() {
             return Vec::new();
         }
@@ -1307,6 +1320,47 @@ mod tests {
         }));
         assert!(!issue.takes_cloud());
         assert!(!issue.with_cloud(true).cloud);
+    }
+
+    /// A switched-off profile is not offered by `^A`, and a non-manual
+    /// ACCOUNT SPREAD opens the box on the account it picks.
+    #[test]
+    fn a_disabled_profile_is_skipped_and_the_spread_picks_the_box_account() {
+        let profile = |name: &str, default: bool, disabled: bool| nebula_core::profiles::Profile {
+            name: name.into(),
+            harness: "claude".into(),
+            env: Default::default(),
+            default,
+            use_default: false,
+            disabled,
+        };
+        let cfg = Config {
+            profiles: vec![
+                profile("main", true, false),
+                profile("off", false, true),
+                profile("max2", false, false),
+            ],
+            ..Config::default()
+        };
+        let claude = QuickLaunch::of_kind(worktree(), AgentKind::Claude, None, None, None, &cfg);
+        assert_eq!(
+            claude.profile_choices(&cfg.profiles),
+            vec![Some("main".to_string()), Some("max2".to_string())]
+        );
+        // least_used with no readings anywhere: the default leads the ties.
+        let spread = Config {
+            account_spread: "least_used".into(),
+            ..cfg.clone()
+        };
+        assert_eq!(
+            spread_policy(&spread).spread,
+            nebula_core::accounts::Spread::LeastUsed
+        );
+        let mut all_off = cfg.clone();
+        all_off.profiles[0].disabled = true;
+        all_off.profiles[2].disabled = true;
+        let none = QuickLaunch::of_kind(worktree(), AgentKind::Claude, None, None, None, &all_off);
+        assert_eq!(none.profile, None, "a disabled default is no default");
     }
 
     /// A launch opens on its harness's default PROFILE, `^A` steps through

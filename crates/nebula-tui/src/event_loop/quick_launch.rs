@@ -75,6 +75,13 @@ pub(super) fn submit(
     // still on the cards — unless the `quick_prompt_focus` SETTING says to take
     // the pane, as a picker-walked launch (`n`) does.
     let focus_pane = !stay && cfg.quick_prompt_focus;
+    // A spread that chose the account says which and why.
+    if let Some(said) = spread_note(&cfg, &launch) {
+        app.chrome.flash = Some(match app.chrome.flash.take() {
+            Some(before) => format!("{before} · {said}"),
+            None => said,
+        });
+    }
     match launch.target.clone() {
         QuickTarget::Worktree(worktree) => {
             let draft = AgentLaunchDraft {
@@ -127,6 +134,24 @@ pub(super) fn submit(
             );
         }
     }
+}
+
+/// The ACCOUNT SPREAD's word on this launch: `claude: home (failover:
+/// work at 92%)` when a non-manual spread picked the account the box is
+/// on. None under `manual` (the default profile is no news) and for a
+/// harness without profiles.
+fn spread_note(cfg: &crate::config::Config, launch: &QuickLaunch) -> Option<String> {
+    let policy = crate::quick_prompt::spread_policy(cfg);
+    if policy.spread == nebula_core::accounts::Spread::Manual {
+        return None;
+    }
+    let harness = launch.harness_id();
+    if nebula_core::profiles::enabled_for(&cfg.profiles, harness).is_empty() {
+        return None;
+    }
+    let pick = nebula_core::accounts::pick_now(&cfg.profiles, harness, policy);
+    let picked = pick.profile.map(|p| p.name.trim().to_string());
+    (picked == launch.profile).then(|| pick.describe(harness))
 }
 
 /// What every launch the screen follows does at once: the new session is

@@ -29,6 +29,7 @@ use ratatui::Terminal;
 use std::io::{BufWriter, Stdout};
 use std::time::Duration;
 
+mod accounts;
 mod actions;
 mod activate;
 mod alerts;

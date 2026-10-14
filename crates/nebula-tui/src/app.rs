@@ -2325,6 +2325,8 @@ pub enum Overlay {
     OrchestratorStart(crate::orchestrator_view::StartView),
     /// `^P` in the LAUNCHER VIEW's box: the PROJECT PICKER.
     ProjectPicker(crate::launcher::ProjectPicker),
+    /// `⇧U`: the ACCOUNTS OVERLAY — plan usage and login per account.
+    Accounts(crate::accounts_overlay::AccountsView),
 }
 
 /// Rows optimistically removed for an in-flight DeleteWorktree, kept so an
@@ -4023,9 +4025,16 @@ pub struct LauncherState {
     /// the TUI — so the box's profile field and the cards read it without
     /// a file read per frame.
     pub profiles: Vec<nebula_core::profiles::Profile>,
-    /// Each profile's latest PLAN USAGE, by name, read with
-    /// [`LauncherState::profiles`] (`quick_prompt::refresh_profiles`).
-    pub profile_usage: std::collections::HashMap<String, nebula_core::profiles::Usage>,
+    /// Every ACCOUNT's latest plan usage (`nebula_core::usage`): pushed
+    /// by a 55+ daemon (`ServerEvent::AccountUsage`), else read from the
+    /// kept files as a box opens (`quick_prompt::refresh_profiles`).
+    pub account_usage: Vec<nebula_core::usage::AccountUsage>,
+    /// Set once the daemon pushed a usage list: the files are not read
+    /// over it after that.
+    pub usage_pushed: bool,
+    /// Each session's context window (`ServerEvent::SessionContexts`).
+    pub session_contexts:
+        std::collections::HashMap<nebula_core::AgentId, nebula_core::usage::ContextUsage>,
 }
 
 pub struct ChromeState {

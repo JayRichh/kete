@@ -2254,6 +2254,35 @@ fn draw_card(
         }
     }
 
+    // The session's CONTEXT: `ctx 42%` (and `⟳2` after two compactions)
+    // at the row's right end, in its tone — a card mark, so
+    // `hide_card_marks` leaves it off, and the issue number keeps the spot.
+    if !app.launcher.hide_card_marks && card_issue_label(app, a).is_none() {
+        if let Some((label, tone)) = app
+            .launcher
+            .session_contexts
+            .get(&a.id)
+            .and_then(|c| Some((crate::accounts_overlay::context_label(c)?, c.percent?)))
+        {
+            let label_w = label.chars().count();
+            if width > label_w + 4 {
+                let room = width - label_w - 1;
+                let harness = truncate(&harness, room);
+                let pad = width - label_w - harness.chars().count();
+                let fg = match nebula_core::usage::tone(tone) {
+                    nebula_core::usage::Tone::Ok => quiet_or(dim),
+                    nebula_core::usage::Tone::Warn => quiet_or(th.warn),
+                    nebula_core::usage::Tone::Hot => quiet_or(th.err),
+                };
+                second = vec![
+                    Span::styled(harness, Style::default().fg(quiet_or(dim))),
+                    Span::raw(" ".repeat(pad)),
+                    Span::styled(label, Style::default().fg(fg)),
+                ];
+            }
+        }
+    }
+
     // The ORCHESTRATOR BADGE: the machine's one orchestrator says so ahead
     // of what it runs on (F10 opens it).
     if a.role.is_orchestrator() {
@@ -3195,6 +3224,9 @@ struct Details {
     /// account's last PLAN USAGE beside it when one is known — or None
     /// when the harness has no profiles, and no field is drawn.
     profile: Option<String>,
+    /// How used the profile's account is: the field goes ember at 80%,
+    /// red at 95%.
+    profile_tone: nebula_core::usage::Tone,
     /// The branch is the WORKTREE PICKER's button — anything but a PR
     /// SESSION's head.
     pickable: bool,
@@ -3232,17 +3264,26 @@ impl Details {
         };
         let profile = (!launch.profile_choices(&app.launcher.profiles).is_empty()).then(|| {
             let name = launch.profile.clone().unwrap_or_else(|| "none".into());
-            match app.launcher.profile_usage.get(&name) {
-                Some(usage) => format!("{name} {}%", usage.percent),
-                None => name,
-            }
+            let key =
+                nebula_core::usage::account_key(launch.profile.as_deref(), launch.harness_id());
+            let reading = app.launcher.account_usage.iter().find(|u| u.account == key);
+            let now = nebula_core::clock::now_secs() as i64;
+            (
+                crate::accounts_overlay::field_text(&name, reading, now),
+                crate::accounts_overlay::reading_tone(reading, now),
+            )
         });
+        let (profile, profile_tone) = match profile {
+            Some((text, tone)) => (Some(text), tone),
+            None => (None, nebula_core::usage::Tone::Ok),
+        };
         Self {
             project: launch_project(app, launch),
             branch,
             harness,
             model,
             profile,
+            profile_tone,
             pickable: launch.pr.is_none(),
             fresh: launch.is_new_worktree(),
             root: launch.pr.is_none()
@@ -3324,7 +3365,11 @@ impl Details {
                 BoxField::Profile,
                 "profile",
                 self.profile.as_ref().unwrap_or(&self.model),
-                th.text,
+                match self.profile_tone {
+                    nebula_core::usage::Tone::Ok => th.text,
+                    nebula_core::usage::Tone::Warn => th.warn,
+                    nebula_core::usage::Tone::Hot => th.err,
+                },
                 Some("^A"),
             ),
         ]
@@ -4150,6 +4195,34 @@ mod tests {
     /// TERMINAL's on `▶` and a session card's prompt on `›`; on, none of
     /// them is drawn and each name or prompt starts in the column its mark
     /// held.
+    #[test]
+    fn a_session_card_shows_its_context_unless_marks_are_hidden() {
+        let mut app = a_tree();
+        select(&mut app, "api");
+        let id = app.tree.agents[0].id.clone();
+        app.launcher.session_contexts.insert(
+            id,
+            nebula_core::usage::ContextUsage {
+                percent: Some(42.0),
+                tokens: Some(84_000),
+                window: Some(200_000),
+                compactions: 2,
+                last_compact_at: None,
+                source: nebula_core::usage::UsageSource::Statusline,
+                at: 0,
+            },
+        );
+        let body = Rect::new(0, 0, 100, 40);
+        let lines = drawn_lines(&mut app, body);
+        assert!(
+            lines.iter().any(|l| l.contains("ctx 42% \u{27f3}2")),
+            "{lines:#?}"
+        );
+        app.launcher.hide_card_marks = true;
+        let lines = drawn_lines(&mut app, body);
+        assert!(!lines.iter().any(|l| l.contains("ctx 42%")));
+    }
+
     #[test]
     fn hide_card_marks_drops_the_mark_before_the_name_and_the_prompt() {
         use nebula_core::{TerminalId, TerminalTab, WorktreeId};

@@ -20922,6 +20922,20 @@ fn every_overlay() -> Vec<(&'static str, fn(&mut App), Option<&'static str>)> {
             },
             Some("Prompt"),
         ),
+        (
+            // ⇧U from the grid.
+            "Accounts",
+            |app| {
+                seed_tree(app);
+                press(
+                    app,
+                    KeyCode::Char('U'),
+                    KeyModifiers::SHIFT,
+                    &mut Vec::new(),
+                );
+            },
+            None,
+        ),
     ]
 }
 
@@ -21061,6 +21075,7 @@ fn overlay_label(overlay: &Overlay) -> &'static str {
         Overlay::Review(_) => "Review",
         Overlay::OrchestratorStart(_) => "OrchestratorStart",
         Overlay::ProjectPicker(_) => "ProjectPicker",
+        Overlay::Accounts(_) => "Accounts",
     }
 }
 
@@ -21090,7 +21105,7 @@ fn the_overlay_table_covers_every_variant_exactly_once() {
         let mut unique = seen.clone();
         unique.dedup();
         assert_eq!(unique, seen, "two rows for the same variant");
-        assert_eq!(seen.len(), 19, "a variant came or went: {seen:?}");
+        assert_eq!(seen.len(), 20, "a variant came or went: {seen:?}");
     });
 }
 

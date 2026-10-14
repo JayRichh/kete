@@ -29,6 +29,8 @@ pub(crate) fn handle_server_event(app: &mut App, event: ServerEvent, out: &mut V
         ServerEvent::SessionText { req_id, text, .. } => {
             orchestrator::land_review_history(app, req_id, text);
         }
+        ServerEvent::AccountUsage { accounts } => accounts::on_account_usage(app, accounts),
+        ServerEvent::SessionContexts { contexts } => accounts::on_session_contexts(app, contexts),
         _ => {}
     }
 }

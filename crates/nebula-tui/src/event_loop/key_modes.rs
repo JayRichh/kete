@@ -353,6 +353,8 @@ fn handle_global_action(
         | Action::FollowUp => handle_session_state_action(app, action, chord, out),
         // F10: the ORCHESTRATOR VIEW, or the prompt that starts one.
         Action::ToggleOrchestratorView => orchestrator::toggle(app, out),
+        // ⇧U: the ACCOUNTS OVERLAY.
+        Action::Accounts => accounts::open(app),
         // Listed rather than `_`: a new action is a compile error here
         // until it is routed, never an `unreachable!` at the user's press.
         Action::GitDiff

@@ -141,6 +141,10 @@ fn overlay_footer_hint(app: &App, overlay: &Overlay, th: Theme) -> FooterHint {
         Overlay::Prompt(p) if matches!(p.kind, crate::app::PromptKind::QuickPrompt(_)) => {
             quick_prompt_footer_hint(app, th)
         }
+        Overlay::Accounts(_) => dim_hint(
+            "↑/↓: move  Space: on/off  d: default  Esc: close  (logins: kete profile login <name>)",
+            th,
+        ),
         Overlay::ProjectPicker(_) => dim_hint(
             "type: filter projects  ↑/↓: move  Enter: aim the box there  Esc: clear/back to the box",
             th,
