@@ -63,9 +63,16 @@ impl Daemon {
         self.sessions.lock().remove(sref)
     }
 
+    /// Kill a session on purpose. An agent's still-open subagents close
+    /// with it, here and not when its exit lands: a respawn can be up by
+    /// then (an attach after the idle reap, a restart), and that exit
+    /// must not touch the new process's rows.
     pub fn kill_session(&self, sref: &SessionRef) {
         if let Some(s) = self.remove_session(sref) {
             s.kill();
+        }
+        if let SessionRef::Agent(id) = sref {
+            self.close_subagents(id);
         }
     }
 
