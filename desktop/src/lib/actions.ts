@@ -24,7 +24,7 @@ import { canSwitch, projectAccount } from './accounts/view';
 import { accountKey, sessionHarness } from './accounts/usage';
 import { openWake, wake, wakeNowFor } from './wake/state.svelte';
 import { rows as gitRows, setCollapsed, whileCutting } from './worktrees/rows.svelte';
-import { moveStep, stepInFor, type StepIn } from './reorder.svelte';
+import { confirmMove, moveStep, stepInFor, type StepIn } from './reorder.svelte';
 import { openComposer, openMerge } from './ship/sheet.svelte';
 import { isOpen, reviewVerbs } from './ship/ship';
 import { dropPart, repoScope, worktreeScope } from './scope';
@@ -244,7 +244,9 @@ export async function moveAgent(id: string) {
     .map((w) => ({ id: w.id, label: `${name(w)} / ${w.branch}`, hint: w.is_main ? 'main checkout' : undefined }));
   if (!items.length) return toast('There is no other worktree to move it to. Make one first.');
   const to = await ask.pick({ title: `Move "${a.name}" to`, items });
-  if (to) await attempt('Could not move', () => api.moveAgent(id, to));
+  const target = to ? m().worktrees.find((w) => w.id === to) : undefined;
+  if (!to || !target || !(await confirmMove(a, target))) return;
+  await attempt('Could not move', () => api.moveAgent(id, to));
 }
 
 export function duplicateAgent(id: string) {

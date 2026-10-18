@@ -2,7 +2,9 @@
 // (or move) a drop or a key sends. The rules are order.ts's; this file
 // reads the model and talks to the daemon.
 
-import { api, type DropTarget, type DropVerb, type ReorderScope } from './api';
+import { api, type Agent, type DropTarget, type DropVerb, type ReorderScope, type Worktree } from './api';
+import { worktreeApi } from './worktrees/api';
+import { moveReport } from './move';
 import { app, toast } from './store.svelte';
 import { ask } from './ui/ui.svelte';
 import { agentIds, boardIds, placeId, projectIds, rootFirst, stepId, treeSiblings, worktreeIds, type Place } from './order';
@@ -122,18 +124,30 @@ export function agentDropOk(d: Dragged | null, target: string): d is Extract<Dra
   return d?.kind === 'agent' && d.id !== target && treeSiblings(app.model, d.id, app.showArchived).includes(target);
 }
 
+/** Whether `agent` may move out of its checkout into `to`: a checkout
+ *  with uncommitted files or unpushed commits says what stays behind and
+ *  asks; a clean one moves at once. `asked` is the question a caller
+ *  puts anyway (a drag), so a clean checkout still gets that one. */
+export async function confirmMove(agent: Agent, to: Worktree, asked?: string): Promise<boolean> {
+  const from = app.model.worktrees.find((x) => x.id === agent.worktree_id);
+  const state = from ? await worktreeApi.checkoutState(from.id).catch(() => null) : null;
+  const report = from ? moveReport(state, from.branch) : null;
+  if (!report && !asked) return true;
+  const r = await ask.confirm({
+    title: 'Move session',
+    message: report ? `${report} Move "${agent.name}" to ${to.branch} anyway?` : asked!,
+    confirm: 'Move',
+  });
+  return r.ok;
+}
+
 /** A session dropped on a checkout (a worktree's header, a repo in the
  *  rail: its root): asks, then moves it there. */
 export async function moveOnto(agent: string, worktree: string) {
   const a = app.model.agents.find((x) => x.id === agent);
   const w = app.model.worktrees.find((x) => x.id === worktree);
   if (!a || !w || a.worktree_id === w.id) return;
-  const ok = await ask.confirm({
-    title: 'Move session',
-    message: `Move "${a.name}" to ${w.branch}? It carries on in that checkout.`,
-    confirm: 'Move',
-  });
-  if (!ok.ok) return;
+  if (!(await confirmMove(a, w, `Move "${a.name}" to ${w.branch}? It carries on in that checkout.`))) return;
   try {
     await api.moveAgent(agent, w.id);
     toast(`Moved ${a.name} to ${w.branch}.`);
