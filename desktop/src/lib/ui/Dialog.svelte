@@ -1,9 +1,10 @@
 <script lang="ts">
   // The in-window dialog: a prompt (one or more fields), a confirm, or a
   // pick list. Square and ruled; Enter confirms (Ctrl+Enter in a
-  // multi-line field), Esc cancels.
+  // multi-line field), Ctrl+Shift+Enter takes a prompt's second send, Esc
+  // cancels.
   import { tick } from 'svelte';
-  import { ui } from './ui.svelte';
+  import { ALT_CHOICE, ui } from './ui.svelte';
   import { rank } from '../fuzzy';
   import { firstFocus } from './focus';
 
@@ -42,10 +43,10 @@
     else spec.resolve(null);
   }
 
-  function confirm() {
+  function confirm(alt = false) {
     const spec = ui.dialog;
     if (!spec) return;
-    if (spec.kind === 'prompt') spec.resolve({ ...values });
+    if (spec.kind === 'prompt') spec.resolve(alt && spec.alt ? { ...values, [ALT_CHOICE]: '1' } : { ...values });
     else if (spec.kind === 'confirm') spec.resolve({ ok: true, checked });
     else if (picks[at]) spec.resolve(picks[at].item.id);
   }
@@ -63,6 +64,7 @@
       return;
     }
     const multi = (e.target as HTMLElement).tagName === 'TEXTAREA';
+    if (e.key === 'Enter' && e.ctrlKey && e.shiftKey && d?.kind === 'prompt' && d.alt) return (e.preventDefault(), confirm(true));
     if (e.key === 'Enter' && (!multi || e.ctrlKey)) return (e.preventDefault(), confirm());
     if (d?.kind === 'pick' && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
       e.preventDefault();
@@ -149,7 +151,7 @@
     </div>
     <div class="flex items-center justify-end gap-2 border-t border-rule px-4 py-2.5">
       {#if d.kind === 'prompt' && d.fields.some((f) => f.multiline)}
-        <span class="mr-auto font-mono text-[11px] text-muted">Ctrl+Enter to send</span>
+        <span class="mr-auto font-mono text-[11px] text-muted">{d.alt ? `Ctrl+Enter ${d.confirm}, Ctrl+Shift+Enter ${d.alt.label}` : 'Ctrl+Enter to send'}</span>
       {/if}
       {#if d.kind === 'pick' && d.extra}
         {@const extra = d.extra}
@@ -158,11 +160,14 @@
         >
       {/if}
       <button class="{btn} border-rule bg-transparent text-ink hover:border-rule-strong" onclick={cancel}>Cancel</button>
+      {#if d.kind === 'prompt' && d.alt}
+        <button class="{btn} border-rule bg-transparent text-ink hover:border-rule-strong" title="Ctrl+Shift+Enter" onclick={() => confirm(true)}>{d.alt.label}</button>
+      {/if}
       {#if d.kind !== 'pick'}
         <button
           data-autofocus
           class="{btn} border-transparent font-medium {d.kind === 'confirm' && d.danger ? 'bg-fail text-bg' : 'bg-ink text-bg'}"
-          onclick={confirm}>{d.confirm}</button
+          onclick={() => confirm()}>{d.confirm}</button
         >
       {/if}
     </div>

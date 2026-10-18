@@ -60,6 +60,9 @@ export type DialogSpec =
       note?: string;
       fields: Field[];
       confirm: string;
+      /** A second send beside the confirm (Start as new session), on
+       *  Ctrl+Shift+Enter: the answer then carries `ALT_CHOICE`. */
+      alt?: { label: string };
       resolve: (v: Record<string, string> | null) => void;
     }
   | {
@@ -98,6 +101,10 @@ export type PickItem = {
   /** A font family: the row under the cursor shows a sample in it. */
   font?: string;
 };
+
+/** The key a prompt's answer carries, set to '1', when its `alt` button
+ *  (or Ctrl+Shift+Enter) sent it. */
+export const ALT_CHOICE = '$alt';
 
 export const ui = $state({
   /** `search`: a field over the rows narrows them as you type (the
@@ -151,7 +158,7 @@ function settle<T>(make: (resolve: (v: T) => void) => DialogSpec): Promise<T> {
 }
 
 export const ask = {
-  prompt: (o: { title: string; note?: string; fields: Field[]; confirm?: string }) =>
+  prompt: (o: { title: string; note?: string; fields: Field[]; confirm?: string; alt?: { label: string } }) =>
     settle<Record<string, string> | null>((resolve) => ({ kind: 'prompt', confirm: 'Save', ...o, resolve })),
   confirm: (o: { title: string; message: string; detail?: string[]; confirm: string; danger?: boolean; check?: string; checked?: boolean }) =>
     settle<{ ok: boolean; checked: boolean }>((resolve) => ({ kind: 'confirm', ...o, resolve })),

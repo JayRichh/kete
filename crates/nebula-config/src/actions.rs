@@ -281,6 +281,10 @@ pub enum Action {
     /// WHAKAOHO's schedule: the wake-up view, on the account it was asked
     /// from.
     WakeSchedule,
+    // 0.55: work that starts from a session as a session of its own.
+    /// ASK ASIDE: a side question about the session, answered by a new
+    /// session beside it in the same checkout that changes no files.
+    AskAside,
 }
 
 /// What a verb acts on.
@@ -2075,6 +2079,23 @@ pub const ACTIONS: &[ActionSpec] = &[
         surface: Surface::Both,
         desktop: &[],
     },
+    // 0.55, appended and unbound: a session's follow-ups that run as
+    // sessions of their own.
+    ActionSpec {
+        action: Action::AskAside,
+        id: "ask_aside",
+        label: "Ask aside",
+        hint: "Ask a side question about the session: a new session beside it, in the same checkout and nested under it, answers without changing files while this one keeps working",
+        group: "SESSIONS",
+        scope: Scope::Global,
+        defaults: &[],
+        word: "ask aside",
+        destructive: false,
+        applies_to: &[AppliesTo::Session],
+        works_in: &[WorksIn::Grid, WorksIn::Board, WorksIn::Pane],
+        surface: Surface::Both,
+        desktop: &[],
+    },
 ];
 
 pub fn spec_at(index: usize) -> Option<&'static ActionSpec> {
@@ -2354,6 +2375,7 @@ pub const DESKTOP_ORDER: &[&str] = &[
 pub const MENU_LABELS: &[(&str, Option<AppliesTo>, &str)] = &[
     ("activate", None, "Open"),
     ("follow_up", None, "Follow-up prompt\u{2026}"),
+    ("ask_aside", None, "Ask aside\u{2026}"),
     ("restart", None, "Restart agent"),
     ("duplicate_session", None, "Duplicate"),
     ("move_session", None, "Move to\u{2026}"),
@@ -2465,6 +2487,7 @@ pub const MENUS: &[(AppliesTo, &[&str])] = &[
         &[
             "activate",
             "follow_up",
+            "ask_aside",
             "git_diff",
             "open_pull_request",
             "create_pull_request",
@@ -2640,6 +2663,7 @@ pub enum MenuSection {
 pub const MENU_SECTIONS: &[(&str, Option<AppliesTo>, MenuSection)] = &[
     ("activate", None, MenuSection::Act),
     ("follow_up", None, MenuSection::Act),
+    ("ask_aside", None, MenuSection::Act),
     ("new", None, MenuSection::Act),
     ("quick_prompt", None, MenuSection::Act),
     ("new_terminal", None, MenuSection::Act),
@@ -3511,7 +3535,7 @@ mod tests {
         // jump, the window's Ctrl+K is `command_palette`; `move_up` walks
         // the cursor where the window's reorders, `reorder_up`): the
         // window's key ids are their own namespace.
-        assert_eq!(ACTIONS.len(), 106);
+        assert_eq!(ACTIONS.len(), 107);
         // The 0.54/0.55 slots, appended in this order and unbound.
         let tail: Vec<&str> = ACTIONS[91..102].iter().map(|s| s.id).collect();
         assert_eq!(
@@ -3531,11 +3555,14 @@ mod tests {
             ]
         );
         // The menu matrix's, after them.
-        let matrix: Vec<&str> = ACTIONS[102..].iter().map(|s| s.id).collect();
+        let matrix: Vec<&str> = ACTIONS[102..106].iter().map(|s| s.id).collect();
         assert_eq!(
             matrix,
             ["mark_seen", "copy_pr_url", "archive_done", "wake_schedule"]
         );
+        // 0.55's, after those.
+        let sessions: Vec<&str> = ACTIONS[106..].iter().map(|s| s.id).collect();
+        assert_eq!(sessions, ["ask_aside"]);
         assert!(ACTIONS[91..]
             .iter()
             .all(|s| s.defaults.is_empty() && s.desktop.is_empty() && !s.destructive));
@@ -3770,9 +3797,10 @@ mod tests {
         // Folded, at its fullest, no menu runs long. The fullest session is
         // a live card (Unarchive is an archived one's), the fullest
         // checkout a linked one (Switch branch is the root's). A live
-        // card's 14 are its registry rows with Mark seen and Make
-        // orchestrator both showing; read, with another session pinned,
-        // it is 12, and each app adds the checkout's row after (13). A
+        // card's 15 are its registry rows with Mark seen and Make
+        // orchestrator both showing (0.55 adds Ask aside); read, with
+        // another session pinned, it is 13, and each app adds the
+        // checkout's row after (14). A
         // file's and a folder's never fold.
         let top = |kind: AppliesTo| {
             let not_with = match kind {
@@ -3799,7 +3827,7 @@ mod tests {
             ids.len() - folded
         };
         for (kind, most) in [
-            (AppliesTo::Session, 14),
+            (AppliesTo::Session, 15),
             (AppliesTo::Worktree, 15),
             (AppliesTo::Repo, 14),
             (AppliesTo::Terminal, 4),

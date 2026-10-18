@@ -110,6 +110,7 @@ export type ActionId =
   | "copy_pr_url"
   | "archive_done"
   | "wake_schedule"
+  | "ask_aside"
   | "cycle_theme"
   | "home_board"
   | "home_overview"
@@ -1614,6 +1615,19 @@ export const ACTIONS: readonly ActionRow[] = [
     desktop: [],
   },
   {
+    id: "ask_aside",
+    label: "Ask aside",
+    hint: "Ask a side question about the session: a new session beside it, in the same checkout and nested under it, answers without changing files while this one keeps working",
+    group: "SESSIONS",
+    word: "ask aside",
+    destructive: false,
+    appliesTo: ["session"],
+    worksIn: ["grid", "board", "pane"],
+    surface: "both",
+    tui: [],
+    desktop: [],
+  },
+  {
     id: "cycle_theme",
     label: "Cycle theme",
     hint: "Step the window's theme through system, light and dark",
@@ -1860,6 +1874,7 @@ export const DESK_KEYS: readonly DeskKey[] = [
 export const MENU_LABELS: readonly { id: ActionId; on: AppliesTo | null; label: string }[] = [
   { id: "activate", on: null, label: "Open" },
   { id: "follow_up", on: null, label: "Follow-up prompt\u2026" },
+  { id: "ask_aside", on: null, label: "Ask aside\u2026" },
   { id: "restart", on: null, label: "Restart agent" },
   { id: "duplicate_session", on: null, label: "Duplicate" },
   { id: "move_session", on: null, label: "Move to\u2026" },
@@ -1913,7 +1928,7 @@ export const MENU_LABELS: readonly { id: ActionId; on: AppliesTo | null; label: 
 
 /** Each kind's menu, in order: a right-click's rows in both apps. */
 export const MENUS: Readonly<Partial<Record<AppliesTo, readonly ActionId[]>>> = {
-  session: ["activate", "follow_up", "git_diff", "open_pull_request", "create_pull_request", "merge_pull_request", "comment_pull_request", "open_issue", "open_in_vscode", "open_in_visual_studio", "reveal_in_explorer", "open_in_browser", "dock_editor", "copy_path", "copy_branch", "copy_pr_url", "mark_seen", "restart", "duplicate_session", "rename", "pin_orchestrator", "move_session", "move_to_account", "reorder_up", "reorder_down", "unarchive", "archive", "delete"],
+  session: ["activate", "follow_up", "ask_aside", "git_diff", "open_pull_request", "create_pull_request", "merge_pull_request", "comment_pull_request", "open_issue", "open_in_vscode", "open_in_visual_studio", "reveal_in_explorer", "open_in_browser", "dock_editor", "copy_path", "copy_branch", "copy_pr_url", "mark_seen", "restart", "duplicate_session", "rename", "pin_orchestrator", "move_session", "move_to_account", "reorder_up", "reorder_down", "unarchive", "archive", "delete"],
   terminal: ["activate", "copy_path", "rename", "delete"],
   worktree: ["new", "quick_prompt", "new_terminal", "toggle_run", "git_diff", "open_pull_request", "create_pull_request", "merge_pull_request", "comment_pull_request", "focus_scope", "open_repo", "open_worktree", "open_in_vscode", "open_in_visual_studio", "reveal_in_explorer", "open_in_browser", "dock_editor", "copy_path", "copy_branch", "copy_pr_url", "mark_seen", "switch_branch", "reorder_up", "reorder_down", "archive_done", "delete_all", "delete_worktree"],
   repo: ["quick_prompt", "new_worktree", "toggle_run", "focus_scope", "open_repo", "pull_requests", "issues", "azure_devops", "refresh_pull_requests", "open_worktree", "open_in_vscode", "open_in_visual_studio", "reveal_in_explorer", "open_in_browser", "dock_editor", "copy_path", "mark_seen", "switch_branch", "rename", "reorder_up", "reorder_down", "archive_done", "sweep_worktrees", "remove_project"],
@@ -1945,6 +1960,7 @@ export const MENU_SECTION_ORDER: readonly MenuSection[] = ["act", "go", "open", 
 export const MENU_SECTIONS: readonly { id: ActionId; on: AppliesTo | null; section: MenuSection }[] = [
   { id: "activate", on: null, section: "act" },
   { id: "follow_up", on: null, section: "act" },
+  { id: "ask_aside", on: null, section: "act" },
   { id: "new", on: null, section: "act" },
   { id: "quick_prompt", on: null, section: "act" },
   { id: "new_terminal", on: null, section: "act" },

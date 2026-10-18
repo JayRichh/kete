@@ -945,6 +945,8 @@ fn main() {
             sessions::rename_terminal,
             sessions::close_terminal,
             sessions::follow_up,
+            sessions::spawn_follow_up,
+            sessions::ask_aside,
             orchestrator::start_orchestrator,
             orchestrator::set_orchestrator,
             orchestrator::clear_orchestrator,

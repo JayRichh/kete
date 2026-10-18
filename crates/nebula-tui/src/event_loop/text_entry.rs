@@ -164,6 +164,9 @@ pub(crate) fn follow_up_key(app: &mut App, key: KeyEvent, out: &mut Vec<ClientRe
     // (see key_combo.rs), here as in every modal.
     if !crate::key_combo::is_text_key(&chord) {
         let does = match key.code {
+            KeyCode::Char('n' | 'N') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some("Start the follow-up as a new session")
+            }
             KeyCode::Enter => Some("Send the follow-up"),
             KeyCode::Esc => Some("Close the follow-up"),
             _ => None,
@@ -174,6 +177,11 @@ pub(crate) fn follow_up_key(app: &mut App, key: KeyEvent, out: &mut Vec<ClientRe
         KeyCode::Esc => {
             app.modals.follow_up = None;
             app.chrome.dirty = true;
+        }
+        // ^N: the follow-up as a session of its own beside this one. Free
+        // in the line editor, and the launcher's "new" chord.
+        KeyCode::Char('n' | 'N') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            send_follow_up_as_session(app, out);
         }
         KeyCode::Enter
             if !app
@@ -230,6 +238,102 @@ pub(crate) fn send_follow_up(app: &mut App, out: &mut Vec<ClientRequest>) {
         app.modals.follow_up = None;
     }
     app.chrome.dirty = true;
+}
+
+/// ^N in the composer: what it holds starts as a session of its own
+/// beside the card's ([`start_follow_up_session`]), and the card folds back
+/// up. The card's own session is left as it is.
+pub(crate) fn send_follow_up_as_session(app: &mut App, out: &mut Vec<ClientRequest>) {
+    let Some(follow_up) = &app.modals.follow_up else {
+        return;
+    };
+    let text = follow_up.input.as_str().trim().to_string();
+    let id = follow_up.agent.clone();
+    if text.is_empty() {
+        return;
+    }
+    if start_follow_up_session(
+        app,
+        &id,
+        &text,
+        PromptKind::FollowUp { id: id.clone() },
+        out,
+    ) {
+        app.modals.follow_up = None;
+    }
+    app.chrome.dirty = true;
+}
+
+/// `prompt` as a session of its own beside session `id`: the daemon's
+/// `SpawnSiblingAgent`, as `kete spawn` sends it from inside a session. It
+/// runs in the same checkout on the same harness, model, effort and
+/// account, nests under `id`, and is attached once it is up. A refusal
+/// reopens `retry` with the text typed into it. False when nothing was
+/// sent (the row is gone, archived, or a cloud session).
+pub(crate) fn start_follow_up_session(
+    app: &mut App,
+    id: &AgentId,
+    prompt: &str,
+    retry: PromptKind,
+    out: &mut Vec<ClientRequest>,
+) -> bool {
+    let Some(agent) = app.tree.agents.iter().find(|a| &a.id == id) else {
+        return false;
+    };
+    let refused = if agent.archived {
+        Some(format!(
+            "{} is archived: unarchive it to start a session from it",
+            agent.name
+        ))
+    } else if agent.cloud_session_url().is_some() {
+        Some(format!(
+            "{} runs in the cloud: start the session from the quick prompt",
+            agent.name
+        ))
+    } else {
+        None
+    };
+    if let Some(why) = refused {
+        app.chrome.flash = Some(why);
+        return false;
+    }
+    let task = prompt.to_string();
+    let starting_prompt = match &retry {
+        PromptKind::AskAside { .. } => nebula_core::follow_up::aside_prompt(&agent.name, prompt),
+        _ => prompt.to_string(),
+    };
+    app.chrome.flash = Some(format!("starting a session beside {}", agent.name));
+    let intent = PendingIntent::AttachCreatedWithCloudRetry {
+        kind: retry,
+        task,
+        focus: false,
+        placeholder: None,
+    };
+    let id = id.clone();
+    send_with(app, out, intent, |req_id| {
+        ClientRequest::SpawnSiblingAgent {
+            req_id,
+            id,
+            kind: None,
+            starting_prompt,
+            worktree: None,
+            base: None,
+            profile: None,
+        }
+    });
+    true
+}
+
+/// ASK ASIDE's Enter: `question` about session `id`, answered by a session
+/// of its own beside it that changes no files.
+pub(crate) fn ask_aside(
+    app: &mut App,
+    id: AgentId,
+    question: String,
+    out: &mut Vec<ClientRequest>,
+) {
+    let retry = PromptKind::AskAside { id: id.clone() };
+    start_follow_up_session(app, &id, &question, retry, out);
 }
 
 /// What one follow-up send did.

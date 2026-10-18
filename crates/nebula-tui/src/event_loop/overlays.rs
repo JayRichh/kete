@@ -419,6 +419,23 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent, out: &mut Vec<ClientRequest>)
                     crate::quick_prompt::open_preset_picker(app, back);
                 }
             }
+            // Ctrl+N in a follow-up: the turn starts as a session of its
+            // own beside the card's, nested under it, instead of going down
+            // the card's PTY.
+            KeyCode::Char('n' | 'N')
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && matches!(prompt.kind, PromptKind::FollowUp { .. }) =>
+            {
+                let PromptKind::FollowUp { id } = prompt.kind.clone() else {
+                    unreachable!("guarded above");
+                };
+                let text = prompt.input.trim().to_string();
+                if !text.is_empty() {
+                    let retry = PromptKind::FollowUp { id: id.clone() };
+                    app.modals.overlay = None;
+                    start_follow_up_session(app, &id, &text, retry, out);
+                }
+            }
             // Ctrl+N flips the launch between the selected WORKTREE and a
             // fresh one — what `p` on the WORKTREES PANEL does, from any
             // panel, and the way back from there. Free here too: the line

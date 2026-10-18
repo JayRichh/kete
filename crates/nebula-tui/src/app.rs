@@ -407,6 +407,9 @@ pub enum MenuAction {
     /// doesn't: the card is the selection, and Space reads it off the
     /// cursor the same way.
     FollowUp,
+    /// A card menu's **Ask aside…**: the box for a side question about
+    /// session `id`, answered by a session of its own beside it.
+    AskAside(AgentId),
     /// A card menu's **Duplicate**: the QUICK PROMPT on this session's
     /// settings — `launcher::duplicate_agent`, what `⇧P` runs on the card
     /// under the cursor. Carries the id, as the row's other verbs do.
@@ -1273,6 +1276,12 @@ pub enum PromptKind {
     FollowUp {
         id: AgentId,
     },
+    /// ASK ASIDE: a side question about session `id`, typed here and
+    /// answered by a new session beside it (`SpawnSiblingAgent`) that
+    /// changes no files. Multi-row, like the follow-up.
+    AskAside {
+        id: AgentId,
+    },
     /// A comment to post on the pull request under the cursor — a
     /// PROJECT OPEN PRS GROUP row or the Sessions panel's PR ROW — with
     /// `gh pr comment` (`y`, or **Comment…** from the row's menu).
@@ -1344,6 +1353,7 @@ impl PromptKind {
             PromptKind::QuickPrompt(_)
                 | PromptKind::AgentPresetTask { .. }
                 | PromptKind::FollowUp { .. }
+                | PromptKind::AskAside { .. }
         )
     }
 
@@ -1497,6 +1507,7 @@ impl PromptDialog {
             PromptKind::ClaudeCloudTask { .. }
                 | PromptKind::CloudMessage { .. }
                 | PromptKind::FollowUp { .. }
+                | PromptKind::AskAside { .. }
                 | PromptKind::PrComment { .. }
                 | PromptKind::AgentPresetTask { .. }
                 | PromptKind::QuickPrompt { .. }

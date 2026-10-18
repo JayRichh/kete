@@ -22818,6 +22818,7 @@ mod buttons;
 mod critters;
 mod dispatch;
 mod editors;
+mod follow_up;
 mod learn;
 mod menus;
 mod orch_view;

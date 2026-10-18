@@ -636,6 +636,10 @@ export const api = {
   renameTerminal: (terminal: string, name: string) => invoke<void>('rename_terminal', { terminal, name }),
   closeTerminal: (terminal: string) => invoke<void>('close_terminal', { terminal }),
   followUp: (agent: string, text: string) => invoke<void>('follow_up', { agent, text }),
+  /** `prompt` as a new session beside `agent`, nested under it; its id. */
+  spawnFollowUp: (agent: string, prompt: string) => invoke<string>('spawn_follow_up', { agent, prompt }),
+  /** A side question about `agent`, answered by a new session beside it; its id. */
+  askAside: (agent: string, question: string) => invoke<string>('ask_aside', { agent, question }),
   // Projects and worktrees
   suggestBranch: (project: string) => invoke<string>('suggest_branch', { project }),
   createWorktree: (project: string, branch: string, base: string | null) =>

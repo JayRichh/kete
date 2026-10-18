@@ -8,7 +8,7 @@
 import { api, type AccountRow, type Agent, type Model, type StopNote, type TerminalTab, type Worktree } from './api';
 import { stopLabel, stopTone } from './stop';
 import { app, focusQuickPrompt, markSeen, openDiff, openSession, projectOf, revealRepo, setScope, toast } from './store.svelte';
-import { ask, openMenu, type MenuEntry, type MenuHeading, type MenuIcon, type MenuItem } from './ui/ui.svelte';
+import { ALT_CHOICE, ask, openMenu, type MenuEntry, type MenuHeading, type MenuIcon, type MenuItem } from './ui/ui.svelte';
 import type { ShortcutId } from './shortcuts';
 import { makeOrchestrator, openReview, unpinOrchestrator } from './orch.svelte';
 import { isOrchestrator, orchestratorOf } from './orchestrator';
@@ -268,11 +268,37 @@ export async function followUp(id: string) {
   if (!a) return;
   const v = await ask.prompt({
     title: `Follow-up to ${a.name}`,
-    note: a.alive ? undefined : 'This session is not running: restart it first, or open it to start it.',
+    note: a.alive
+      ? 'Start as new session runs it beside this one, in the same checkout.'
+      : 'This session is not running: restart it first, or start the follow-up as a new session beside it.',
     fields: [{ key: 'text', label: 'Message', multiline: true, placeholder: 'What next?' }],
     confirm: 'Send',
+    alt: { label: 'Start as new session' },
   });
-  if (v?.text.trim()) await attempt('Could not send', () => api.followUp(id, v.text));
+  if (!v?.text.trim()) return;
+  if (v[ALT_CHOICE]) await startFollowUpSession(id, v.text);
+  else await attempt('Could not send', () => api.followUp(id, v.text));
+}
+
+/** The follow-up as a session of its own, nested under `id`, opened. */
+export async function startFollowUpSession(id: string, text: string) {
+  await attempt('Could not start the session', async () => openSession({ Agent: await api.spawnFollowUp(id, text) }));
+}
+
+/** ASK ASIDE: a side question about the session, answered by a session of
+ *  its own beside it that leaves the checkout alone (the desktop app's
+ *  /btw in its own tab). */
+export async function askAside(id: string) {
+  const a = agentOf(id);
+  if (!a) return;
+  const v = await ask.prompt({
+    title: `Ask aside about ${a.name}`,
+    note: 'A new session in the same checkout answers it without changing files. This one keeps working.',
+    fields: [{ key: 'question', label: 'Question', multiline: true, placeholder: 'What do you want to know?' }],
+    confirm: 'Ask aside',
+  });
+  if (!v?.question.trim()) return;
+  await attempt('Could not ask aside', async () => openSession({ Agent: await api.askAside(id, v.question) }));
 }
 
 export function seeAgent(id: string) {
@@ -587,6 +613,7 @@ function agentVerbs(a: Agent, viaSub = false, where: StepIn = stepInFor()): Verb
   const t: VerbTable = {
     activate: { run: () => openSession({ Agent: a.id }) },
     follow_up: { run: () => followUp(a.id) },
+    ask_aside: { run: () => askAside(a.id) },
     git_diff: { run: () => openDiff(a.worktree_id) },
     restart: { run: () => restartAgent(a.id) },
     duplicate_session: { run: () => duplicateAgent(a.id) },
