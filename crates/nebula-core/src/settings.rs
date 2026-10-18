@@ -47,6 +47,34 @@ pub struct Loaded<T> {
 /// to it.
 pub const DEFAULT_SESSION_IDLE_TIMEOUT: &str = "5m";
 
+/// What **Keep finished subagents** (`subagent_retention`) cycles
+/// through: how long an ended subagent stays in a session's book before
+/// the daemon drops it. `off` keeps them until cleared by hand or until
+/// [`crate::SUBAGENTS_ENDED_KEPT`] newer ones push them out.
+pub const SUBAGENT_RETENTIONS: &[&str] = &["10m", "1h", "4h", "1d", "off"];
+
+/// `subagent_retention`'s default, and the fallback for a word off the
+/// list.
+pub const DEFAULT_SUBAGENT_RETENTION: &str = "1h";
+
+/// `subagent_retention` as milliseconds; None for `off`. A word off
+/// [`SUBAGENT_RETENTIONS`] reads as [`DEFAULT_SUBAGENT_RETENTION`].
+pub fn subagent_retention_ms(word: &str) -> Option<i64> {
+    let known = SUBAGENT_RETENTIONS
+        .iter()
+        .copied()
+        .find(|w| w.eq_ignore_ascii_case(word.trim()))
+        .unwrap_or(DEFAULT_SUBAGENT_RETENTION);
+    const MINUTE: i64 = 60_000;
+    match known {
+        "10m" => Some(10 * MINUTE),
+        "1h" => Some(60 * MINUTE),
+        "4h" => Some(4 * 60 * MINUTE),
+        "1d" => Some(24 * 60 * MINUTE),
+        _ => None,
+    }
+}
+
 pub fn load<T: DeserializeOwned + Default>(config: &Path, local: &Path) -> Loaded<T> {
     let mut problems = Vec::new();
     let mut merged = read_layer(config, &mut problems);
@@ -390,6 +418,15 @@ fn resolve_links(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn subagent_retention_reads_its_words_and_falls_back_to_an_hour() {
+        assert_eq!(subagent_retention_ms("10m"), Some(600_000));
+        assert_eq!(subagent_retention_ms("1D"), Some(86_400_000));
+        assert_eq!(subagent_retention_ms("off"), None);
+        assert_eq!(subagent_retention_ms("soon"), Some(3_600_000));
+        assert_eq!(subagent_retention_ms(""), Some(3_600_000));
+    }
+
     use super::*;
     use serde::Deserialize;
     use serde_json::json;

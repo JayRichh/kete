@@ -19,6 +19,11 @@ const PENDING_TASKS_KEPT: usize = 16;
 /// The tool a parent calls to start a subagent (`Task` in older Claude
 /// Code, `Agent` since).
 const SUBAGENT_TOOLS: [&str; 2] = ["Agent", "Task"];
+/// A row still running this long after its SubagentStart is presumed
+/// killed without a SubagentStop: the stop gate's own limit for one
+/// tracked subagent (`status::SUBAGENT_TTL`), so the book never shows a
+/// subagent running that the session's status has already given up on.
+const STALE_RUNNING_MS: i64 = crate::status::SUBAGENT_TTL.as_millis() as i64;
 
 /// What a hook POST says about subagents, beside its status event.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -136,6 +141,73 @@ impl SubagentBook {
         self.pending_tasks.remove(parent);
     }
 
+    /// Take every row of `parent` out of the book, running or not, and
+    /// say which ids went. A restarted session is a new process: nothing
+    /// the old one ran can report again.
+    fn reap(&mut self, parent: &AgentId) -> Vec<String> {
+        self.pending_tasks.remove(parent);
+        self.rows
+            .remove(parent)
+            .map(|rows| rows.into_iter().map(|r| r.id).collect())
+            .unwrap_or_default()
+    }
+
+    /// Drop the ended rows (done, failed, closed) that `gone` picks, of
+    /// `parent` or of every session; running ones always stay. Returns
+    /// what went, by parent.
+    fn drop_ended(
+        &mut self,
+        parent: Option<&AgentId>,
+        gone: impl Fn(&SubagentSummary) -> bool,
+    ) -> Vec<(AgentId, Vec<String>)> {
+        let mut removed = Vec::new();
+        for (owner, rows) in self.rows.iter_mut() {
+            if parent.is_some_and(|p| p != owner) {
+                continue;
+            }
+            let mut ids = Vec::new();
+            rows.retain(|r| {
+                let drop = r.status != SubagentStatus::Running && gone(r);
+                if drop {
+                    ids.push(r.id.clone());
+                }
+                !drop
+            });
+            if !ids.is_empty() {
+                removed.push((owner.clone(), ids));
+            }
+        }
+        self.rows.retain(|_, rows| !rows.is_empty());
+        removed.sort_by(|a, b| a.0 .0.cmp(&b.0 .0));
+        removed
+    }
+
+    /// The periodic sweep: a row still running after [`STALE_RUNNING_MS`]
+    /// never got its SubagentStop (the stop gate gave up on it long ago,
+    /// `status::SUBAGENT_TTL`), so it ends as unknown; an ended row older
+    /// than `retention_ms` (None keeps them) leaves the book.
+    fn sweep(
+        &mut self,
+        now: i64,
+        retention_ms: Option<i64>,
+    ) -> (Vec<SubagentSummary>, Vec<(AgentId, Vec<String>)>) {
+        let mut closed = Vec::new();
+        for row in self.rows.values_mut().flatten() {
+            if row.status == SubagentStatus::Running && now - row.started_at >= STALE_RUNNING_MS {
+                row.status = SubagentStatus::EndedUnknown;
+                row.ended_at = Some(now);
+                closed.push(row.clone());
+            }
+        }
+        let removed = match retention_ms {
+            Some(keep) => {
+                self.drop_ended(None, |r| now - r.ended_at.unwrap_or(r.started_at) >= keep)
+            }
+            None => Vec::new(),
+        };
+        (closed, removed)
+    }
+
     fn all(&self) -> Vec<SubagentSummary> {
         let mut all: Vec<_> = self.rows.values().flatten().cloned().collect();
         all.sort_by(|a, b| {
@@ -205,6 +277,50 @@ impl Daemon {
     /// The parent row is deleted: drop its subagents with it.
     pub(crate) fn forget_subagents(&self, parent: &AgentId) {
         self.subagents.lock().forget(parent);
+    }
+
+    /// The parent session is about to restart (restart, account switch, a
+    /// failed resume's respawn): every row its old process left, running
+    /// or ended, leaves the book now, before the new process can start
+    /// subagents of its own. Without this the old rows stayed, the
+    /// running ones closed only when the old PTY's exit landed, after the
+    /// new session was up.
+    pub(crate) fn reap_subagents(&self, parent: &AgentId) {
+        let ids = self.subagents.lock().reap(parent);
+        if !ids.is_empty() {
+            self.broadcast(ServerEvent::SubagentsRemoved {
+                parent: parent.clone(),
+                ids,
+            });
+        }
+    }
+
+    /// `ClientRequest::ClearEndedSubagents`: drop the ended rows of
+    /// `parent`, or of every session; running ones stay.
+    pub fn clear_ended_subagents(&self, parent: Option<&AgentId>) {
+        let removed = self.subagents.lock().drop_ended(parent, |_| true);
+        self.broadcast_removed(removed);
+    }
+
+    /// The 30 s sweep: stale running rows end as unknown, and ended rows
+    /// past the `subagent_retention` setting leave the book.
+    pub fn sweep_subagents(&self) {
+        let retention = crate::config::Config::load().subagent_retention_ms();
+        self.sweep_subagents_at(nebula_core::clock::now_ms(), retention);
+    }
+
+    fn sweep_subagents_at(&self, now: i64, retention_ms: Option<i64>) {
+        let (closed, removed) = self.subagents.lock().sweep(now, retention_ms);
+        for sub in closed {
+            self.broadcast(ServerEvent::SubagentChanged { sub });
+        }
+        self.broadcast_removed(removed);
+    }
+
+    fn broadcast_removed(&self, removed: Vec<(AgentId, Vec<String>)>) {
+        for (parent, ids) in removed {
+            self.broadcast(ServerEvent::SubagentsRemoved { parent, ids });
+        }
     }
 
     /// The whole book, for an IN-PLACE RESTART to hand the next image.
@@ -386,6 +502,109 @@ mod tests {
         assert_eq!(rows.len(), ENDED_KEPT + 1);
         assert!(rows.iter().any(|r| r.id == "open"), "running ones are kept");
         assert!(!rows.iter().any(|r| r.id == "s0"), "the oldest ended go");
+    }
+
+    fn removals(rx: &mut broadcast::Receiver<ServerEvent>) -> Vec<(AgentId, Vec<String>)> {
+        std::iter::from_fn(|| rx.try_recv().ok())
+            .filter_map(|e| match e {
+                ServerEvent::SubagentsRemoved { parent, ids } => Some((parent, ids)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The board's cleanup: ended rows go, of one session or of all,
+    /// and running ones stay wherever they are.
+    #[test]
+    fn a_clear_drops_ended_rows_and_keeps_running_ones() {
+        let daemon = daemon();
+        let p = AgentId("p".into());
+        let q = AgentId("q".into());
+        daemon.track_subagent(&p, &start("live"), explore());
+        daemon.track_subagent(&p, &start("done"), explore());
+        daemon.track_subagent(&p, &stop("done"), explore());
+        daemon.track_subagent(&q, &start("other"), explore());
+        daemon.track_subagent(&q, &stop("other"), explore());
+        let mut rx = daemon.events.subscribe();
+
+        daemon.clear_ended_subagents(Some(&p));
+        assert_eq!(
+            removals(&mut rx),
+            vec![(p.clone(), vec!["done".to_string()])]
+        );
+        let ids: Vec<String> = daemon.subagent_rows().into_iter().map(|r| r.id).collect();
+        assert_eq!(ids, vec!["live".to_string(), "other".to_string()]);
+
+        daemon.clear_ended_subagents(None);
+        assert_eq!(removals(&mut rx), vec![(q, vec!["other".to_string()])]);
+        let ids: Vec<String> = daemon.subagent_rows().into_iter().map(|r| r.id).collect();
+        assert_eq!(ids, vec!["live".to_string()]);
+    }
+
+    /// A restart reaps everything the old process left, running rows
+    /// too, and says so; the new process starts with an empty book.
+    #[test]
+    fn a_restart_reaps_every_row_of_its_session() {
+        let daemon = daemon();
+        let p = AgentId("p".into());
+        daemon.track_subagent(&p, &start("a"), explore());
+        daemon.track_subagent(&p, &start("b"), explore());
+        daemon.track_subagent(&p, &stop("b"), explore());
+        let mut rx = daemon.events.subscribe();
+        daemon.reap_subagents(&p);
+        let gone = removals(&mut rx);
+        assert_eq!(gone.len(), 1);
+        assert_eq!(gone[0].0, p);
+        assert_eq!(gone[0].1.len(), 2);
+        assert!(daemon.subagent_rows().is_empty());
+        daemon.reap_subagents(&p);
+        assert!(removals(&mut rx).is_empty(), "nothing left to say");
+    }
+
+    /// The sweep ends a row whose stop never came and drops ended rows
+    /// past the retention; `off` keeps ended rows.
+    #[test]
+    fn the_sweep_closes_stale_rows_and_drops_old_ended_ones() {
+        let daemon = daemon();
+        let p = AgentId("p".into());
+        daemon.track_subagent(&p, &start("old"), explore());
+        daemon.track_subagent(&p, &start("fresh"), explore());
+        daemon.track_subagent(&p, &stop("fresh"), explore());
+        let started = daemon.subagent_rows()[0].started_at;
+        let mut rx = daemon.events.subscribe();
+
+        // An hour on: nothing stale, the ended row kept with retention off.
+        daemon.sweep_subagents_at(started + 3_600_000, None);
+        assert!(changes(&mut rx).is_empty());
+        assert!(removals(&mut rx).is_empty());
+
+        // Past the stop gate's limit, retention one hour: the stale row
+        // closes as unknown and the finished one goes.
+        daemon.sweep_subagents_at(started + STALE_RUNNING_MS, Some(3_600_000));
+        let events: Vec<ServerEvent> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        let closed: Vec<&SubagentSummary> = events
+            .iter()
+            .filter_map(|e| match e {
+                ServerEvent::SubagentChanged { sub } => Some(sub),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(closed.len(), 1);
+        assert_eq!(closed[0].id, "old");
+        assert_eq!(closed[0].status, SubagentStatus::EndedUnknown);
+        let removed: Vec<(&AgentId, &Vec<String>)> = events
+            .iter()
+            .filter_map(|e| match e {
+                ServerEvent::SubagentsRemoved { parent, ids } => Some((parent, ids)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(removed, vec![(&p, &vec!["fresh".to_string()])]);
+
+        // The closed row ages out on a later sweep like any ended one.
+        daemon.sweep_subagents_at(started + STALE_RUNNING_MS + 3_600_000, Some(3_600_000));
+        assert_eq!(removals(&mut rx), vec![(p, vec!["old".to_string()])]);
+        assert!(daemon.subagent_rows().is_empty());
     }
 
     fn launch(kind: Option<&str>, task: &str) -> (HookEvent, SubagentHookInfo) {

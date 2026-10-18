@@ -10,7 +10,7 @@ use std::path::PathBuf;
 ///
 /// Bump on every protocol change. Additive changes keep
 /// [`MIN_COMPATIBLE_PROTOCOL`] where it is; breaking changes bump both.
-pub const PROTOCOL_VERSION: u32 = 62;
+pub const PROTOCOL_VERSION: u32 = 63;
 
 /// Oldest IPC protocol this build can safely talk to.
 ///
@@ -63,6 +63,7 @@ impl ServerEvent {
                 peer_version >= WAKE_PROTOCOL
             }
             ServerEvent::SessionStops { .. } => peer_version >= LIMITS_PROTOCOL,
+            ServerEvent::SubagentsRemoved { .. } => peer_version >= SUBAGENT_CLEANUP_PROTOCOL,
             _ => true,
         }
     }
@@ -116,6 +117,14 @@ pub const WAKE_PROTOCOL: u32 = 61;
 /// only to a peer that said this or later at Hello. An older client just
 /// never shows the note.
 pub const LIMITS_PROTOCOL: u32 = 62;
+
+/// The first protocol whose daemon takes [`ClientRequest::ClearEndedSubagents`]
+/// and whose clients decode [`ServerEvent::SubagentsRemoved`]. The event is
+/// pushed unasked (a clear, the retention sweep, a session restart), so the
+/// daemon sends it only to a peer that said this or later at Hello; an
+/// older client keeps the removed rows until its next Snapshot. A client
+/// offers the clear only against a daemon that said this or later.
+pub const SUBAGENT_CLEANUP_PROTOCOL: u32 = 63;
 
 /// Max IPC frame size (length prefix sanity bound).
 pub const MAX_FRAME_LEN: u32 = 4 * 1024 * 1024;
@@ -780,6 +789,17 @@ pub enum ClientRequest {
     AccountActivity {
         req_id: u64,
     },
+
+    // -- protocol 63, appended after 61's. --
+    /// Drop every ended subagent (done, failed, or closed with its
+    /// session) of `parent`, or of every session for None. Running ones
+    /// stay. Answered with `Ack`; the rows leave as
+    /// `ServerEvent::SubagentsRemoved`. Sent only to a 63+ daemon
+    /// (`SUBAGENT_CLEANUP_PROTOCOL`).
+    ClearEndedSubagents {
+        req_id: u64,
+        parent: Option<AgentId>,
+    },
 }
 
 /// What a [`ClientRequest::Reorder`] reorders, and the order rule every
@@ -1142,6 +1162,15 @@ pub enum ServerEvent {
     /// `None` note clears that session's. Folded in by agent id.
     SessionStops {
         stops: Vec<crate::stop::SessionStop>,
+    },
+    // -- protocol 63, appended; pushed only to 63+ peers
+    // (`ServerEvent::decodable_by`). --
+    /// Subagent rows the daemon dropped from `parent`'s book: a
+    /// `ClearEndedSubagents`, the retention sweep (`subagent_retention`),
+    /// or the session restarting. Keyed by `(parent, id)`.
+    SubagentsRemoved {
+        parent: AgentId,
+        ids: Vec<String>,
     },
 }
 
@@ -1762,6 +1791,36 @@ mod tests {
         assert_eq!(changes.sessions, 2);
         assert_eq!(changes.last.as_ref().unwrap().tree, None, "unavailable");
         assert_eq!(changes.trees(), None);
+    }
+
+    /// 63 appends `ClearEndedSubagents` and `SubagentsRemoved`: older peers
+    /// stay in range, are never pushed the removal, and both round-trip.
+    #[test]
+    fn protocol_63_subagent_cleanup_round_trips_and_is_held_back_from_older_peers() {
+        const { assert!(SUBAGENT_CLEANUP_PROTOCOL <= PROTOCOL_VERSION) };
+        assert_eq!(MIN_COMPATIBLE_PROTOCOL, 53, "63 is additive");
+        let req = ClientRequest::ClearEndedSubagents {
+            req_id: 4,
+            parent: Some(AgentId("p".into())),
+        };
+        let back: ClientRequest = rmp_serde::from_slice(&encode(&req)).unwrap();
+        let ClientRequest::ClearEndedSubagents { req_id, parent } = back else {
+            panic!("not ClearEndedSubagents");
+        };
+        assert_eq!((req_id, parent), (4, Some(AgentId("p".into()))));
+
+        let removed = ServerEvent::SubagentsRemoved {
+            parent: AgentId("p".into()),
+            ids: vec!["a".into(), "b".into()],
+        };
+        assert!(removed.decodable_by(SUBAGENT_CLEANUP_PROTOCOL));
+        assert!(!removed.decodable_by(SUBAGENT_CLEANUP_PROTOCOL - 1));
+        let back: ServerEvent = rmp_serde::from_slice(&encode(&removed)).unwrap();
+        let ServerEvent::SubagentsRemoved { parent, ids } = back else {
+            panic!("not SubagentsRemoved");
+        };
+        assert_eq!(parent, AgentId("p".into()));
+        assert_eq!(ids, vec!["a".to_string(), "b".to_string()]);
     }
 
     /// 62 appends `SessionStops`: older peers stay in range and are never

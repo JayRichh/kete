@@ -708,6 +708,11 @@ impl ClientConnection {
                 reply_done(&self.out_tx, req_id, result).await;
                 Ok(true)
             }
+            ClientRequest::ClearEndedSubagents { req_id, parent } => {
+                self.daemon.clear_ended_subagents(parent.as_ref());
+                reply_done(&self.out_tx, req_id, Ok(())).await;
+                Ok(true)
+            }
             ClientRequest::Reorder { req_id, scope, ids } => {
                 let result = self
                     .blocking_daemon(move |daemon| daemon.reorder(&scope, &ids))

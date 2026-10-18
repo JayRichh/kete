@@ -68,6 +68,11 @@ pub struct Config {
     /// Install kete's statusLine wrapper into Claude sessions (Settings →
     /// Sessions → Usage status line): their plan usage and context.
     pub usage_statusline: bool,
+    /// KEEP FINISHED SUBAGENTS (Settings → Sessions): how long an ended
+    /// subagent stays in its session's book before the 30 s sweep drops
+    /// it (`nebula_core::settings::SUBAGENT_RETENTIONS`). Read through
+    /// [`Config::subagent_retention_ms`].
+    pub subagent_retention: String,
 }
 
 /// One project's entry under `projects` — the rows of the TUI's Project
@@ -102,6 +107,7 @@ impl Default for Config {
             port_base: nebula_core::ports::DEFAULT_BASE,
             port_block: nebula_core::ports::DEFAULT_BLOCK,
             usage_statusline: true,
+            subagent_retention: nebula_core::settings::DEFAULT_SUBAGENT_RETENTION.into(),
         }
     }
 }
@@ -127,6 +133,11 @@ impl Config {
     pub fn session_idle_timeout(&self) -> Option<std::time::Duration> {
         parse_timeout(&self.session_idle_timeout)
             .unwrap_or_else(|| parse_timeout(DEFAULT_SESSION_IDLE_TIMEOUT).expect("default parses"))
+    }
+
+    /// `subagent_retention` in milliseconds; None keeps ended subagents.
+    pub fn subagent_retention_ms(&self) -> Option<i64> {
+        nebula_core::settings::subagent_retention_ms(&self.subagent_retention)
     }
 
     /// The configured WORKTREE BASE BRANCH, or None for the default

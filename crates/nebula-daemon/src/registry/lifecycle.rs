@@ -215,6 +215,7 @@ impl Daemon {
         }
         tracing::info!(agent = %id, to = %target.branch, "relocating session into its worktree");
         self.kill_session(&sref);
+        self.reap_subagents(id);
         self.last_cwd.lock().remove(id);
         // A row whose entry went missing since still relocates; the boot
         // itself refuses with the entry's reason, so the notice degrades
@@ -481,6 +482,7 @@ impl Daemon {
         // would otherwise be stopped for a boot that refuses.
         require_checkout(&worktree)?;
         self.kill_session(&SessionRef::Agent(id.clone()));
+        self.reap_subagents(id);
         self.spawn_agent_session(&agent, &worktree, DEFAULT_COLS, DEFAULT_ROWS)?;
         let mut broadcast_agent = agent.clone();
         broadcast_agent.alive = true;
@@ -538,6 +540,7 @@ impl Daemon {
             .context("worktree not found")?;
         require_checkout(&worktree)?;
         self.kill_session(&SessionRef::Agent(id.clone()));
+        self.reap_subagents(id);
         self.store.set_agent_profile(id, profile.as_deref())?;
         self.store.set_agent_session_id(id, None)?;
         // The old account's context bar says nothing about the new session.

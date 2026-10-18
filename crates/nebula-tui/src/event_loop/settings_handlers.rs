@@ -674,6 +674,10 @@ pub(crate) fn apply_config(app: &mut App, cfg: &crate::config::Config) {
     app.launcher.columns_recent_prompts_count = cfg.recent_prompts_count;
     app.launcher.launcher_all_open = cfg.expand_all_worktrees;
     set_hide_draft_prs(app, cfg.hide_draft_prs);
+    if app.desk.subagents.hide_done != cfg.hide_done_subagents {
+        app.desk.subagents.hide_done = cfg.hide_done_subagents;
+        super::desk::refresh_subagents(app);
+    }
 }
 
 /// `R` in the settings overlay, confirmed: rewrite config.json from the

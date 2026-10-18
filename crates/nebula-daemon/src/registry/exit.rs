@@ -49,9 +49,15 @@ impl Daemon {
                             SessionRef::Terminal(_) => None,
                         };
                         // Any exit, deliberate or not: the process its
-                        // subagents ran in is gone either way.
+                        // subagents ran in is gone either way. Unless a
+                        // newer PTY already took the id (a restart): the
+                        // restart reaped the old rows itself, and the rows
+                        // in the book now are the new process's, still
+                        // running.
                         if let SessionRef::Agent(id) = &sref {
-                            daemon.close_subagents(id);
+                            if !daemon.is_alive(&sref) {
+                                daemon.close_subagents(id);
+                            }
                         }
                         if !was_registered {
                             break;

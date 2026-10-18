@@ -17,12 +17,49 @@ use ratatui::layout::Rect;
 use std::collections::{HashMap, HashSet};
 
 /// The daemon's subagents, by the session they run inside, oldest first.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Subagents {
     by_parent: HashMap<AgentId, Vec<SubagentSummary>>,
+    /// The `hide_done_subagents` SETTING: ended subagents fold into a
+    /// FINISHED GROUP under their session instead of showing one by one.
+    pub hide_done: bool,
+}
+
+impl Default for Subagents {
+    fn default() -> Self {
+        Self {
+            by_parent: HashMap::new(),
+            hide_done: true,
+        }
+    }
 }
 
 impl Subagents {
+    /// One `SubagentsRemoved`: the daemon dropped these rows of `parent`
+    /// (a clear, its retention sweep, the session restarting).
+    pub fn remove(&mut self, parent: &AgentId, ids: &[String]) {
+        if let Some(list) = self.by_parent.get_mut(parent) {
+            list.retain(|s| !ids.contains(&s.id));
+            if list.is_empty() {
+                self.by_parent.remove(parent);
+            }
+        }
+    }
+
+    /// Ended subagents of `parent`: what the FINISHED GROUP holds and a
+    /// clear would drop.
+    pub fn ended(&self, parent: &AgentId) -> usize {
+        self.of(parent)
+            .iter()
+            .filter(|s| s.status != SubagentStatus::Running)
+            .count()
+    }
+
+    /// Ended subagents across every session.
+    pub fn ended_total(&self) -> usize {
+        self.by_parent.keys().map(|p| self.ended(p)).sum()
+    }
+
     /// A snapshot's whole list: replaces everything known.
     pub fn replace(&mut self, all: Vec<SubagentSummary>) {
         self.by_parent.clear();
@@ -124,6 +161,17 @@ pub fn sub_tone(s: &SubagentSummary) -> Tone {
     }
 }
 
+/// The word a subagent's row goes by: `closed` for one still open when
+/// its session ended or restarted, which says more than `stopped`.
+pub fn sub_word(s: &SubagentSummary) -> &'static str {
+    match s.status {
+        SubagentStatus::Running => "running",
+        SubagentStatus::Done => "done",
+        SubagentStatus::Failed => "failed",
+        SubagentStatus::EndedUnknown => "closed",
+    }
+}
+
 /// One node of the SESSION TREE.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Node {
@@ -144,6 +192,11 @@ pub struct Node {
     pub opens: AgentId,
     /// Set on a session row.
     pub session: bool,
+    /// The word beside the dot: the tone's, or a subagent's own
+    /// ([`sub_word`]), or the FINISHED GROUP's.
+    pub word: &'static str,
+    /// Starts folded whatever its depth: the FINISHED GROUP.
+    pub folded: bool,
     pub children: Vec<Node>,
 }
 
@@ -153,8 +206,10 @@ pub const OPEN_DEPTH: usize = 2;
 /// `agents` nested by `parent`, each session's subagents under it — the
 /// desktop's `buildForest`. Sessions in sort order (then by when they
 /// last moved), subagents oldest first; a parent outside `agents`, or a
-/// parent chain that loops, leaves the session a root.
-pub fn build_forest(agents: &[&Agent], subs: &Subagents) -> Vec<Node> {
+/// parent chain that loops, leaves the session a root. With `hide_done`
+/// a session's ended subagents go under one FINISHED GROUP node, `3
+/// finished`, which starts folded; its running ones stay one by one.
+pub fn build_forest(agents: &[&Agent], subs: &Subagents, hide_done: bool) -> Vec<Node> {
     let by_id: HashMap<&AgentId, &Agent> = agents.iter().map(|a| (&a.id, *a)).collect();
     let attachable = |a: &Agent| -> bool {
         let mut seen: HashSet<&AgentId> = HashSet::from([&a.id]);
@@ -184,31 +239,61 @@ pub fn build_forest(agents: &[&Agent], subs: &Subagents) -> Vec<Node> {
             _ => roots.push(a),
         }
     }
+    fn sub_node(s: &SubagentSummary, depth: usize, opens: &AgentId) -> Node {
+        Node {
+            key: format!("s:{}:{}", s.parent_agent.0, s.id),
+            depth,
+            tone: sub_tone(s),
+            label: sub_label(s),
+            meta: if s.kind.is_empty() {
+                "subagent".into()
+            } else {
+                s.kind.clone()
+            },
+            when: s.ended_at.unwrap_or(s.started_at),
+            opens: opens.clone(),
+            session: false,
+            word: sub_word(s),
+            folded: false,
+            children: Vec::new(),
+        }
+    }
     fn node(
         a: &Agent,
         depth: usize,
         kids: &HashMap<AgentId, Vec<&Agent>>,
         subs: &Subagents,
+        hide_done: bool,
     ) -> Node {
         let mut children: Vec<Node> = kids
             .get(&a.id)
-            .map(|k| k.iter().map(|c| node(c, depth + 1, kids, subs)).collect())
+            .map(|k| {
+                k.iter()
+                    .map(|c| node(c, depth + 1, kids, subs, hide_done))
+                    .collect()
+            })
             .unwrap_or_default();
+        let mut finished = Vec::new();
         for s in subs.of(&a.id) {
+            if hide_done && s.status != SubagentStatus::Running {
+                finished.push(sub_node(s, depth + 2, &a.id));
+            } else {
+                children.push(sub_node(s, depth + 1, &a.id));
+            }
+        }
+        if !finished.is_empty() {
             children.push(Node {
-                key: format!("s:{}:{}", s.parent_agent.0, s.id),
+                key: format!("f:{}", a.id.0),
                 depth: depth + 1,
-                tone: sub_tone(s),
-                label: sub_label(s),
-                meta: if s.kind.is_empty() {
-                    "subagent".into()
-                } else {
-                    s.kind.clone()
-                },
-                when: s.ended_at.unwrap_or(s.started_at),
+                tone: Tone::Done,
+                label: format!("{} finished", finished.len()),
+                meta: "subagents".into(),
+                when: finished.iter().map(|n| n.when).max().unwrap_or(0),
                 opens: a.id.clone(),
                 session: false,
-                children: Vec::new(),
+                word: "",
+                folded: true,
+                children: finished,
             });
         }
         Node {
@@ -220,10 +305,15 @@ pub fn build_forest(agents: &[&Agent], subs: &Subagents) -> Vec<Node> {
             when: a.status_changed_at,
             opens: a.id.clone(),
             session: true,
+            word: agent_tone(a).word(),
+            folded: false,
             children,
         }
     }
-    roots.iter().map(|a| node(a, 0, &kids, subs)).collect()
+    roots
+        .iter()
+        .map(|a| node(a, 0, &kids, subs, hide_done))
+        .collect()
 }
 
 /// What a subagent's row is called: the task it was given, else its type.
@@ -263,8 +353,9 @@ fn count(n: &Node) -> usize {
 pub fn flatten(forest: &[Node], open: &HashSet<String>, closed: &HashSet<String>) -> Vec<Row> {
     fn walk(n: &Node, open: &HashSet<String>, closed: &HashSet<String>, out: &mut Vec<Row>) {
         let has = !n.children.is_empty();
-        let expanded =
-            has && !closed.contains(&n.key) && (open.contains(&n.key) || n.depth < OPEN_DEPTH);
+        let expanded = has
+            && !closed.contains(&n.key)
+            && (open.contains(&n.key) || (!n.folded && n.depth < OPEN_DEPTH));
         out.push(Row {
             node: n.clone(),
             expanded,
@@ -456,7 +547,7 @@ pub(crate) mod tests {
         let y = agent("y", Some("x"), AgentStatus::Fresh, 3);
         let mut book = Subagents::default();
         book.upsert(sub("kid", "s1", SubagentStatus::Running, 5));
-        let forest = build_forest(&[&root, &kid, &x, &y], &book);
+        let forest = build_forest(&[&root, &kid, &x, &y], &book, false);
         let keys: Vec<(&str, usize)> = walk_all(&forest)
             .iter()
             .map(|n| (n.key.as_str(), n.depth))
@@ -485,7 +576,7 @@ pub(crate) mod tests {
         let c = agent("c", Some("b"), AgentStatus::Running, 2);
         let mut book = Subagents::default();
         book.upsert(sub("c", "s", SubagentStatus::Running, 1));
-        let forest = build_forest(&[&a, &b, &c], &book);
+        let forest = build_forest(&[&a, &b, &c], &book, true);
         let rows = flatten(&forest, &HashSet::new(), &HashSet::new());
         // c sits at depth 2: shown, but its own children (depth 3) wait.
         let keys: Vec<&str> = rows.iter().map(|r| r.node.key.as_str()).collect();
@@ -503,6 +594,62 @@ pub(crate) mod tests {
         view.rebuild(&forest);
         assert_eq!(view.rows.len(), 1);
         assert_eq!(view.rows[0].hidden, 3);
+    }
+
+    /// Every subagent is in the tree; with `hide_done` the ended ones
+    /// sit under one folded `N finished` node, the running ones beside it.
+    #[test]
+    fn ended_subagents_fold_into_a_finished_group() {
+        let root = agent("root", None, AgentStatus::Running, 0);
+        let mut book = Subagents::default();
+        assert!(book.hide_done, "folded by default");
+        book.upsert(sub("root", "live", SubagentStatus::Running, 1));
+        book.upsert(sub("root", "ok", SubagentStatus::Done, 2));
+        book.upsert(sub("root", "lost", SubagentStatus::EndedUnknown, 3));
+
+        let forest = build_forest(&[&root], &book, true);
+        let keys: Vec<&str> = walk_all(&forest).iter().map(|n| n.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            vec![
+                "a:root",
+                "s:root:live",
+                "f:root",
+                "s:root:ok",
+                "s:root:lost"
+            ],
+            "nothing is left out of the tree"
+        );
+        let group = walk_all(&forest)[2];
+        assert_eq!(group.label, "2 finished");
+        assert_eq!(walk_all(&forest)[4].word, "closed");
+
+        let rows = flatten(&forest, &HashSet::new(), &HashSet::new());
+        let shown: Vec<&str> = rows.iter().map(|r| r.node.key.as_str()).collect();
+        assert_eq!(shown, vec!["a:root", "s:root:live", "f:root"]);
+        assert_eq!(rows[2].hidden, 2, "the count badge");
+
+        let open = HashSet::from(["f:root".to_string()]);
+        assert_eq!(flatten(&forest, &open, &HashSet::new()).len(), 5);
+
+        let flat = build_forest(&[&root], &book, false);
+        assert_eq!(flatten(&flat, &HashSet::new(), &HashSet::new()).len(), 4);
+    }
+
+    #[test]
+    fn a_removal_drops_only_the_named_rows() {
+        let mut book = Subagents::default();
+        book.upsert(sub("a", "x", SubagentStatus::Done, 1));
+        book.upsert(sub("a", "y", SubagentStatus::Running, 2));
+        book.upsert(sub("b", "x", SubagentStatus::Done, 3));
+        assert_eq!(book.ended_total(), 2);
+        book.remove(&AgentId("a".into()), &["x".to_string()]);
+        assert_eq!(book.counts(&AgentId("a".into())), (1, 1));
+        assert_eq!(
+            book.ended(&AgentId("b".into())),
+            1,
+            "another session's x stays"
+        );
     }
 
     #[test]

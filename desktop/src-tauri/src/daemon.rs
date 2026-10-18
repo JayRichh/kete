@@ -639,6 +639,15 @@ impl Client {
                 drop(m);
                 self.touch();
             }
+            // A clear, the daemon's retention sweep, or the session
+            // restarting took these rows out of its book.
+            ServerEvent::SubagentsRemoved { parent, ids } => {
+                let mut m = self.model.lock().expect("model lock");
+                m.subagents
+                    .retain(|s| s.parent_agent != parent || !ids.contains(&s.id));
+                drop(m);
+                self.touch();
+            }
             ServerEvent::WorktreePorts { ports } => {
                 self.model.lock().expect("model lock").ports = ports;
                 self.touch();

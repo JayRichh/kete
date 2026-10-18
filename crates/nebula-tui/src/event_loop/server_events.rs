@@ -33,6 +33,9 @@ pub(crate) fn handle_server_event(app: &mut App, event: ServerEvent, out: &mut V
         ServerEvent::SessionContexts { contexts } => accounts::on_session_contexts(app, contexts),
         ServerEvent::SessionStops { stops } => accounts::on_session_stops(app, stops),
         ServerEvent::SubagentChanged { sub } => desk::on_subagent_changed(app, sub),
+        ServerEvent::SubagentsRemoved { parent, ids } => {
+            desk::on_subagents_removed(app, &parent, &ids)
+        }
         ServerEvent::WorktreeBases { bases } => {
             app.tree.bases = bases
                 .into_iter()

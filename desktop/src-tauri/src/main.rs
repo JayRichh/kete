@@ -31,6 +31,7 @@ mod sessions;
 mod settings;
 mod settings_io;
 mod ship;
+mod subagents;
 mod tree;
 mod update;
 mod wake;
@@ -545,6 +546,9 @@ struct Launchables {
     /// Every worktree gets a row in the overview, an empty one too (Show all
     /// worktrees, shared with the terminal app's grid).
     show_all_worktrees: bool,
+    /// Finished subagents fold into a count under their session (Sessions
+    /// tab, Finished subagents; shared with the terminal app).
+    hide_done_subagents: bool,
     /// The ACCOUNT SPREAD (`manual`, `failover`, `least_used`): off
     /// `manual`, the quick prompt starts on "auto" so the spread chooses.
     spread: String,
@@ -576,6 +580,7 @@ fn launchables() -> Launchables {
         follow: cfg.follow_new_session,
         ask_before_archive: cfg.ask_before_archive,
         show_all_worktrees: cfg.show_all_worktrees,
+        hide_done_subagents: cfg.hide_done_subagents,
     }
 }
 
@@ -935,6 +940,7 @@ fn main() {
             sessions::restart_agent,
             sessions::move_agent,
             order::reorder,
+            subagents::clear_finished_subagents,
             sessions::rename_terminal,
             sessions::close_terminal,
             sessions::follow_up,

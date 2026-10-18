@@ -178,6 +178,15 @@ exactly the hold a gated `Stop` gets) whenever any subagent is still tracked, an
   session whose worker died can sit yellow far longer than you expect, and it is generous on purpose:
   one silent `cargo test` can run for many minutes, and a wrong green is the bug it exists to prevent.
   An individually tracked subagent older than 2 h is dropped from the set outright.
+- **The subagent book the apps draw.** Beside the stop gate, the daemon keeps every session's
+  subagents as rows (`registry/subagents.rs`): running, `done`, `failed`, or `closed` (still open
+  when its session ended). The board lists them under each card and the terminal app under each
+  card's prompt, finished ones folded into a count while `hide_done_subagents` is on. Rows leave the
+  book on a clear (`ClientRequest::ClearEndedSubagents`), on the 30 s sweep once ended longer than
+  `subagent_retention` (default 1 h), and all at once when their session restarts, before the new
+  process starts; each removal reaches the clients as `ServerEvent::SubagentsRemoved`. The sweep
+  also closes a row still running 2 h after its start, the stop gate's own limit, so a lost
+  SubagentStop no longer leaves a subagent showing as running for the life of the session.
 - **Answering is a hook too, just not its own.** Approving a permission prompt fires nothing: the
   gated tool simply runs, and its `PostToolUse` is the first word that you said yes. So the
   `PostToolUse` group is unmatched (every tool's end reaches kete) and a tool event from the same

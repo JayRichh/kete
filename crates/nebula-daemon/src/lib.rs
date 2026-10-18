@@ -361,6 +361,7 @@ async fn serve(opts: DaemonOpts) -> Result<()> {
                     _ = interval.tick() => {
                         daemon.tick_status_machines();
                         daemon.reap_prewarmed();
+                        daemon.sweep_subagents();
                     }
                 }
             }
