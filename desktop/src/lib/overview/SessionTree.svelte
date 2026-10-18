@@ -8,7 +8,7 @@
   import RunButton from './RunButton.svelte';
   import ContextBar from '../accounts/ContextBar.svelte';
   import StopBadge from '../StopBadge.svelte';
-  import { flatten, type Node } from './tree';
+  import { flatten, rollup, rollupLabel, type Node } from './tree';
   // A row's right-click menu comes from its data-target (menus/router.ts).
   import OrchBadge from '../orchestrator/OrchBadge.svelte';
   import { openOrchestrator } from '../orch.svelte';
@@ -192,6 +192,14 @@
             }}
             >from {#if from.role === 'orchestrator'}<span aria-hidden="true">&#9670;</span> Orchestrator{:else}{from.name}{/if}</button
           >
+        {/if}
+        {#if hasKids && n.kind === 'session'}
+          <!-- What its nested sessions and subagents are doing, so a folded
+               parent still says one of them needs you. -->
+          {@const tally = rollupLabel(rollup(n))}
+          {#if tally}
+            <span class="ml-2 min-w-0 flex-none truncate font-mono text-[11px] text-muted @max-[760px]:hidden" data-rollup title="Under {n.label}: {tally}">{tally}</span>
+          {/if}
         {/if}
         {#if hidden && n.kind !== 'finished'}
           <button

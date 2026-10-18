@@ -192,3 +192,35 @@ export function sortRepos<T extends { name: string; forest: Node[] }>(rows: T[])
     .sort((a, b) => a.rank - b.rank || a.r.name.localeCompare(b.r.name))
     .map((x) => x.r);
 }
+
+/** A parent row's descendants by state, for its rollup and the session
+ *  rail's children: `working` the running ones, `needs` those waiting on
+ *  you or ended on an error, `done` the finished ones, read or not, and
+ *  those that stopped. The ended subagents a FINISHED GROUP folds all count
+ *  as done; the group row itself is not one of them. */
+export type Rollup = { working: number; needs: number; done: number };
+
+export function rollup(n: Node): Rollup {
+  const r: Rollup = { working: 0, needs: 0, done: 0 };
+  const walk = (d: Node) => {
+    if (d.kind === 'finished') r.done += d.children.length;
+    else {
+      if (d.status === 'running') r.working += 1;
+      else if (d.status === 'needs' || d.status === 'failed') r.needs += 1;
+      else if (d.status === 'done' || d.status === 'unread' || d.status === 'stopped') r.done += 1;
+      d.children.forEach(walk);
+    }
+  };
+  n.children.forEach(walk);
+  return r;
+}
+
+/** `2 working \u00b7 1 needs you \u00b7 3 done`, the empty counts left out; empty
+ *  when no descendant is in any of the three. */
+export function rollupLabel(r: Rollup): string {
+  const parts: string[] = [];
+  if (r.working) parts.push(`${r.working} working`);
+  if (r.needs) parts.push(`${r.needs} needs you`);
+  if (r.done) parts.push(`${r.done} done`);
+  return parts.join(' \u00b7 ');
+}

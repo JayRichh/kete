@@ -4,7 +4,8 @@
 // the rules are tested without a window.
 
 import type { Agent, ContextUsage, Model } from './api';
-import { placeOf, subagentTone, toneOf } from './status';
+import { placeOf } from './status';
+import { buildForest, rollup, walkAll, type Rollup } from './overview/tree';
 import type { WorktreeGit } from './worktrees/api';
 
 export type RailPlace =
@@ -12,8 +13,9 @@ export type RailPlace =
   | { kind: 'cloud'; url: string };
 
 /** A session's children by how they stand: `kete spawn` sessions it
- *  started, and its Claude subagents. */
-export type ChildCounts = { working: number; needs: number; done: number };
+ *  started and its Claude subagents, nested ones included. The overview
+ *  tree's rollup, so the rail and the tree count alike. */
+export type ChildCounts = Rollup;
 
 export type RailFacts = {
   place: RailPlace;
@@ -34,20 +36,11 @@ export function railPlace(m: Model, a: Agent): RailPlace {
 }
 
 export function childCounts(m: Model, parent: string): ChildCounts {
-  const out: ChildCounts = { working: 0, needs: 0, done: 0 };
-  for (const a of m.agents) {
-    if (a.parent !== parent || a.id === parent || a.archived) continue;
-    const t = toneOf(a);
-    if (t === 'running') out.working += 1;
-    else if (t === 'needs') out.needs += 1;
-    else if (t === 'done' || t === 'unread' || t === 'stopped') out.done += 1;
-  }
-  for (const s of m.subagents) {
-    if (s.parent_agent !== parent) continue;
-    if (subagentTone(s) === 'running') out.working += 1;
-    else out.done += 1;
-  }
-  return out;
+  const agents = m.agents.filter((a) => !a.archived || a.id === parent);
+  const ids = new Set(agents.map((a) => a.id));
+  const forest = buildForest(agents, m.subagents.filter((x) => ids.has(x.parent_agent)));
+  const node = walkAll(forest).find((n) => n.kind === 'session' && n.id === parent);
+  return node ? rollup(node) : { working: 0, needs: 0, done: 0 };
 }
 
 export function railFacts(m: Model, a: Agent, git: Record<string, WorktreeGit>): RailFacts {

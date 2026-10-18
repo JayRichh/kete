@@ -377,6 +377,58 @@ pub fn flatten(forest: &[Node], open: &HashSet<String>, closed: &HashSet<String>
     out
 }
 
+/// A parent row's descendants by state, the desktop's `rollup`: `working`
+/// the running ones, `needs` those waiting on you or ended on an error,
+/// `done` the finished ones, read or not, and those that stopped. The
+/// ended subagents a FINISHED GROUP folds all count as done; the group row
+/// itself is not one of them.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Rollup {
+    pub working: usize,
+    pub needs: usize,
+    pub done: usize,
+}
+
+impl Rollup {
+    /// `2 working · 1 needs you · 3 done`, the empty counts left out; empty
+    /// when no descendant is in any of the three (`rollupLabel`).
+    pub fn label(self) -> String {
+        let parts: Vec<String> = [
+            (self.working, "working"),
+            (self.needs, "needs you"),
+            (self.done, "done"),
+        ]
+        .into_iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, word)| format!("{n} {word}"))
+        .collect();
+        parts.join(" · ")
+    }
+}
+
+pub fn rollup(n: &Node) -> Rollup {
+    fn walk(d: &Node, r: &mut Rollup) {
+        if d.key.starts_with("f:") {
+            r.done += d.children.len();
+            return;
+        }
+        match d.tone {
+            Tone::Running => r.working += 1,
+            Tone::Needs | Tone::Failed => r.needs += 1,
+            Tone::Done | Tone::Unread | Tone::Stopped => r.done += 1,
+            Tone::Idle => {}
+        }
+        for c in &d.children {
+            walk(c, r);
+        }
+    }
+    let mut r = Rollup::default();
+    for c in &n.children {
+        walk(c, &mut r);
+    }
+    r
+}
+
 /// Every node, depth first — the desktop's `walkAll`.
 pub fn walk_all(forest: &[Node]) -> Vec<&Node> {
     fn walk<'a>(n: &'a Node, out: &mut Vec<&'a Node>) {
@@ -539,6 +591,53 @@ pub(crate) mod tests {
         assert_eq!(ids.len(), kept + 1);
         assert!(!ids.contains(&"e0") && !ids.contains(&"e2"), "{ids:?}");
         assert!(ids.contains(&"e3") && ids.contains(&"live"), "{ids:?}");
+    }
+
+    /// The desktop's rollup: working, needs you, done, across every
+    /// descendant, the quiet ones left out.
+    #[test]
+    fn a_parent_rolls_up_its_descendants_as_working_needs_you_and_done() {
+        let p = agent("p", None, AgentStatus::Finished, 0);
+        let busy = agent("busy", Some("p"), AgentStatus::Running, 1);
+        let asks = agent("asks", Some("p"), AgentStatus::NeedsFeedback, 2);
+        let read = agent("read", Some("p"), AgentStatus::Finished, 3);
+        let mut unread = agent("unread", Some("busy"), AgentStatus::Finished, 4);
+        unread.unseen = true;
+        let idle = agent("idle", Some("p"), AgentStatus::Fresh, 5);
+        let mut book = Subagents::default();
+        book.upsert(sub("busy", "s1", SubagentStatus::Running, 1));
+        book.upsert(sub("read", "s2", SubagentStatus::Done, 2));
+        let forest = build_forest(&[&p, &busy, &asks, &read, &unread, &idle], &book, false);
+        let r = rollup(&forest[0]);
+        assert_eq!(
+            r,
+            Rollup {
+                working: 2,
+                needs: 1,
+                done: 3
+            }
+        );
+        assert_eq!(r.label(), "2 working · 1 needs you · 3 done");
+        let by = |key: &str| {
+            walk_all(&forest)
+                .into_iter()
+                .find(|n| n.key == key)
+                .unwrap()
+        };
+        assert_eq!(rollup(by("a:read")).label(), "1 done");
+        assert_eq!(rollup(by("a:idle")).label(), "");
+
+        // Folded, the FINISHED GROUP's subagents count as done and the
+        // group row itself does not.
+        book.upsert(sub("read", "s3", SubagentStatus::EndedUnknown, 3));
+        for hide_done in [false, true] {
+            let forest = build_forest(&[&p, &read], &book, hide_done);
+            let read = walk_all(&forest)
+                .into_iter()
+                .find(|n| n.key == "a:read")
+                .unwrap();
+            assert_eq!(rollup(read).label(), "2 done", "hide_done {hide_done}");
+        }
     }
 
     #[test]
