@@ -23,6 +23,12 @@
 //!   `authentication_failed`, …): the turn ended on an API error.
 //! - `notify:<type>` — a `Notification` of that `notification_type`
 //!   (`quota_auto_resume_fired`, …).
+//! - `subagent:<type>:<model>:<effort>:<description>` — a subagent run start
+//!   to end: the parent's `Agent` call (`PreToolUse`, its input naming the
+//!   type, model and description), `SubagentStart` with the subagent's own
+//!   `effort`, then `SubagentStop`. Empty parts are left out.
+//! - `subagent-open:<type>:<model>:<effort>:<description>` — the same
+//!   without its `SubagentStop`: the subagent stays running.
 //! - `say:<text>` — prints a line.
 //! - `statusline:<resets_at>` — runs the status line command Kete's
 //!   `--settings` file names, as Claude does after a reply, with a
@@ -156,6 +162,8 @@ pub fn run() {
                 "Notification",
                 serde_json::json!({ "notification_type": rest, "message": rest }),
             ),
+            "subagent" => agent.subagent(rest, true),
+            "subagent-open" => agent.subagent(rest, false),
             "say" => print_line(rest),
             "statusline" => agent.statusline(rest),
             "echo" => agent.echo(),
@@ -202,6 +210,40 @@ struct Agent {
 }
 
 impl Agent {
+    /// The `subagent` step: one subagent run through the hooks Claude fires
+    /// for it, under an id of its own; left running unless `close`.
+    fn subagent(&mut self, rest: &str, close: bool) {
+        let mut parts = rest.splitn(4, ':');
+        let mut part = || parts.next().unwrap_or_default().to_string();
+        let (kind, model, effort, description) = (part(), part(), part(), part());
+        let id = format!("agent-{}", description.len() + kind.len());
+        let mut input = serde_json::json!({ "description": description, "prompt": "..." });
+        if !kind.is_empty() {
+            input["subagent_type"] = kind.clone().into();
+        }
+        if !model.is_empty() {
+            input["model"] = model.into();
+        }
+        self.hook(
+            "PreToolUse",
+            serde_json::json!({ "tool_name": "Agent", "tool_input": input }),
+        );
+        let mut start = serde_json::json!({ "agent_id": id, "agent_type": kind });
+        if !effort.is_empty() {
+            start["effort"] = serde_json::json!({ "level": effort });
+        }
+        self.hook("SubagentStart", start);
+        if !close {
+            print_line(&format!("subagent running: {description}"));
+            return;
+        }
+        self.hook(
+            "SubagentStop",
+            serde_json::json!({ "agent_id": id, "agent_type": kind }),
+        );
+        print_line(&format!("subagent done: {description}"));
+    }
+
     fn log(&self, line: &str) {
         let Some(path) = std::env::var_os(LOG) else {
             return;

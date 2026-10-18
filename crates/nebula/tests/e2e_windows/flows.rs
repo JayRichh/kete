@@ -57,7 +57,31 @@ pub const TESTS: &[(&str, Test)] = &[
         "a_wake_up_runs_a_hidden_session_no_list_shows",
         a_wake_up_runs_a_hidden_session_no_list_shows,
     ),
+    (
+        "the_session_tree_names_a_subagents_model_and_effort",
+        the_session_tree_names_a_subagents_model_and_effort,
+    ),
 ];
+
+/// A subagent the session runs, its Agent call naming haiku and its own
+/// hooks saying low effort: the session tree (Shift+S) lists it under
+/// the session with its task, type, model and effort. It stays running,
+/// so no finished fold hides it.
+fn the_session_tree_names_a_subagents_model_and_effort() {
+    let tui = Tui::spawn(Options {
+        script: "subagent-open:Explore:haiku:low:Map the hooks;stop;echo".into(),
+        ..Options::default()
+    });
+    let repo = tui.make_repo("tree-proj");
+    tui.wait_for_text("create your first project");
+    tui.add_project(&repo, "tree-proj");
+    launch(&tui, "map the hooks");
+    tui.wait_for_agent("step stop");
+    tui.wait_for_text("agent-1  done");
+    tui.send(b"S");
+    tui.wait_for_text("Map the hooks");
+    tui.wait_for_text("Explore · haiku · low");
+}
 
 /// WHAKAOHO: `kete wake @claude --force` has the daemon run a hidden
 /// session — the fake agent, handed haiku and the one-word prompt, in the

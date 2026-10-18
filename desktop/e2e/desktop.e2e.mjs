@@ -728,3 +728,19 @@ flow('Start as new session from the follow-up box nests the new session under it
   await d.el(`[role="treeitem"][aria-level="2"][data-target="agent:${child.id}"]`);
   await d.el(`[role="treeitem"][aria-level="1"][data-target="agent:${parent}"]`);
 });
+
+flow("the overview's session tree names a subagent's model and effort", { script: 'subagent-open:Explore:haiku:low:Map the hooks;stop;echo' }, async (d) => {
+  const repo = d.makeRepo('tree-proj');
+  await d.addRepo(repo);
+  const id = await d.launch('map the hooks');
+  await d.waitForAgent('step stop');
+  await d.click('[aria-label="Home view"] button', 'Overview');
+  // The subagent nests under its session, its task as the name. It stays
+  // running, so no finished fold hides it.
+  await d.waitForText('Map the hooks');
+  await d.waitForText('Explore \u00b7 haiku \u00b7 low');
+  const subs = (await d.invoke('get_state')).subagents;
+  assert.equal(subs.length, 1);
+  assert.equal(subs[0].parent_agent, id);
+  assert.deepEqual(subs[0].run, { model: 'haiku', effort: 'low' });
+});
