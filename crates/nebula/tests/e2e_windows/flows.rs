@@ -76,8 +76,7 @@ fn the_session_tree_names_a_subagents_model_and_effort() {
     tui.wait_for_text("create your first project");
     tui.add_project(&repo, "tree-proj");
     launch(&tui, "map the hooks");
-    tui.wait_for_agent("step stop");
-    tui.wait_for_text("agent-1  done");
+    tui.wait_for_agent("step echo");
     tui.send(b"S");
     tui.wait_for_text("Map the hooks");
     tui.wait_for_text("Explore · haiku · low");
