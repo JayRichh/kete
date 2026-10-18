@@ -12,6 +12,10 @@ use ratatui::buffer::Buffer;
 /// The overlay's width; its height follows the rows.
 const WIDTH: u16 = 88;
 
+/// The fewest cells a card's subagent row keeps for the name before it
+/// shows the model and effort beside it.
+const CARD_NAME_MIN: usize = 12;
+
 /// The chip's glyph: a fork, for work split off the session.
 const FORK: &str = "⑂";
 
@@ -175,13 +179,26 @@ pub(crate) fn card_lines(
             .to_string();
             let lead = format!("{FORK} ");
             let room = width.saturating_sub(lead.chars().count() + tail.chars().count() + 1);
+            // The model and effort, dim after the name, while the name
+            // keeps a dozen cells of its own.
+            let run = crate::subagents::sub_run(s);
+            let run = if !run.is_empty() && room >= run.chars().count() + 2 + CARD_NAME_MIN {
+                format!("  {run}")
+            } else {
+                String::new()
+            };
+            let room = room.saturating_sub(run.chars().count());
             let label = truncate(&crate::subagents::sub_label(s), room);
             let pad = width.saturating_sub(
-                lead.chars().count() + label.chars().count() + tail.chars().count(),
+                lead.chars().count()
+                    + label.chars().count()
+                    + run.chars().count()
+                    + tail.chars().count(),
             );
             vec![
                 Span::styled(lead, Style::default().fg(fg(tone_color(tone, th)))),
                 Span::styled(label, Style::default().fg(fg(th.muted))),
+                Span::styled(run, Style::default().fg(th.dim)),
                 Span::raw(" ".repeat(pad)),
                 Span::styled(tail, Style::default().fg(fg(tone_color(tone, th)))),
             ]

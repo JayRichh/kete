@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import type { Agent, AgentStatus, Subagent } from '../api';
-import { attentionRank, buildForest, flatten, rollup, rollupLabel, sortRepos, type Node } from './tree';
+import { attentionRank, buildForest, flatten, rollup, rollupLabel, sortRepos, subagentMeta, type Node } from './tree';
 
 function agent(id: string, parent: string | null = null, status: AgentStatus = 'finished', unseen = false): Agent {
   return {
@@ -173,4 +173,15 @@ test('the ended subagents a FINISHED GROUP folds count as done, the group row no
   const forest = buildForest([agent('a', null, 'running')], subs, undefined, true);
   expect(rollup(find(forest, 'a')!)).toEqual({ working: 1, needs: 0, done: 2 });
   expect(rollup(buildForest([agent('a', null, 'running')], subs)[0])).toEqual({ working: 1, needs: 0, done: 2 });
+});
+
+test('a subagent row names its model and effort when known', () => {
+  const s = sub('a', 'x');
+  expect(subagentMeta(s)).toBe('Explore');
+  expect(subagentMeta({ ...s, run: { model: 'claude-haiku-4-5', effort: 'low' } })).toBe('Explore \u00b7 haiku-4-5 \u00b7 low');
+  expect(subagentMeta({ ...s, kind: '', run: { model: '', effort: 'high' } })).toBe('high');
+  // Named by its type: the type is not said twice.
+  expect(subagentMeta({ ...s, description: '', run: { model: 'sonnet', effort: '' } })).toBe('sonnet');
+  expect(subagentMeta({ ...s, status: 'ended_unknown' })).toBe('closed \u00b7 Explore');
+  expect(subagentMeta({ ...s, run: null })).toBe('Explore');
 });

@@ -26,6 +26,14 @@ export function isEnded(s: Subagent): boolean {
   return s.status !== 'running';
 }
 
+/** The model (without its `claude-` prefix) and effort a subagent runs
+ *  at, `haiku-4-5 \u00b7 low`; empty when neither is known. The terminal app's
+ *  rows say the same (`nebula-tui/src/subagents.rs`, `sub_run`). */
+export function subagentRun(s: Subagent): string {
+  const model = (s.run?.model ?? '').replace(/^claude-/, '');
+  return [model, s.run?.effort ?? ''].filter(Boolean).join(' \u00b7 ');
+}
+
 /** When a subagent last moved: its end, else its start. */
 export function movedAt(s: Subagent): number {
   return s.ended_at ?? s.started_at;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Subagent } from './api';
-import { cardSubagents, endedTotal, subagentWord } from './subagents';
+import { cardSubagents, endedTotal, subagentWord, subagentRun } from './subagents';
 
 function sub(parent: string, id: string, status: Subagent['status'], at: number): Subagent {
   return {
@@ -53,4 +53,11 @@ describe('endedTotal', () => {
   it('counts what a clear drops', () => {
     expect(endedTotal(subs)).toBe(3);
   });
+});
+
+it('a subagent says the model and effort it runs at when known', () => {
+  const s = { id: 'x', parent_agent: 'a', kind: 'Explore', description: 'look', started_at: 0, ended_at: null, status: 'running' as const };
+  expect(subagentRun(s)).toBe('');
+  expect(subagentRun({ ...s, run: { model: 'claude-haiku-4-5', effort: 'low' } })).toBe('haiku-4-5 \u00b7 low');
+  expect(subagentRun({ ...s, run: { model: '', effort: 'max' } })).toBe('max');
 });

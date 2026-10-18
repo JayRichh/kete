@@ -245,14 +245,7 @@ pub fn build_forest(agents: &[&Agent], subs: &Subagents, hide_done: bool) -> Vec
             depth,
             tone: sub_tone(s),
             label: sub_label(s),
-            // The type, unless the label already is it (no task seen).
-            meta: if s.kind.is_empty() {
-                "subagent".into()
-            } else if s.description.is_empty() {
-                String::new()
-            } else {
-                s.kind.clone()
-            },
+            meta: sub_meta(s),
             when: s.ended_at.unwrap_or(s.started_at),
             opens: opens.clone(),
             session: false,
@@ -328,6 +321,38 @@ pub fn sub_label(s: &SubagentSummary) -> String {
     } else {
         "subagent".into()
     }
+}
+
+/// What a subagent row says it is beside its name: its type (`subagent`
+/// when the CLI named none, nothing when the name already is the type),
+/// then the model and effort it runs at when known, the model without its
+/// `claude-` prefix. The desktop's rows say the same (`overview/tree.ts`,
+/// `subagentMeta`).
+pub(crate) fn sub_meta(s: &SubagentSummary) -> String {
+    let kind = if s.kind.is_empty() {
+        "subagent"
+    } else if s.description.is_empty() {
+        ""
+    } else {
+        s.kind.as_str()
+    };
+    let run = sub_run(s);
+    [kind, run.as_str()]
+        .into_iter()
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+/// The model (without its `claude-` prefix) and effort a subagent runs at,
+/// `haiku-4-5 · low`; empty when neither is known.
+pub(crate) fn sub_run(s: &SubagentSummary) -> String {
+    let model = s.model().strip_prefix("claude-").unwrap_or(s.model());
+    [model, s.effort()]
+        .into_iter()
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ")
 }
 
 /// One drawn row of the tree.
@@ -557,6 +582,7 @@ pub(crate) mod tests {
             started_at: at,
             ended_at: (status != SubagentStatus::Running).then_some(at + 1),
             status,
+            run: None,
         }
     }
 
@@ -669,6 +695,19 @@ pub(crate) mod tests {
         assert_eq!(s1.tone, Tone::Running);
         assert_eq!(s1.label, "task s1");
         assert_eq!(s1.meta, "Explore");
+    }
+
+    /// A subagent's type, then the model and effort it runs at when known,
+    /// the model without its `claude-` prefix.
+    #[test]
+    fn a_subagent_row_names_its_model_and_effort_when_known() {
+        let mut s = sub("a", "x", SubagentStatus::Running, 1);
+        assert_eq!(sub_meta(&s), "Explore");
+        s.run = nebula_core::SubagentRun::known("claude-haiku-4-5".into(), "low".into());
+        assert_eq!(sub_meta(&s), "Explore · haiku-4-5 · low");
+        s.kind.clear();
+        s.run = nebula_core::SubagentRun::known(String::new(), "high".into());
+        assert_eq!(sub_meta(&s), "subagent · high");
     }
 
     #[test]

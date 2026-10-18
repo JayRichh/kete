@@ -8,7 +8,7 @@
   import RunButton from './RunButton.svelte';
   import ContextBar from '../accounts/ContextBar.svelte';
   import StopBadge from '../StopBadge.svelte';
-  import { flatten, rollup, rollupLabel, type Node } from './tree';
+  import { flatten, rollup, rollupLabel, subagentMeta, type Node } from './tree';
   // A row's right-click menu comes from its data-target (menus/router.ts).
   import OrchBadge from '../orchestrator/OrchBadge.svelte';
   import { openOrchestrator } from '../orch.svelte';
@@ -62,14 +62,10 @@
   function meta(n: Node): string {
     if (n.agent?.archived) return ['archived', harnessLabel(n.agent)].join(' \u00b7 ');
     if (n.agent) return [harnessLabel(n.agent), n.agent.profile].filter(Boolean).join(' \u00b7 ');
-    // Indent and the lighter name already say "subagent"; the type is the
-    // news, unless the name already is the type. `closed`: still open when
-    // its session ended or restarted.
-    if (n.sub) {
-      const closedWord = n.sub.status === 'ended_unknown' ? 'closed' : '';
-      const kind = n.sub.description ? n.sub.kind : '';
-      return [closedWord, kind].filter(Boolean).join(' \u00B7 ');
-    }
+    // Indent and the lighter name already say "subagent"; the type (unless
+    // the name already is it), model and effort are the news. `closed`:
+    // still open when its session ended or restarted.
+    if (n.sub) return subagentMeta(n.sub);
     if (n.kind === 'finished') return 'subagents, folded';
     return '';
   }
@@ -221,7 +217,7 @@
       </span>
 
       <span class="flex min-w-0 items-center gap-2 pl-3 text-[13px] text-muted @max-[760px]:hidden"
-        ><span class="min-w-0 truncate">{meta(n)}</span></span
+        ><span class="min-w-0 truncate" title={meta(n)}>{meta(n)}</span></span
       >
       <span class="truncate pl-3 text-[13px] text-muted @max-[760px]:hidden">
         {prompt ?? ''}

@@ -66,6 +66,14 @@ export interface Subagent {
   started_at: number;
   ended_at: number | null;
   status: 'running' | 'done' | 'failed' | 'ended_unknown';
+  /** The model and effort it runs at (protocol 64); absent when neither
+   *  is known, and from an older daemon. */
+  run?: SubagentRun | null;
+}
+/** What a subagent runs on; either may be empty. */
+export interface SubagentRun {
+  model: string;
+  effort: string;
 }
 export interface TerminalTab {
   id: string;

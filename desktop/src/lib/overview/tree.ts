@@ -4,8 +4,20 @@
 
 import type { Agent, Subagent } from '../api';
 import { toneOf, subagentTone, type Tone } from '../status';
+import { subagentRun } from '../subagents';
 
 export type Status = Tone;
+
+/** What a subagent row says beside its name: `closed` for one still open
+ *  when its session ended or restarted, its type unless the name already
+ *  is it, then the model and effort it runs at when known, the model
+ *  without its `claude-` prefix. The terminal app's rows say the same
+ *  (`nebula-tui/src/subagents.rs`, `sub_meta`). */
+export function subagentMeta(s: Subagent): string {
+  const closedWord = s.status === 'ended_unknown' ? 'closed' : '';
+  const kind = s.description ? s.kind : '';
+  return [closedWord, kind, subagentRun(s)].filter(Boolean).join(' \u00b7 ');
+}
 
 export type Node = {
   id: string;
