@@ -683,3 +683,25 @@ flow('git work done outside a turn reaches the overview within seconds, and the 
     8_000,
   );
 });
+
+flow('moving a session out of a checkout with uncommitted work says what stays behind; Cancel keeps it there', { script: 'stop;echo' }, async (d) => {
+  const repo = d.makeRepo('move-proj');
+  await d.addRepo(repo);
+  await toBoard(d);
+  const id = await d.launch('tidy the docs');
+  await d.waitForLane(id, 'done');
+  const [wt] = d.linkedWorktrees(repo);
+  assert.ok(wt && fs.existsSync(wt), 'the session has a worktree of its own');
+  const home = (await d.agents()).find((a) => a.id === id).worktree_id;
+  fs.writeFileSync(path.join(wt, 'notes.txt'), 'left behind\n');
+  // Move session, from the palette, on the session the window followed into.
+  await d.press('k', Key.Control);
+  await d.type('[aria-label="Command palette"] input', 'Move session');
+  await d.click('[role="listbox"] [role="option"]', 'Move session');
+  await d.click('[role="dialog"] [role="option"] button', 'move-proj / main');
+  await d.waitForText('1 changed file stays in');
+  await d.waitForText('anyway?');
+  await d.click('[role="dialog"] button', 'Cancel');
+  await d.waitForGone('1 changed file stays in');
+  assert.equal((await d.agents()).find((a) => a.id === id).worktree_id, home, 'still where it was');
+});
