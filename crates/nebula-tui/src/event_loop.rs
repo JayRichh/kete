@@ -46,6 +46,7 @@ mod launcher;
 mod loop_run;
 mod menus;
 mod mouse_modes;
+mod move_check;
 mod optimistic;
 mod orchestrator;
 mod overlays;

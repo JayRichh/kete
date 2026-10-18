@@ -496,7 +496,7 @@ macro_rules! main_loop_body {
             answer = views_rx.recv() => {
                 // Never None: `app.jobs.view_jobs` keeps a sender alive.
                 if let Some(answer) = answer {
-                    land_view_answer(&mut app, answer);
+                    land_view_answer(&mut app, answer, &mut out);
                 }
             }
         }

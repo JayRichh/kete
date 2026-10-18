@@ -2479,11 +2479,8 @@ pub(super) fn drop_card(app: &mut App, out: &mut Vec<ClientRequest>) {
         return;
     }
     if let Some(worktree) = drag.over {
-        if crate::config::Config::load().confirm_drag_move {
-            confirm_move(app, drag.agent, worktree);
-        } else {
-            move_agent(app, drag.agent, worktree, out);
-        }
+        let ask = crate::config::Config::load().confirm_drag_move;
+        super::move_check::start(app, drag.agent, worktree, ask, out);
     }
 }
 
@@ -2671,7 +2668,7 @@ pub(super) fn drop_order(app: &mut App, out: &mut Vec<ClientRequest>) {
 
 /// The dialog a drop opens before [`move_agent`] runs, saying where the
 /// session goes and that its CLI restarts there.
-fn confirm_move(app: &mut App, id: AgentId, worktree: WorktreeId) {
+pub(super) fn confirm_move(app: &mut App, id: AgentId, worktree: WorktreeId) {
     let Some((name, dest, mid_turn)) = move_plan(app, &id, &worktree) else {
         return;
     };
@@ -2694,7 +2691,11 @@ fn confirm_move(app: &mut App, id: AgentId, worktree: WorktreeId) {
 /// it: the session's name, where it goes (`project ▸ branch` when the
 /// project changes) and whether it waits for its turn to end first. None
 /// when there is nothing to move.
-fn move_plan(app: &App, id: &AgentId, worktree: &WorktreeId) -> Option<(String, String, bool)> {
+pub(super) fn move_plan(
+    app: &App,
+    id: &AgentId,
+    worktree: &WorktreeId,
+) -> Option<(String, String, bool)> {
     let agent = app.tree.agents.iter().find(|a| &a.id == id)?;
     if &agent.worktree_id == worktree {
         return None;
@@ -13456,6 +13457,101 @@ mod tests {
             }
             _ => None,
         })
+    }
+
+    /// The box's recent keys: `^R` lists the checkouts sessions last ran
+    /// in with their `Alt+<n>`, and `Alt+<n>` aims the box at one with
+    /// the typed text kept.
+    #[test]
+    fn the_quick_prompt_aims_at_a_recent_checkout_by_one_key() {
+        with_default_config(|| {
+            let mut app = two_sessions();
+            draw_at(&mut app, 130, 50);
+            let recent = crate::quick_prompt::recent_checkouts(&app.tree);
+            assert!(recent.len() >= 2, "{recent:?}");
+
+            key(&mut app, KeyCode::Char('p'), KeyModifiers::NONE);
+            for c in "fix".chars() {
+                key(&mut app, KeyCode::Char(c), KeyModifiers::NONE);
+            }
+            key(&mut app, KeyCode::Char('r'), KeyModifiers::CONTROL);
+            let Some(Overlay::Menu(menu)) = &app.modals.overlay else {
+                panic!("^R opens the recent list: {:?}", app.modals.overlay);
+            };
+            assert_eq!(menu.title.as_deref(), Some("Recent"));
+            assert_eq!(menu.items[1].key.as_deref(), Some("Alt+2"));
+            key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+
+            key(&mut app, KeyCode::Char('2'), KeyModifiers::ALT);
+            let Some(Overlay::Prompt(prompt)) = &app.modals.overlay else {
+                panic!("the box is back up: {:?}", app.modals.overlay);
+            };
+            let PromptKind::QuickPrompt(launch) = &prompt.kind else {
+                panic!("a quick prompt");
+            };
+            assert_eq!(
+                launch.target,
+                crate::quick_prompt::QuickTarget::Worktree(recent[1].worktree.clone())
+            );
+            assert_eq!(prompt.input.as_str(), "fix", "the text is kept");
+        });
+    }
+
+    /// A move out of a checkout with uncommitted work says what stays
+    /// behind and waits for a yes; Esc keeps the session where it is.
+    #[test]
+    fn moving_out_of_a_dirty_checkout_reports_what_stays_and_asks() {
+        with_default_config(|| {
+            let tmp = tempfile::tempdir().unwrap();
+            let repo = tmp.path().join("feat");
+            std::fs::create_dir(&repo).unwrap();
+            let git = |args: &[&str]| {
+                let out = std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&repo)
+                    .args(args)
+                    .env("GIT_AUTHOR_NAME", "t")
+                    .env("GIT_AUTHOR_EMAIL", "t@example.com")
+                    .env("GIT_COMMITTER_NAME", "t")
+                    .env("GIT_COMMITTER_EMAIL", "t@example.com")
+                    .output()
+                    .unwrap();
+                assert!(out.status.success(), "{args:?}: {out:?}");
+            };
+            git(&["init", "-q", "-b", "feat"]);
+            git(&["commit", "-q", "--allow-empty", "-m", "init"]);
+            std::fs::write(repo.join("notes.txt"), "x").unwrap();
+
+            let mut app = App::new();
+            app.launcher.launcher_pane_at = crate::launcher::PaneSide::Bottom;
+            seed_tree(&mut app);
+            seed_feat(&mut app, repo.clone());
+            seed_web(&mut app);
+            draw_at(&mut app, 130, 50);
+            key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+            draw_at(&mut app, 130, 50);
+            let (x, y) = row_cell(&app, 0);
+            click_at(&mut app, x, y);
+            assert_eq!(app.selected_session().unwrap().id.0, "a2");
+
+            key(&mut app, KeyCode::Char('m'), KeyModifiers::NONE);
+            let out = key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+            assert_eq!(sent_move(&out), None, "nothing moves before the answer");
+            let Some(Overlay::Confirm(confirm)) = &app.modals.overlay else {
+                panic!("the move asks first: {:?}", app.modals.overlay);
+            };
+            assert_eq!(
+                confirm.message,
+                "1 changed file stays in feat. Move 'polish-nav' to main anyway?"
+            );
+            key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+            assert!(app.modals.overlay.is_none());
+
+            key(&mut app, KeyCode::Char('m'), KeyModifiers::NONE);
+            key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+            let out = key(&mut app, KeyCode::Char('y'), KeyModifiers::NONE);
+            assert_eq!(sent_move(&out), Some(("a2".into(), "w1".into())));
+        });
     }
 
     /// `m` on a card lists the project's other checkouts, then the other

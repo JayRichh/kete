@@ -384,6 +384,27 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent, out: &mut Vec<ClientRequest>)
                     launcher::handle_box_key(app, &key, &launch, &input);
                 }
             }
+            // The box's recent checkouts: `^R` lists them, `Alt+1` to
+            // `Alt+5` aim the box at one straight away, the text kept.
+            KeyCode::Char('r' | 'R')
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && matches!(prompt.kind, PromptKind::QuickPrompt(_)) =>
+            {
+                if let Some(back) = quick_return_of(prompt) {
+                    crate::quick_prompt::open_recent_picker(app, back);
+                }
+            }
+            KeyCode::Char(c @ '1'..='5')
+                if key.modifiers == KeyModifiers::ALT
+                    && matches!(prompt.kind, PromptKind::QuickPrompt(_)) =>
+            {
+                if let Some(back) = quick_return_of(prompt) {
+                    let n = c as usize - '0' as usize;
+                    if !crate::quick_prompt::pick_recent(app, back, n) {
+                        app.chrome.flash = Some(format!("quick prompt: no recent checkout {n}"));
+                    }
+                }
+            }
             // Tab / Shift+Tab retarget this one launch: the harness (and
             // its MODEL / EFFORT submenus) or a saved AGENT PRESET. Both
             // are free here — `TextInput` ignores them — and both come back

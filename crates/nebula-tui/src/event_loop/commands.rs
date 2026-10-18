@@ -660,7 +660,9 @@ pub(crate) fn run_menu_action(app: &mut App, action: MenuAction, out: &mut Vec<C
         MenuAction::SwitchAccount { id, profile } => {
             crate::account_switch::confirm(app, id, profile)
         }
-        MenuAction::MoveAgent { id, worktree } => launcher::move_agent(app, id, worktree, out),
+        MenuAction::MoveAgent { id, worktree } => {
+            super::move_check::start(app, id, worktree, false, out)
+        }
         MenuAction::Reorder(target, dir) => {
             crate::order::step(app, &target, dir, out);
         }

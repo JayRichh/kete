@@ -670,7 +670,11 @@ pub(crate) fn open_grep_view(app: &mut App) {
 /// asked, if that view is still the one on screen. Every answer carries
 /// the ticket its view is waiting on, so one that outlived its modal — or
 /// its query, or its cursor — is dropped by the view itself.
-pub(crate) fn land_view_answer(app: &mut App, answer: crate::view_jobs::Answer) {
+pub(crate) fn land_view_answer(
+    app: &mut App,
+    answer: crate::view_jobs::Answer,
+    out: &mut Vec<ClientRequest>,
+) {
     use crate::view_jobs::Answer;
     match answer {
         Answer::Grep { ticket, result } => {
@@ -684,6 +688,12 @@ pub(crate) fn land_view_answer(app: &mut App, answer: crate::view_jobs::Answer) 
         Answer::DeleteCheck { worktree, result } => {
             crate::delete_check::land(app, worktree, result)
         }
+        Answer::MoveCheck {
+            agent,
+            worktree,
+            ask,
+            result,
+        } => super::move_check::land(app, agent, worktree, ask, result, out),
         Answer::DiffListing { ticket, result } => land_diff_listing(app, ticket, result),
         Answer::ReviewDiff { session, result } => {
             super::orchestrator::land_review_diff(app, session, result)
