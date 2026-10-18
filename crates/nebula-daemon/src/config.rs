@@ -129,6 +129,17 @@ impl Config {
         loaded.value
     }
 
+    /// [`Config::load`] without its warnings, for a reader on a timer (the
+    /// 30 s subagent sweep) that would repeat what the other loads already
+    /// reported.
+    pub fn load_quiet() -> Self {
+        nebula_core::settings::load::<Self>(
+            &nebula_core::paths::config_path(),
+            &nebula_core::paths::config_local_path(),
+        )
+        .value
+    }
+
     /// `session_idle_timeout` parsed to a duration; None = reaping disabled.
     pub fn session_idle_timeout(&self) -> Option<std::time::Duration> {
         parse_timeout(&self.session_idle_timeout)
@@ -246,6 +257,31 @@ mod tests {
         assert!(cfg.prewarm_agents);
         let cfg: Config = serde_json::from_str(r#"{"prewarm_agents": false}"#).unwrap();
         assert!(!cfg.prewarm_agents);
+    }
+
+    #[test]
+    fn subagent_retention_reads_its_words_and_survives_a_bad_value() {
+        let retention = |json: &str| {
+            let obj: serde_json::Value = serde_json::from_str(json).unwrap();
+            let (cfg, skipped) =
+                nebula_core::settings::parse_lenient::<Config>(obj.as_object().unwrap());
+            (cfg.subagent_retention_ms(), skipped)
+        };
+        assert_eq!(retention("{}").0, Some(3_600_000), "default 1h");
+        assert_eq!(
+            retention(r#"{"subagent_retention": "10m"}"#).0,
+            Some(600_000)
+        );
+        assert_eq!(retention(r#"{"subagent_retention": "off"}"#).0, None);
+        // A word off the list reads as the default.
+        assert_eq!(
+            retention(r#"{"subagent_retention": "soon"}"#).0,
+            Some(3_600_000)
+        );
+        // A value of the wrong type costs only its own key.
+        let (ms, skipped) = retention(r#"{"subagent_retention": 7, "prewarm_agents": false}"#);
+        assert_eq!(ms, Some(3_600_000));
+        assert!(skipped.contains("subagent_retention"), "{skipped:?}");
     }
 
     #[test]

@@ -4,6 +4,18 @@
 //! IN-PLACE RESTART in the restart state (`handoff.rs`), so a subagent
 //! still running there keeps running and its SubagentStop still lands. A
 //! cold start begins empty: every session died with the old daemon.
+//!
+//! A subagent can stop and later start again under the same id. When its
+//! own background work is still running (a `run_in_background` Bash, a
+//! Monitor), its SubagentStop is only a pause: Claude wakes it with a new
+//! SubagentStart once that work finishes. The book learns which background
+//! tasks a subagent launched from its tool calls (`tool_response`'s
+//! `backgroundTaskId` / `taskId`). A SubagentStop while one of them is
+//! still listed running in the payload's `background_tasks` leaves the row
+//! WAITING, shown as running, rather than done. Verified against
+//! Claude Code 2.1.302: the stopping subagent's own entry is listed as
+//! running at every one of its SubagentStops, the last one included, so
+//! that entry alone says nothing; the shells it launched do.
 
 use super::*;
 use nebula_core::{SubagentStatus, SubagentSummary};
@@ -16,6 +28,9 @@ const ENDED_KEPT: usize = nebula_core::SUBAGENTS_ENDED_KEPT;
 /// Task descriptions waiting for their subagent's SubagentStart, per
 /// parent. More than this many unclaimed means the hooks have drifted.
 const PENDING_TASKS_KEPT: usize = 16;
+/// Background tasks remembered per subagent. A subagent that launches more
+/// than this many has its oldest forgotten.
+const OWNED_TASKS_KEPT: usize = 32;
 /// The tool a parent calls to start a subagent (`Task` in older Claude
 /// Code, `Agent` since).
 const SUBAGENT_TOOLS: [&str; 2] = ["Agent", "Task"];
@@ -42,9 +57,12 @@ pub struct SubagentHookInfo {
     /// A SubagentStop's `last_assistant_message`, first line: the name of
     /// a row that still has none when it ends.
     pub last_message: Option<String>,
-    /// The descriptions of the `subagent` tasks the payload's
-    /// `background_tasks` lists in flight; None without a list.
-    pub background_subagents: Option<Vec<String>>,
+    /// The ids of the tasks the payload's `background_tasks` lists as
+    /// running, of any type; None when the payload has no list.
+    pub background_running: Option<Vec<String>>,
+    /// The background task a tool call just launched: its
+    /// `tool_response`'s `backgroundTaskId` (Bash) or `taskId` (Monitor).
+    pub launched_task: Option<String>,
 }
 
 /// The longest a name taken from a prompt or a reply runs.
@@ -76,16 +94,28 @@ pub struct SubagentCarry {
     pub rows: Vec<SubagentSummary>,
     #[serde(default)]
     pub pending: Vec<(AgentId, PendingTask)>,
+    /// `(parent, subagent, background task ids)`: what each subagent
+    /// launched in the background.
+    #[serde(default)]
+    pub owned: Vec<(AgentId, String, Vec<String>)>,
+    /// `(parent, subagent)` rows that are WAITING on their background work.
+    #[serde(default)]
+    pub waiting: Vec<(AgentId, String)>,
 }
+
+/// One subagent, by its parent session and its own id.
+type SubKey = (AgentId, String);
 
 #[derive(Default)]
 pub(crate) struct SubagentBook {
     rows: HashMap<AgentId, Vec<SubagentSummary>>,
     pending_tasks: HashMap<AgentId, VecDeque<PendingTask>>,
-    /// Rows whose SubagentStop came while the parent's `background_tasks`
-    /// still listed them: they wait on their own background work and stay
-    /// running until a later list leaves them out.
-    waiting: HashSet<(AgentId, String)>,
+    /// The background tasks each subagent launched, oldest first.
+    owned: HashMap<SubKey, VecDeque<String>>,
+    /// Rows WAITING: their SubagentStop came while a background task they
+    /// launched was still running. They stay running until that work is
+    /// over or the session's turn ends.
+    waiting: HashSet<SubKey>,
 }
 
 impl SubagentBook {
@@ -97,7 +127,45 @@ impl SubagentBook {
         }
     }
 
+    fn note_owned(&mut self, parent: &AgentId, id: &str, task: String) {
+        let tasks = self
+            .owned
+            .entry((parent.clone(), id.to_string()))
+            .or_default();
+        if !tasks.contains(&task) {
+            tasks.push_back(task);
+        }
+        while tasks.len() > OWNED_TASKS_KEPT {
+            tasks.pop_front();
+        }
+    }
+
+    /// Forget the background bookkeeping of one subagent, or of every
+    /// subagent of `parent` for None.
+    fn forget_background(&mut self, parent: &AgentId, id: Option<&str>) {
+        let keep = |(p, s): &SubKey| p != parent || id.is_some_and(|id| s != id);
+        self.owned.retain(|key, _| keep(key));
+        self.waiting.retain(keep);
+    }
+
     fn start(&mut self, parent: &AgentId, id: String, kind: String, now: i64) -> SubagentSummary {
+        // The same id again: a subagent woken from WAITING, or one whose
+        // stop came early. It keeps its name and its place, and leaves the
+        // waiting calls to the subagents they belong to.
+        if let Some(row) = self
+            .rows
+            .get_mut(parent)
+            .and_then(|rows| rows.iter_mut().find(|r| r.id == id))
+        {
+            row.status = SubagentStatus::Running;
+            row.ended_at = None;
+            if row.kind.is_empty() {
+                row.kind = kind;
+            }
+            let row = row.clone();
+            self.waiting.remove(&(parent.clone(), id));
+            return row;
+        }
         // The oldest unclaimed call that asked for this subagent's type is
         // its own; failing a match (a call that named no type, a CLI that
         // reports none), calls start in the order they were made.
@@ -124,9 +192,10 @@ impl SubagentBook {
             ended_at: None,
             status: SubagentStatus::Running,
         };
-        let rows = self.rows.entry(parent.clone()).or_default();
-        rows.retain(|r| r.id != row.id);
-        rows.push(row.clone());
+        self.rows
+            .entry(parent.clone())
+            .or_default()
+            .push(row.clone());
         row
     }
 
@@ -137,6 +206,7 @@ impl SubagentBook {
         status: SubagentStatus,
         now: i64,
     ) -> Vec<SubagentSummary> {
+        self.forget_background(parent, id);
         let Some(rows) = self.rows.get_mut(parent) else {
             return Vec::new();
         };
@@ -167,7 +237,7 @@ impl SubagentBook {
     fn forget(&mut self, parent: &AgentId) {
         self.rows.remove(parent);
         self.pending_tasks.remove(parent);
-        self.waiting.retain(|(p, _)| p != parent);
+        self.forget_background(parent, None);
     }
 
     /// Name row `id` of `parent` from `title` while it has no name yet.
@@ -184,9 +254,17 @@ impl SubagentBook {
         }
     }
 
-    /// A SubagentStop: done, unless the parent's `background_tasks` still
-    /// lists the subagent (by its task), in which case it waits on its own
-    /// background work and stays running.
+    /// Whether a background task subagent `key` launched is among
+    /// `running`.
+    fn still_working(&self, key: &SubKey, running: &[String]) -> bool {
+        self.owned
+            .get(key)
+            .is_some_and(|tasks| tasks.iter().any(|t| running.contains(t)))
+    }
+
+    /// A SubagentStop: done, unless a background task the subagent
+    /// launched is still listed running, in which case it is WAITING and
+    /// stays running. Returns the rows that changed.
     fn stop(
         &mut self,
         parent: &AgentId,
@@ -195,49 +273,43 @@ impl SubagentBook {
         now: i64,
     ) -> Vec<SubagentSummary> {
         self.name_if_blank(parent, id, info.last_message.as_deref());
-        let row = self
-            .rows
-            .get(parent)
-            .and_then(|rows| rows.iter().find(|r| r.id == id));
-        let listed = row.is_some_and(|r| {
-            !r.description.is_empty()
-                && info
-                    .background_subagents
-                    .as_ref()
-                    .is_some_and(|list| list.contains(&r.description))
-        });
-        if listed {
-            let row = row.cloned();
-            self.waiting.insert((parent.clone(), id.to_string()));
-            return row.into_iter().collect();
+        let key = (parent.clone(), id.to_string());
+        let waiting = info
+            .background_running
+            .as_deref()
+            .is_some_and(|running| self.still_working(&key, running));
+        if waiting {
+            self.waiting.insert(key);
+            // Its name may have just been filled in.
+            return self
+                .rows
+                .get(parent)
+                .and_then(|rows| rows.iter().find(|r| r.id == id))
+                .cloned()
+                .into_iter()
+                .collect();
         }
-        self.waiting.remove(&(parent.clone(), id.to_string()));
         self.end(parent, Some(id), SubagentStatus::Done, now)
     }
 
-    /// A later Stop or SubagentStop's list: a waiting row it no longer
-    /// names has finished its background work.
+    /// WAITING rows of `parent` whose background work is over, ended done:
+    /// every one when `running` is None (the session's turn ended with no
+    /// list to say otherwise), else those none of whose tasks it lists.
     fn settle_waiting(
         &mut self,
         parent: &AgentId,
-        listed: &[String],
+        running: Option<&[String]>,
         now: i64,
     ) -> Vec<SubagentSummary> {
         let done: Vec<String> = self
             .waiting
             .iter()
             .filter(|(p, _)| p == parent)
+            .filter(|key| running.is_none_or(|running| !self.still_working(key, running)))
             .map(|(_, id)| id.clone())
-            .filter(|id| {
-                self.rows
-                    .get(parent)
-                    .and_then(|rows| rows.iter().find(|r| &r.id == id))
-                    .is_none_or(|r| !listed.contains(&r.description))
-            })
             .collect();
         let mut changed = Vec::new();
         for id in done {
-            self.waiting.remove(&(parent.clone(), id.clone()));
             changed.extend(self.end(parent, Some(&id), SubagentStatus::Done, now));
         }
         changed
@@ -248,7 +320,7 @@ impl SubagentBook {
     /// the old one ran can report again.
     fn reap(&mut self, parent: &AgentId) -> Vec<String> {
         self.pending_tasks.remove(parent);
-        self.waiting.retain(|(p, _)| p != parent);
+        self.forget_background(parent, None);
         self.rows
             .remove(parent)
             .map(|rows| rows.into_iter().map(|r| r.id).collect())
@@ -285,22 +357,28 @@ impl SubagentBook {
         removed
     }
 
-    /// The periodic sweep: a row still running after [`STALE_RUNNING_MS`]
-    /// never got its SubagentStop (the stop gate gave up on it long ago,
-    /// `status::SUBAGENT_TTL`), so it ends as unknown; an ended row older
-    /// than `retention_ms` (None keeps them) leaves the book.
+    /// The periodic sweep: a row still running (WAITING included) after
+    /// [`STALE_RUNNING_MS`] never got its SubagentStop or its wake-up (the
+    /// stop gate gave up on it long ago, `status::SUBAGENT_TTL`), so it
+    /// ends as unknown; an ended row older than `retention_ms` (None keeps
+    /// them) leaves the book.
     fn sweep(
         &mut self,
         now: i64,
         retention_ms: Option<i64>,
     ) -> (Vec<SubagentSummary>, Vec<(AgentId, Vec<String>)>) {
+        let stale: Vec<SubKey> = self
+            .rows
+            .values()
+            .flatten()
+            .filter(|r| {
+                r.status == SubagentStatus::Running && now - r.started_at >= STALE_RUNNING_MS
+            })
+            .map(|r| (r.parent_agent.clone(), r.id.clone()))
+            .collect();
         let mut closed = Vec::new();
-        for row in self.rows.values_mut().flatten() {
-            if row.status == SubagentStatus::Running && now - row.started_at >= STALE_RUNNING_MS {
-                row.status = SubagentStatus::EndedUnknown;
-                row.ended_at = Some(now);
-                closed.push(row.clone());
-            }
+        for (parent, id) in stale {
+            closed.extend(self.end(&parent, Some(&id), SubagentStatus::EndedUnknown, now));
         }
         let removed = match retention_ms {
             Some(keep) => {
@@ -328,8 +406,9 @@ impl Daemon {
     }
 
     /// Feed one hook delivery's subagent news: a Task / Agent tool call's
-    /// description, a SubagentStart, a SubagentStop. Everything else is
-    /// not this book's business.
+    /// description, a background task a subagent launched, a
+    /// SubagentStart, a SubagentStop, the session's Stop. Everything else
+    /// is not this book's business.
     pub fn track_subagent(&self, parent: &AgentId, event: &HookEvent, info: SubagentHookInfo) {
         let now = nebula_core::clock::now_ms();
         let changed = {
@@ -352,6 +431,15 @@ impl Daemon {
                     );
                     Vec::new()
                 }
+                HookEvent::PostToolUse {
+                    subagent_id: Some(id),
+                    ..
+                } => {
+                    if let Some(task) = info.launched_task {
+                        book.note_owned(parent, id, task);
+                    }
+                    Vec::new()
+                }
                 HookEvent::SubagentStart {
                     subagent_id: Some(id),
                 } => vec![book.start(parent, id.clone(), info.kind.unwrap_or_default(), now)],
@@ -360,15 +448,16 @@ impl Daemon {
                     ..
                 } => {
                     let mut changed = book.stop(parent, id, &info, now);
-                    if let Some(list) = &info.background_subagents {
-                        changed.extend(book.settle_waiting(parent, list, now));
+                    // Another subagent's stop carries the same list: one
+                    // waiting on work that has since finished is done.
+                    if let Some(running) = info.background_running.as_deref() {
+                        changed.extend(book.settle_waiting(parent, Some(running), now));
                     }
                     changed
                 }
-                HookEvent::Stop { .. } => match &info.background_subagents {
-                    Some(list) => book.settle_waiting(parent, list, now),
-                    None => Vec::new(),
-                },
+                HookEvent::Stop { .. } => {
+                    book.settle_waiting(parent, info.background_running.as_deref(), now)
+                }
                 _ => Vec::new(),
             }
         };
@@ -384,7 +473,6 @@ impl Daemon {
         let changed = {
             let mut book = self.subagents.lock();
             book.pending_tasks.remove(parent);
-            book.waiting.retain(|(p, _)| p != parent);
             book.end(parent, None, SubagentStatus::EndedUnknown, now)
         };
         for sub in changed {
@@ -398,11 +486,9 @@ impl Daemon {
     }
 
     /// The parent session is about to restart (restart, account switch, a
-    /// failed resume's respawn): every row its old process left, running
+    /// move into its worktree): every row its old process left, running
     /// or ended, leaves the book now, before the new process can start
-    /// subagents of its own. Without this the old rows stayed, the
-    /// running ones closed only when the old PTY's exit landed, after the
-    /// new session was up.
+    /// subagents of its own.
     pub(crate) fn reap_subagents(&self, parent: &AgentId) {
         let ids = self.subagents.lock().reap(parent);
         if !ids.is_empty() {
@@ -421,13 +507,14 @@ impl Daemon {
     }
 
     /// The 30 s sweep: stale running rows end as unknown, and ended rows
-    /// past the `subagent_retention` setting leave the book.
+    /// past the `subagent_retention` setting leave the book. The setting
+    /// is read quietly: the reaper's load already reports a bad file.
     pub fn sweep_subagents(&self) {
-        let retention = crate::config::Config::load().subagent_retention_ms();
+        let retention = crate::config::Config::load_quiet().subagent_retention_ms();
         self.sweep_subagents_at(nebula_core::clock::now_ms(), retention);
     }
 
-    fn sweep_subagents_at(&self, now: i64, retention_ms: Option<i64>) {
+    pub(crate) fn sweep_subagents_at(&self, now: i64, retention_ms: Option<i64>) {
         let (closed, removed) = self.subagents.lock().sweep(now, retention_ms);
         for sub in closed {
             self.broadcast(ServerEvent::SubagentChanged { sub });
@@ -444,6 +531,16 @@ impl Daemon {
     /// The whole book, for an IN-PLACE RESTART to hand the next image.
     pub fn carry_subagents(&self) -> SubagentCarry {
         let book = self.subagents.lock();
+        let mut owned: Vec<_> = book
+            .owned
+            .iter()
+            .map(|((parent, id), tasks)| {
+                (parent.clone(), id.clone(), tasks.iter().cloned().collect())
+            })
+            .collect();
+        owned.sort();
+        let mut waiting: Vec<_> = book.waiting.iter().cloned().collect();
+        waiting.sort();
         SubagentCarry {
             rows: book.all(),
             pending: book
@@ -451,15 +548,18 @@ impl Daemon {
                 .iter()
                 .flat_map(|(parent, queue)| queue.iter().map(|t| (parent.clone(), t.clone())))
                 .collect(),
+            owned,
+            waiting,
         }
     }
 
     /// Take back what the old image carried. A subagent whose parent's
-    /// session came across (`live`) keeps running, and its SubagentStop
-    /// will find it. One whose parent did not, has lost the process it ran
-    /// in, so it ends as unknown, as a parent's exit would have ended it.
-    /// Called while the daemon boots, before any client subscribes: the
-    /// first Snapshot carries the result, so nothing is broadcast.
+    /// session came across (`live`) keeps running, WAITING ones still
+    /// waiting, and its SubagentStop or wake-up will find it. One whose
+    /// parent did not, has lost the process it ran in, so it ends as
+    /// unknown, as a parent's exit would have ended it. Called while the
+    /// daemon boots, before any client subscribes: the first Snapshot
+    /// carries the result, so nothing is broadcast.
     pub fn restore_subagents(&self, carry: SubagentCarry, live: &HashSet<AgentId>) {
         let now = nebula_core::clock::now_ms();
         let mut book = self.subagents.lock();
@@ -475,6 +575,18 @@ impl Daemon {
         for (parent, task) in carry.pending {
             if live.contains(&parent) {
                 book.note_task(&parent, task);
+            }
+        }
+        for (parent, id, tasks) in carry.owned {
+            if live.contains(&parent) {
+                for task in tasks {
+                    book.note_owned(&parent, &id, task);
+                }
+            }
+        }
+        for key in carry.waiting {
+            if live.contains(&key.0) {
+                book.waiting.insert(key);
             }
         }
     }
@@ -727,31 +839,197 @@ mod tests {
         assert!(daemon.subagent_rows().is_empty());
     }
 
-    /// A subagent whose SubagentStop lands while the parent's
-    /// `background_tasks` still lists it waits on its own background work:
-    /// it stays running, and a later list that leaves it out ends it done.
+    fn post_tool(sub: &str, launched: &str) -> (HookEvent, SubagentHookInfo) {
+        (
+            HookEvent::PostToolUse {
+                tool_name: Some("Bash".into()),
+                subagent_id: Some(sub.into()),
+            },
+            SubagentHookInfo {
+                launched_task: Some(launched.into()),
+                ..Default::default()
+            },
+        )
+    }
+
+    fn listing(running: &[&str]) -> SubagentHookInfo {
+        SubagentHookInfo {
+            background_running: Some(running.iter().map(|n| n.to_string()).collect()),
+            ..Default::default()
+        }
+    }
+
+    fn parent_stop() -> HookEvent {
+        HookEvent::Stop { background: None }
+    }
+
+    fn status_of(daemon: &Daemon, id: &str) -> SubagentStatus {
+        daemon
+            .subagent_rows()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap()
+            .status
+    }
+
+    /// The sequence Claude Code 2.1.302 sends for a background subagent
+    /// whose own background shell outlives its first stop: the stop lists
+    /// the subagent and its shell running, so the row is WAITING and stays
+    /// running; the parent's Stop that still lists the shell leaves it so;
+    /// the wake-up is a SubagentStart under the same id, which keeps its
+    /// name and takes no other call's; its last stop, with only itself
+    /// listed, ends it done.
     #[test]
     fn a_subagent_waiting_on_its_background_work_stays_running() {
         let daemon = daemon();
         let p = AgentId("p".into());
-        let (event, info) = launch(Some("general-purpose"), "Rename the server");
+        let (event, info) = launch(Some("general-purpose"), "Probe background build");
         daemon.track_subagent(&p, &event, info);
-        daemon.track_subagent(&p, &start("r"), typed("general-purpose"));
-        let listed = |names: &[&str]| SubagentHookInfo {
-            background_subagents: Some(names.iter().map(|n| n.to_string()).collect()),
-            ..Default::default()
-        };
-        daemon.track_subagent(&p, &stop("r"), listed(&["Rename the server"]));
-        let status = |d: &Daemon| d.subagent_rows()[0].status;
+        daemon.track_subagent(&p, &start("a"), typed("general-purpose"));
+        let (event, info) = post_tool("a", "shell-1");
+        daemon.track_subagent(&p, &event, info);
+
+        daemon.track_subagent(&p, &stop("a"), listing(&["a", "shell-1"]));
         assert_eq!(
-            status(&daemon),
+            status_of(&daemon, "a"),
             SubagentStatus::Running,
             "waiting, not done"
         );
+        daemon.track_subagent(&p, &parent_stop(), listing(&["shell-1"]));
+        assert_eq!(
+            status_of(&daemon, "a"),
+            SubagentStatus::Running,
+            "its shell still runs"
+        );
 
-        // The parent's next Stop no longer lists it: its work is over.
-        daemon.track_subagent(&p, &HookEvent::Stop { background: None }, listed(&[]));
-        assert_eq!(status(&daemon), SubagentStatus::Done);
+        // Another call waits for its own subagent; the wake-up must not take it.
+        let (event, info) = launch(Some("general-purpose"), "Someone else's task");
+        daemon.track_subagent(&p, &event, info);
+        daemon.track_subagent(&p, &start("a"), typed("general-purpose"));
+        let rows = daemon.subagent_rows();
+        assert_eq!(rows.len(), 1, "the wake-up is the same row");
+        assert_eq!(rows[0].description, "Probe background build");
+
+        daemon.track_subagent(&p, &stop("a"), listing(&["a"]));
+        assert_eq!(status_of(&daemon, "a"), SubagentStatus::Done);
+        daemon.track_subagent(&p, &start("b"), typed("general-purpose"));
+        let rows = daemon.subagent_rows();
+        let b = rows.iter().find(|r| r.id == "b").unwrap();
+        assert_eq!(b.description, "Someone else's task");
+    }
+
+    /// The session's Stop with no `background_tasks` list (an older CLI)
+    /// settles a WAITING row instead of leaving it running; one whose list
+    /// no longer has its shell does too.
+    #[test]
+    fn a_stop_settles_waiting_rows_with_no_list_or_when_their_work_is_gone() {
+        let daemon = daemon();
+        let p = AgentId("p".into());
+        // Each list is the whole session's: b's stop still lists a's shell.
+        for (id, shell, running) in [
+            ("a", "s-a", vec!["a", "s-a"]),
+            ("b", "s-b", vec!["a", "s-a", "b", "s-b"]),
+        ] {
+            daemon.track_subagent(&p, &start(id), explore());
+            let (event, info) = post_tool(id, shell);
+            daemon.track_subagent(&p, &event, info);
+            daemon.track_subagent(&p, &stop(id), listing(&running));
+            assert_eq!(status_of(&daemon, id), SubagentStatus::Running);
+        }
+        // b's shell is gone from the list; a's still runs.
+        daemon.track_subagent(&p, &parent_stop(), listing(&["s-a"]));
+        assert_eq!(status_of(&daemon, "a"), SubagentStatus::Running);
+        assert_eq!(status_of(&daemon, "b"), SubagentStatus::Done);
+        daemon.track_subagent(&p, &parent_stop(), SubagentHookInfo::default());
+        assert_eq!(
+            status_of(&daemon, "a"),
+            SubagentStatus::Done,
+            "no list settles it"
+        );
+    }
+
+    /// A WAITING row past the stale limit closes as unknown like any row
+    /// still running, and is waiting no more: a later Stop changes nothing.
+    #[test]
+    fn the_sweep_closes_a_waiting_row_past_the_stale_limit() {
+        let daemon = daemon();
+        let p = AgentId("p".into());
+        daemon.track_subagent(&p, &start("a"), explore());
+        let (event, info) = post_tool("a", "shell-1");
+        daemon.track_subagent(&p, &event, info);
+        daemon.track_subagent(&p, &stop("a"), listing(&["a", "shell-1"]));
+        let started = daemon.subagent_rows()[0].started_at;
+        daemon.sweep_subagents_at(started + STALE_RUNNING_MS, None);
+        assert_eq!(status_of(&daemon, "a"), SubagentStatus::EndedUnknown);
+        let mut rx = daemon.events.subscribe();
+        daemon.track_subagent(&p, &parent_stop(), SubagentHookInfo::default());
+        assert!(changes(&mut rx).is_empty());
+        assert!(daemon.subagents.lock().waiting.is_empty());
+        assert!(daemon.subagents.lock().owned.is_empty());
+    }
+
+    /// `kete reload`: a WAITING row and the shells its subagent launched
+    /// ride the restart state, so after it the row still waits (a Stop that
+    /// still lists its shell leaves it running) and still settles (one
+    /// that does not ends it done). A waiting row whose session did not
+    /// come across is closed and waits no more.
+    #[test]
+    fn waiting_rows_survive_an_in_place_restart() {
+        let old = daemon();
+        let carried = AgentId("carried".into());
+        let lost = AgentId("lost".into());
+        for parent in [&carried, &lost] {
+            old.track_subagent(parent, &start("a"), explore());
+            let (event, info) = post_tool("a", "shell-1");
+            old.track_subagent(parent, &event, info);
+            old.track_subagent(parent, &stop("a"), listing(&["a", "shell-1"]));
+        }
+        let bytes = rmp_serde::to_vec_named(&old.carry_subagents()).unwrap();
+        let carry: SubagentCarry = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(carry.waiting.len(), 2);
+        let new = daemon();
+        new.restore_subagents(carry, &[carried.clone()].into_iter().collect());
+        assert_eq!(
+            new.subagents.lock().waiting.len(),
+            1,
+            "only the live session's"
+        );
+
+        new.track_subagent(&carried, &parent_stop(), listing(&["shell-1"]));
+        let row = |id: &AgentId| {
+            new.subagent_rows()
+                .into_iter()
+                .find(|r| &r.parent_agent == id)
+                .unwrap()
+                .status
+        };
+        assert_eq!(row(&carried), SubagentStatus::Running, "still waiting");
+        new.track_subagent(&carried, &parent_stop(), listing(&[]));
+        assert_eq!(row(&carried), SubagentStatus::Done);
+        assert_eq!(row(&lost), SubagentStatus::EndedUnknown);
+    }
+
+    /// An old carry, from before the waiting set, reads as none waiting.
+    #[test]
+    fn a_carry_without_the_waiting_set_reads_as_none_waiting() {
+        let carry = SubagentCarry {
+            rows: Vec::new(),
+            pending: Vec::new(),
+            owned: Vec::new(),
+            waiting: Vec::new(),
+        };
+        #[derive(Serialize)]
+        struct Old {
+            rows: Vec<SubagentSummary>,
+            pending: Vec<(AgentId, PendingTask)>,
+        }
+        let bytes = rmp_serde::to_vec_named(&Old {
+            rows: Vec::new(),
+            pending: Vec::new(),
+        })
+        .unwrap();
+        let back: SubagentCarry = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(back, carry);
     }
 
     /// A call with no description names its row from the first line of

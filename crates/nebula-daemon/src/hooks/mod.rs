@@ -240,6 +240,9 @@ pub struct HookPayload {
     /// Stop / SubagentStop (2.1.145+): the session's tasks still in
     /// flight, each `{"id", "type", "status", …}`.
     pub background_tasks: Option<serde_json::Value>,
+    /// PostToolUse's result. Only a background launch's task id is read
+    /// (`backgroundTaskId`, `taskId`).
+    pub tool_response: Option<serde_json::Value>,
 }
 
 /// The most of Claude's error words a stop note carries: a tooltip's worth.
@@ -271,27 +274,30 @@ impl HookPayload {
         Some(crate::status::Background { holders })
     }
 
-    /// The descriptions of the `subagent` tasks `background_tasks` lists
-    /// as still in flight: a subagent whose SubagentStop came while it is
-    /// listed here is waiting on its own background work, not done. None
-    /// without a list.
-    fn background_subagents(&self) -> Option<Vec<String>> {
+    /// The ids of the tasks `background_tasks` lists as still running, of
+    /// any type: a subagent that stops while a task it launched is among
+    /// them is waiting on that work, not done. None without a list.
+    fn background_running(&self) -> Option<Vec<String>> {
         let tasks = self.background_tasks.as_ref()?.as_array()?;
         Some(
             tasks
                 .iter()
-                .filter(|task| {
-                    task.get("type").and_then(serde_json::Value::as_str) == Some("subagent")
-                })
                 .filter(|task| {
                     !matches!(
                         task.get("status").and_then(serde_json::Value::as_str),
                         Some("completed" | "failed" | "killed" | "stopped")
                     )
                 })
-                .filter_map(|task| text_of(task.get("description")))
+                .filter_map(|task| text_of(task.get("id")))
                 .collect(),
         )
+    }
+
+    /// The background task a tool call launched: Bash's
+    /// `tool_response.backgroundTaskId`, Monitor's `taskId`.
+    fn launched_task(&self) -> Option<String> {
+        let response = self.tool_response.as_ref()?;
+        text_of(response.get("backgroundTaskId")).or_else(|| text_of(response.get("taskId")))
     }
 
     /// `StopFailure`'s words for a tooltip: its details, else the error
@@ -648,7 +654,8 @@ async fn receive_hook(
         last_message: text_of(payload.last_assistant_message.as_ref())
             .as_deref()
             .and_then(crate::registry::subagent_title),
-        background_subagents: payload.background_subagents(),
+        background_running: payload.background_running(),
+        launched_task: payload.launched_task(),
     };
     // Claude's effort for the session: never off a subagent's payload,
     // whose level is the subagent's own (the Agent tool takes an effort).
@@ -909,33 +916,71 @@ mod tests {
         );
     }
 
-    /// `background_tasks` on a Stop (the docs' own example: one shell left
-    /// running) and on a SubagentStop counts the tasks that carry the work
-    /// on; no list is no count, and a list of another shape loses only
-    /// that field.
-    /// The subagents `background_tasks` lists in flight, by description:
-    /// what keeps a stopped subagent waiting rather than done.
+    /// A real SubagentStop from Claude Code 2.1.302 (paths trimmed): a
+    /// background subagent that launched `sleep 25` with
+    /// `run_in_background` and stopped while it ran. The payload lists the
+    /// stopping subagent itself as running, beside its two shells; the
+    /// running ids are what the book matches the shells it saw launched
+    /// against. A task listed as finished is left out, and no list is not
+    /// an empty one.
     #[test]
-    fn background_tasks_name_the_subagents_still_in_flight() {
+    fn background_tasks_name_the_tasks_still_running() {
         let payload: HookPayload = serde_json::from_str(
-            r#"{"background_tasks":[
-                {"id":"t1","type":"subagent","status":"running","description":"Rename the server"},
-                {"id":"t2","type":"subagent","status":"completed","description":"Old work"},
-                {"id":"t3","type":"shell","status":"running","description":"cargo build"}]}"#,
+            r#"{"session_id":"9e36d2ec","hook_event_name":"SubagentStop",
+                "agent_id":"a910eb6d1f3185e39","agent_type":"general-purpose",
+                "last_assistant_message":"The background command has started.",
+                "background_tasks":[
+                {"id":"a910eb6d1f3185e39","type":"subagent","status":"running","description":"Probe background build","agent_type":"general-purpose"},
+                {"id":"beww5m7mk","type":"shell","status":"running","description":"Sleep 25 seconds then echo built","command":"sleep 25 && echo built"},
+                {"id":"br3jpwnie","type":"shell","status":"running","description":"Wait for background sleep command"},
+                {"id":"old1","type":"shell","status":"completed","description":"done already"}]}"#,
         )
         .unwrap();
         assert_eq!(
-            payload.background_subagents(),
-            Some(vec!["Rename the server".to_string()])
+            payload.background_running(),
+            Some(vec![
+                "a910eb6d1f3185e39".to_string(),
+                "beww5m7mk".to_string(),
+                "br3jpwnie".to_string()
+            ])
         );
         let none: HookPayload = serde_json::from_str("{}").unwrap();
         assert_eq!(
-            none.background_subagents(),
+            none.background_running(),
             None,
             "no list is not an empty one"
         );
     }
 
+    /// The task a subagent's background tool call launched, from real
+    /// 2.1.302 PostToolUse payloads: Bash says `backgroundTaskId`, Monitor
+    /// says `taskId`, and a foreground call says neither.
+    #[test]
+    fn a_background_tool_call_names_the_task_it_launched() {
+        let bash: HookPayload = serde_json::from_str(
+            r#"{"hook_event_name":"PostToolUse","agent_id":"a910eb6d1f3185e39","tool_name":"Bash",
+                "tool_input":{"command":"sleep 25 && echo built","run_in_background":true},
+                "tool_response":{"stdout":"","stderr":"","interrupted":false,"backgroundTaskId":"beww5m7mk"}}"#,
+        )
+        .unwrap();
+        assert_eq!(bash.launched_task(), Some("beww5m7mk".to_string()));
+        let monitor: HookPayload = serde_json::from_str(
+            r#"{"hook_event_name":"PostToolUse","tool_name":"Monitor",
+                "tool_response":{"taskId":"br3jpwnie","timeoutMs":120000,"persistent":false}}"#,
+        )
+        .unwrap();
+        assert_eq!(monitor.launched_task(), Some("br3jpwnie".to_string()));
+        let read: HookPayload = serde_json::from_str(
+            r#"{"hook_event_name":"PostToolUse","tool_name":"Read","tool_response":"file text"}"#,
+        )
+        .unwrap();
+        assert_eq!(read.launched_task(), None);
+    }
+
+    /// `background_tasks` on a Stop (the docs' own example: one shell left
+    /// running) and on a SubagentStop counts the tasks that carry the work
+    /// on; no list is no count, and a list of another shape loses only
+    /// that field.
     #[test]
     fn background_tasks_count_what_holds_the_turn() {
         use crate::status::Background;
