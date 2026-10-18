@@ -418,6 +418,10 @@ fn resolve_links(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use serde::Deserialize;
+    use serde_json::json;
+
     #[test]
     fn subagent_retention_reads_its_words_and_falls_back_to_an_hour() {
         assert_eq!(subagent_retention_ms("10m"), Some(600_000));
@@ -426,10 +430,6 @@ mod tests {
         assert_eq!(subagent_retention_ms("soon"), Some(3_600_000));
         assert_eq!(subagent_retention_ms(""), Some(3_600_000));
     }
-
-    use super::*;
-    use serde::Deserialize;
-    use serde_json::json;
 
     #[derive(Debug, Deserialize, PartialEq)]
     #[serde(default)]

@@ -80,7 +80,7 @@ pub(crate) fn clear_finished_subagents(
     let req_id = app.alloc_req_id(PendingIntent::None);
     out.push(ClientRequest::ClearEndedSubagents { req_id, parent });
     app.chrome.flash = Some(format!(
-        "cleared {ended} finished subagent{}",
+        "clearing {ended} finished subagent{}",
         if ended == 1 { "" } else { "s" }
     ));
 }

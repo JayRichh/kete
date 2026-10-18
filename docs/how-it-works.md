@@ -187,10 +187,17 @@ exactly the hold a gated `Stop` gets) whenever any subagent is still tracked, an
   process starts; each removal reaches the clients as `ServerEvent::SubagentsRemoved`. The sweep
   also closes a row still running 2 h after its start, the stop gate's own limit, so a lost
   SubagentStop no longer leaves a subagent showing as running for the life of the session.
-  A SubagentStop for a subagent the parent's `background_tasks` still lists (by its task) keeps
-  it running, waiting on its own background work, until a later Stop or SubagentStop list leaves it
-  out. A row with no task description is named from the first line of the Agent call's `prompt`,
-  else from its `last_assistant_message`.
+  A subagent that stops while its own background work runs (a `run_in_background` Bash, a
+  Monitor) is only paused: Claude wakes it with a new SubagentStart under the same id once that
+  work ends. The book records the task ids a subagent's tool calls launch (`tool_response`'s
+  `backgroundTaskId` or `taskId`); a SubagentStop while one of them is still listed running in
+  `background_tasks` leaves the row WAITING, drawn as running, and the wake-up resumes the same
+  row. The subagent's own entry in that list says nothing: Claude Code 2.1.302 lists the stopping
+  subagent as running at every one of its stops, the last one included. A WAITING row ends done
+  on a later Stop or SubagentStop whose list no longer has its tasks, on a Stop with no list at
+  all, or at the 2 h limit; it rides an in-place restart with the rest of the book. A row with no
+  task description is named from the first line of the Agent call's `prompt`, else from its
+  `last_assistant_message`.
 - **Answering is a hook too, just not its own.** Approving a permission prompt fires nothing: the
   gated tool simply runs, and its `PostToolUse` is the first word that you said yes. So the
   `PostToolUse` group is unmatched (every tool's end reaches kete) and a tool event from the same
