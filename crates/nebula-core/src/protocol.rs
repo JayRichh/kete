@@ -10,7 +10,7 @@ use std::path::PathBuf;
 ///
 /// Bump on every protocol change. Additive changes keep
 /// [`MIN_COMPATIBLE_PROTOCOL`] where it is; breaking changes bump both.
-pub const PROTOCOL_VERSION: u32 = 63;
+pub const PROTOCOL_VERSION: u32 = 64;
 
 /// Oldest IPC protocol this build can safely talk to.
 ///
@@ -66,6 +66,30 @@ impl ServerEvent {
             ServerEvent::SubagentsRemoved { .. } => peer_version >= SUBAGENT_CLEANUP_PROTOCOL,
             _ => true,
         }
+    }
+
+    /// This event as a peer that said `peer_version` at Hello can decode
+    /// it: the fields appended since its version left off. Every frame to
+    /// a client passes through here (`nebula-daemon` `serve_client`).
+    pub fn for_peer(mut self, peer_version: u32) -> ServerEvent {
+        if peer_version < SUBAGENT_MODEL_PROTOCOL {
+            let blank = |subs: &mut Vec<SubagentSummary>| {
+                for s in subs {
+                    s.run = None;
+                }
+            };
+            match &mut self {
+                ServerEvent::SubagentChanged { sub } => sub.run = None,
+                ServerEvent::Snapshot { subagents, .. } => blank(subagents),
+                ServerEvent::OrchestratorSessions { sessions, .. } => {
+                    for row in sessions {
+                        blank(&mut row.subagents);
+                    }
+                }
+                _ => {}
+            }
+        }
+        self
     }
 }
 
@@ -125,6 +149,13 @@ pub const LIMITS_PROTOCOL: u32 = 62;
 /// older client keeps the removed rows until its next Snapshot. A client
 /// offers the clear only against a daemon that said this or later.
 pub const SUBAGENT_CLEANUP_PROTOCOL: u32 = 63;
+
+/// The first protocol whose peers read [`SubagentSummary::run`], the model
+/// and effort a subagent runs at. The field is left off a row without one,
+/// and the daemon blanks it for an older peer (`ServerEvent::for_peer`),
+/// so every row an older peer gets is the shape it knows. 63 is 0.55.0's
+/// subagent cleanup (`SUBAGENT_CLEANUP_PROTOCOL`).
+pub const SUBAGENT_MODEL_PROTOCOL: u32 = 64;
 
 /// Max IPC frame size (length prefix sanity bound).
 pub const MAX_FRAME_LEN: u32 = 4 * 1024 * 1024;
@@ -1218,6 +1249,48 @@ pub struct SubagentSummary {
     /// Epoch ms; None while it runs.
     pub ended_at: Option<i64>,
     pub status: SubagentStatus,
+    // -- protocol 64, appended (`SUBAGENT_MODEL_PROTOCOL`). --
+    /// The model and effort it runs at, when either is known. Left off the
+    /// frame when None, so the row is 63's byte for byte; the daemon blanks
+    /// it for an older peer (`ServerEvent::for_peer`), which would refuse
+    /// the longer frame. Must stay the last field: a later addition goes
+    /// inside [`SubagentRun`] behind its own gate, or after this one the
+    /// same way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<SubagentRun>,
+}
+
+/// What a subagent runs on, beside its type (protocol 64).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubagentRun {
+    /// The model the Task / Agent call asked for (`haiku`, `sonnet`, a
+    /// full id). Empty when it named none: the subagent runs on its
+    /// definition's model, else the session's.
+    #[serde(default)]
+    pub model: String,
+    /// The reasoning effort it runs at: the call's `effort`, else the
+    /// `effort.level` its own hooks report. Empty when unknown.
+    #[serde(default)]
+    pub effort: String,
+}
+
+impl SubagentRun {
+    /// None when neither is known: the row then carries no `run`.
+    pub fn known(model: String, effort: String) -> Option<SubagentRun> {
+        (!model.is_empty() || !effort.is_empty()).then_some(SubagentRun { model, effort })
+    }
+}
+
+impl SubagentSummary {
+    /// The model it runs on; empty when unknown.
+    pub fn model(&self) -> &str {
+        self.run.as_ref().map_or("", |r| r.model.as_str())
+    }
+
+    /// The effort it runs at; empty when unknown.
+    pub fn effort(&self) -> &str {
+        self.run.as_ref().map_or("", |r| r.effort.as_str())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1700,6 +1773,7 @@ mod tests {
             started_at: 10,
             ended_at: None,
             status: SubagentStatus::Running,
+            run: None,
         }
     }
 
@@ -1821,6 +1895,74 @@ mod tests {
         };
         assert_eq!(parent, AgentId("p".into()));
         assert_eq!(ids, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    /// A subagent row as protocol 63 and earlier knew it.
+    mod v63 {
+        use super::*;
+        #[allow(dead_code)]
+        #[derive(Debug, Deserialize)]
+        pub struct SubagentSummary {
+            pub id: String,
+            pub parent_agent: AgentId,
+            pub kind: String,
+            pub description: String,
+            pub started_at: i64,
+            pub ended_at: Option<i64>,
+            pub status: SubagentStatus,
+        }
+        #[derive(Debug, Deserialize)]
+        pub enum ServerEvent {
+            SubagentChanged { sub: SubagentSummary },
+        }
+    }
+
+    /// 64 appends `run` to a subagent row: it round-trips, a row without
+    /// one is the old frame, and an older peer reads what `for_peer` sends
+    /// it, which it would refuse with the field on.
+    #[test]
+    fn protocol_64_subagent_run_round_trips_and_is_blanked_for_older_peers() {
+        const { assert!(SUBAGENT_MODEL_PROTOCOL <= PROTOCOL_VERSION) };
+        assert_eq!(MIN_COMPATIBLE_PROTOCOL, 53, "64 is additive");
+        let mut sub = sample_subagent();
+        sub.run = SubagentRun::known("haiku".into(), "low".into());
+        let changed = ServerEvent::SubagentChanged { sub: sub.clone() };
+
+        let back: ServerEvent = rmp_serde::from_slice(&encode(&changed)).unwrap();
+        let ServerEvent::SubagentChanged { sub: got } = back else {
+            panic!("not SubagentChanged");
+        };
+        assert_eq!((got.model(), got.effort()), ("haiku", "low"));
+
+        assert!(
+            rmp_serde::from_slice::<v63::ServerEvent>(&encode(&changed)).is_err(),
+            "a 63 peer refuses the longer row"
+        );
+        let held = changed.clone().for_peer(SUBAGENT_MODEL_PROTOCOL - 1);
+        let old: v63::ServerEvent = rmp_serde::from_slice(&encode(&held)).unwrap();
+        let v63::ServerEvent::SubagentChanged { sub: old } = old;
+        assert_eq!(
+            (old.id.as_str(), old.kind.as_str()),
+            ("agent-abc123", "Explore")
+        );
+        let ServerEvent::SubagentChanged { sub: kept } = changed.for_peer(SUBAGENT_MODEL_PROTOCOL)
+        else {
+            panic!("not SubagentChanged");
+        };
+        assert_eq!(kept.model(), "haiku", "a 64 peer keeps it");
+
+        // A 63 daemon's row reads here as unknown.
+        let bare = ServerEvent::SubagentChanged {
+            sub: sample_subagent(),
+        };
+        let ServerEvent::SubagentChanged { sub: read } =
+            rmp_serde::from_slice::<ServerEvent>(&encode(&bare)).unwrap()
+        else {
+            panic!("not SubagentChanged");
+        };
+        assert_eq!(read.model(), "");
+        assert_eq!(read.run, None);
+        assert_eq!(SubagentRun::known(String::new(), String::new()), None);
     }
 
     /// 62 appends `SessionStops`: older peers stay in range and are never

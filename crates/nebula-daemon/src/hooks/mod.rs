@@ -656,6 +656,20 @@ async fn receive_hook(
             .and_then(crate::registry::subagent_title),
         background_running: payload.background_running(),
         launched_task: payload.launched_task(),
+        task_model: tool_input_text("model")
+            .map(|m| m.trim().to_string())
+            .filter(|m| !m.is_empty()),
+        task_effort: tool_input_text("effort")
+            .map(|e| e.trim().to_string())
+            .filter(|e| !e.is_empty()),
+        // A subagent's payload reports its own level.
+        effort: match cli {
+            HookCli::Claude if payload.subagent_id().is_some() => payload
+                .effort
+                .as_ref()
+                .and_then(|e| text_of(e.get("level"))),
+            _ => None,
+        },
     };
     // Claude's effort for the session: never off a subagent's payload,
     // whose level is the subagent's own (the Agent tool takes an effort).
@@ -1342,7 +1356,7 @@ mod tests {
             (
                 "PreToolUse",
                 r#"{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Agent",
-                    "tool_input":{"description":"Find the hook fixtures","prompt":"...","subagent_type":"Explore"},
+                    "tool_input":{"description":"Find the hook fixtures","prompt":"...","subagent_type":"Explore","model":"haiku"},
                     "tool_use_id":"toolu_01"}"#,
             ),
             (
@@ -1355,7 +1369,7 @@ mod tests {
                 r#"{"session_id":"s1","hook_event_name":"SubagentStop","stop_hook_active":false,
                     "agent_id":"agent-abc123","agent_type":"Explore",
                     "agent_transcript_path":"/t/s1/subagents/agent-abc123.jsonl",
-                    "last_assistant_message":"Found 3"}"#,
+                    "last_assistant_message":"Found 3","effort":{"level":"low"}}"#,
             ),
         ];
         let mut seen = Vec::new();
@@ -1389,6 +1403,9 @@ mod tests {
         assert_eq!(seen[0].parent_agent, AgentId("titled".into()));
         assert_eq!(seen[0].kind, "Explore");
         assert_eq!(seen[0].description, "Find the hook fixtures");
+        // The call's model from the start; the effort its own stop said.
+        assert_eq!((seen[0].model(), seen[0].effort()), ("haiku", ""));
+        assert_eq!((seen[1].model(), seen[1].effort()), ("haiku", "low"));
     }
 
     /// The prompt reaches the drain loop condensed, on its own event

@@ -18,7 +18,7 @@
 //! that entry alone says nothing; the shells it launched do.
 
 use super::*;
-use nebula_core::{SubagentStatus, SubagentSummary};
+use nebula_core::{SubagentRun, SubagentStatus, SubagentSummary};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
 
@@ -63,6 +63,14 @@ pub struct SubagentHookInfo {
     /// The background task a tool call just launched: its
     /// `tool_response`'s `backgroundTaskId` (Bash) or `taskId` (Monitor).
     pub launched_task: Option<String>,
+    /// The `model` of a Task / Agent call's input (`haiku`, `sonnet`, a
+    /// full id).
+    pub task_model: Option<String>,
+    /// The `effort` of that input.
+    pub task_effort: Option<String>,
+    /// The `effort.level` a subagent's own payload reports: the level it
+    /// runs at, never the session's.
+    pub effort: Option<String>,
 }
 
 /// The longest a name taken from a prompt or a reply runs.
@@ -80,11 +88,17 @@ pub fn subagent_title(text: &str) -> Option<String> {
 }
 
 /// A Task / Agent call's description, waiting for its SubagentStart.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingTask {
     /// The `subagent_type` asked for; empty when the call named none.
     pub kind: String,
     pub description: String,
+    /// The `model` asked for; empty when the call named none.
+    #[serde(default)]
+    pub model: String,
+    /// The `effort` asked for; empty when the call named none.
+    #[serde(default)]
+    pub effort: String,
 }
 
 /// The book as the restart state carries it.
@@ -148,7 +162,14 @@ impl SubagentBook {
         self.waiting.retain(keep);
     }
 
-    fn start(&mut self, parent: &AgentId, id: String, kind: String, now: i64) -> SubagentSummary {
+    fn start(
+        &mut self,
+        parent: &AgentId,
+        id: String,
+        kind: String,
+        effort: Option<String>,
+        now: i64,
+    ) -> SubagentSummary {
         // The same id again: a subagent woken from WAITING, or one whose
         // stop came early. It keeps its name and its place, and leaves the
         // waiting calls to the subagents they belong to.
@@ -169,7 +190,7 @@ impl SubagentBook {
         // The oldest unclaimed call that asked for this subagent's type is
         // its own; failing a match (a call that named no type, a CLI that
         // reports none), calls start in the order they were made.
-        let description = self
+        let task = self
             .pending_tasks
             .get_mut(parent)
             .and_then(|queue| {
@@ -181,16 +202,22 @@ impl SubagentBook {
                     None => queue.pop_front(),
                 }
             })
-            .map(|t| t.description)
+            .unwrap_or_default();
+        // The call's effort when it set one; else what the subagent's own
+        // payload reports.
+        let effort = Some(task.effort)
+            .filter(|e| !e.is_empty())
+            .or(effort)
             .unwrap_or_default();
         let row = SubagentSummary {
             id,
             parent_agent: parent.clone(),
             kind,
-            description,
+            description: task.description,
             started_at: now,
             ended_at: None,
             status: SubagentStatus::Running,
+            run: SubagentRun::known(task.model, effort),
         };
         self.rows
             .entry(parent.clone())
@@ -238,6 +265,18 @@ impl SubagentBook {
         self.rows.remove(parent);
         self.pending_tasks.remove(parent);
         self.forget_background(parent, None);
+    }
+
+    /// A subagent's own payload said the effort it runs at: kept on a row
+    /// that had none. The row when that changed it.
+    fn note_effort(&mut self, parent: &AgentId, id: &str, effort: &str) -> Option<SubagentSummary> {
+        let row = self.rows.get_mut(parent)?.iter_mut().find(|r| r.id == id)?;
+        if !row.effort().is_empty() {
+            return None;
+        }
+        let model = row.model().to_string();
+        row.run = SubagentRun::known(model, effort.to_string());
+        Some(row.clone())
     }
 
     /// Name row `id` of `parent` from `title` while it has no name yet.
@@ -413,7 +452,15 @@ impl Daemon {
         let now = nebula_core::clock::now_ms();
         let changed = {
             let mut book = self.subagents.lock();
-            match event {
+            // Any payload of a subagent can be the first to say its effort.
+            // A row that changes again below goes out once, as it ends up.
+            let mut changed: Vec<SubagentSummary> = match (event.subagent_id(), &info.effort) {
+                (Some(id), Some(level)) => {
+                    book.note_effort(parent, id, level).into_iter().collect()
+                }
+                _ => Vec::new(),
+            };
+            let more = match event {
                 HookEvent::PreToolUse {
                     tool_name: Some(tool),
                     subagent_id: None,
@@ -427,6 +474,8 @@ impl Daemon {
                                 .filter(|t| !t.trim().is_empty())
                                 .or(info.task_prompt)
                                 .unwrap_or_default(),
+                            model: info.task_model.unwrap_or_default(),
+                            effort: info.task_effort.unwrap_or_default(),
                         },
                     );
                     Vec::new()
@@ -442,7 +491,13 @@ impl Daemon {
                 }
                 HookEvent::SubagentStart {
                     subagent_id: Some(id),
-                } => vec![book.start(parent, id.clone(), info.kind.unwrap_or_default(), now)],
+                } => vec![book.start(
+                    parent,
+                    id.clone(),
+                    info.kind.unwrap_or_default(),
+                    info.effort,
+                    now,
+                )],
                 HookEvent::SubagentStop {
                     subagent_id: Some(id),
                     ..
@@ -459,7 +514,10 @@ impl Daemon {
                     book.settle_waiting(parent, info.background_running.as_deref(), now)
                 }
                 _ => Vec::new(),
-            }
+            };
+            changed.retain(|row| !more.iter().any(|m| m.id == row.id));
+            changed.extend(more);
+            changed
         };
         for sub in changed {
             self.broadcast(ServerEvent::SubagentChanged { sub });
@@ -1175,5 +1233,81 @@ mod tests {
         let rows = new.subagent_rows();
         let d = rows.iter().find(|r| r.id == "d").unwrap();
         assert_eq!(d.description, "Plan the next step");
+    }
+
+    /// The Agent call's `model` and `effort` ride its row from the start.
+    #[test]
+    fn a_call_that_names_a_model_and_effort_gives_its_row_both() {
+        let daemon = daemon();
+        let mut rx = daemon.events.subscribe();
+        let parent = AgentId("p".into());
+        let (call, mut info) = launch(Some("Explore"), "Map the hooks");
+        info.task_model = Some("haiku".into());
+        info.task_effort = Some("low".into());
+        daemon.track_subagent(&parent, &call, info);
+        daemon.track_subagent(&parent, &start("s1"), typed("Explore"));
+        let rows = changes(&mut rx);
+        assert_eq!(rows.len(), 1);
+        assert_eq!((rows[0].model(), rows[0].effort()), ("haiku", "low"));
+        assert_eq!(rows[0].description, "Map the hooks");
+    }
+
+    /// A call that names neither leaves the row without a run; the effort
+    /// the subagent's own payload reports fills it in once, on the start or
+    /// on a later tool event, and its stop carries it.
+    #[test]
+    fn a_subagents_own_effort_fills_a_row_that_had_none() {
+        let daemon = daemon();
+        let mut rx = daemon.events.subscribe();
+        let parent = AgentId("p".into());
+        let (call, info) = launch(Some("Explore"), "Map the hooks");
+        daemon.track_subagent(&parent, &call, info);
+        daemon.track_subagent(&parent, &start("s1"), typed("Explore"));
+        assert_eq!(changes(&mut rx)[0].run, None, "nothing known yet");
+
+        let tool = HookEvent::PostToolUse {
+            tool_name: Some("Read".into()),
+            subagent_id: Some("s1".into()),
+        };
+        let own = |level: &str| SubagentHookInfo {
+            effort: Some(level.into()),
+            ..Default::default()
+        };
+        daemon.track_subagent(&parent, &tool, own("medium"));
+        let rows = changes(&mut rx);
+        assert_eq!(
+            (rows.len(), rows[0].effort(), rows[0].model()),
+            (1, "medium", "")
+        );
+
+        daemon.track_subagent(&parent, &tool, own("high"));
+        assert!(
+            changes(&mut rx).is_empty(),
+            "the first level it said stands"
+        );
+
+        daemon.track_subagent(&parent, &stop("s1"), own("medium"));
+        let rows = changes(&mut rx);
+        assert_eq!(rows.len(), 1, "one row for the stop");
+        assert_eq!(
+            (rows[0].status, rows[0].effort()),
+            (SubagentStatus::Done, "medium")
+        );
+    }
+
+    /// A start whose own payload says its effort keeps it beside the
+    /// call's model.
+    #[test]
+    fn a_start_payloads_effort_joins_the_calls_model() {
+        let daemon = daemon();
+        let parent = AgentId("p".into());
+        let (call, mut info) = launch(None, "Write the plan");
+        info.task_model = Some("opus".into());
+        daemon.track_subagent(&parent, &call, info);
+        let mut own = typed("Plan");
+        own.effort = Some("xhigh".into());
+        daemon.track_subagent(&parent, &start("s1"), own);
+        let rows = daemon.subagent_rows();
+        assert_eq!((rows[0].model(), rows[0].effort()), ("opus", "xhigh"));
     }
 }
