@@ -653,3 +653,33 @@ flow(
     await d.waitFor('the zoom back to 1', async () => (await d.wd.exec('return innerWidth;')) > 600);
   },
 );
+
+flow('git work done outside a turn reaches the overview within seconds, and the session rail counts the changed files', { script: 'stop;echo' }, async (d) => {
+  const repo = d.makeRepo('watch-proj');
+  await d.addRepo(repo);
+  const id = await d.launch('watch the checkout');
+  await d.waitForLane(id, 'done');
+  const agent = (await d.agents()).find((a) => a.id === id);
+  const [wt] = d.linkedWorktrees(repo);
+  const band = (text) =>
+    d.wd.exec(`return document.querySelector('[data-worktree="' + arguments[0] + '"]')?.innerText.includes(arguments[1]) ?? false;`, agent.worktree_id, text);
+  await d.waitFor('the checkout clean on the overview', () => band('clean'));
+  // Staged from outside Kete, with no session turn to prompt a read: the
+  // index stamp moves, well inside the half-minute poll.
+  fs.writeFileSync(path.join(wt, 'one.txt'), 'one\n');
+  fs.writeFileSync(path.join(wt, 'two.txt'), 'two\n');
+  git(wt, 'add', 'one.txt', 'two.txt');
+  await d.waitFor('2 changed on the overview', () => band('2 changed'), 8_000);
+  // The open session's Details rail counts them too.
+  await d.click('button[aria-label="Full pane"]');
+  await d.waitFor(
+    'the rail counting 2 changed files',
+    () => d.wd.exec(`return document.querySelector('aside[aria-label="Session details"] [data-rail="changed"]')?.innerText ?? null;`).then((t) => t === '2 changed files'),
+    8_000,
+  );
+  git(wt, 'commit', '-q', '-m', 'from outside');
+  await d.waitFor('the rail back to no changes', () =>
+    d.wd.exec(`return document.querySelector('aside[aria-label="Session details"] [data-rail="changed"]')?.innerText ?? null;`).then((t) => t === 'No changes'),
+    8_000,
+  );
+});
