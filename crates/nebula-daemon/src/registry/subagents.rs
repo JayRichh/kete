@@ -35,6 +35,30 @@ pub struct SubagentHookInfo {
     /// The `subagent_type` of that input: the `agent_type` its
     /// SubagentStart will report.
     pub task_kind: Option<String>,
+    /// The first line of that input's `prompt` ([`subagent_title`]): the
+    /// row's name when the call gave no description, so two undescribed
+    /// `general-purpose` agents do not read the same.
+    pub task_prompt: Option<String>,
+    /// A SubagentStop's `last_assistant_message`, first line: the name of
+    /// a row that still has none when it ends.
+    pub last_message: Option<String>,
+    /// The descriptions of the `subagent` tasks the payload's
+    /// `background_tasks` lists in flight; None without a list.
+    pub background_subagents: Option<Vec<String>>,
+}
+
+/// The longest a name taken from a prompt or a reply runs.
+const TITLE_MAX: usize = 80;
+
+/// The first non-blank line of `text`, trimmed and cut to [`TITLE_MAX`]
+/// characters: a subagent's name taken from its prompt or its reply.
+pub fn subagent_title(text: &str) -> Option<String> {
+    let line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
+    if line.chars().count() <= TITLE_MAX {
+        return Some(line.to_string());
+    }
+    let cut: String = line.chars().take(TITLE_MAX - 1).collect();
+    Some(format!("{}\u{2026}", cut.trim_end()))
 }
 
 /// A Task / Agent call's description, waiting for its SubagentStart.
@@ -58,6 +82,10 @@ pub struct SubagentCarry {
 pub(crate) struct SubagentBook {
     rows: HashMap<AgentId, Vec<SubagentSummary>>,
     pending_tasks: HashMap<AgentId, VecDeque<PendingTask>>,
+    /// Rows whose SubagentStop came while the parent's `background_tasks`
+    /// still listed them: they wait on their own background work and stay
+    /// running until a later list leaves them out.
+    waiting: HashSet<(AgentId, String)>,
 }
 
 impl SubagentBook {
@@ -139,6 +167,80 @@ impl SubagentBook {
     fn forget(&mut self, parent: &AgentId) {
         self.rows.remove(parent);
         self.pending_tasks.remove(parent);
+        self.waiting.retain(|(p, _)| p != parent);
+    }
+
+    /// Name row `id` of `parent` from `title` while it has no name yet.
+    fn name_if_blank(&mut self, parent: &AgentId, id: &str, title: Option<&str>) {
+        let Some(title) = title else { return };
+        if let Some(row) = self
+            .rows
+            .get_mut(parent)
+            .and_then(|rows| rows.iter_mut().find(|r| r.id == id))
+        {
+            if row.description.is_empty() {
+                row.description = title.to_string();
+            }
+        }
+    }
+
+    /// A SubagentStop: done, unless the parent's `background_tasks` still
+    /// lists the subagent (by its task), in which case it waits on its own
+    /// background work and stays running.
+    fn stop(
+        &mut self,
+        parent: &AgentId,
+        id: &str,
+        info: &SubagentHookInfo,
+        now: i64,
+    ) -> Vec<SubagentSummary> {
+        self.name_if_blank(parent, id, info.last_message.as_deref());
+        let row = self
+            .rows
+            .get(parent)
+            .and_then(|rows| rows.iter().find(|r| r.id == id));
+        let listed = row.is_some_and(|r| {
+            !r.description.is_empty()
+                && info
+                    .background_subagents
+                    .as_ref()
+                    .is_some_and(|list| list.contains(&r.description))
+        });
+        if listed {
+            let row = row.cloned();
+            self.waiting.insert((parent.clone(), id.to_string()));
+            return row.into_iter().collect();
+        }
+        self.waiting.remove(&(parent.clone(), id.to_string()));
+        self.end(parent, Some(id), SubagentStatus::Done, now)
+    }
+
+    /// A later Stop or SubagentStop's list: a waiting row it no longer
+    /// names has finished its background work.
+    fn settle_waiting(
+        &mut self,
+        parent: &AgentId,
+        listed: &[String],
+        now: i64,
+    ) -> Vec<SubagentSummary> {
+        let done: Vec<String> = self
+            .waiting
+            .iter()
+            .filter(|(p, _)| p == parent)
+            .map(|(_, id)| id.clone())
+            .filter(|id| {
+                self.rows
+                    .get(parent)
+                    .and_then(|rows| rows.iter().find(|r| &r.id == id))
+                    .is_none_or(|r| !listed.contains(&r.description))
+            })
+            .collect();
+        let mut changed = Vec::new();
+        for id in done {
+            self.waiting.remove(&(parent.clone(), id.clone()));
+            changed.extend(self.end(parent, Some(&id), SubagentStatus::Done, now));
+        }
+        changed
     }
 
     /// Take every row of `parent` out of the book, running or not, and
@@ -146,6 +248,7 @@ impl SubagentBook {
     /// the old one ran can report again.
     fn reap(&mut self, parent: &AgentId) -> Vec<String> {
         self.pending_tasks.remove(parent);
+        self.waiting.retain(|(p, _)| p != parent);
         self.rows
             .remove(parent)
             .map(|rows| rows.into_iter().map(|r| r.id).collect())
@@ -240,7 +343,11 @@ impl Daemon {
                         parent,
                         PendingTask {
                             kind: info.task_kind.unwrap_or_default(),
-                            description: info.task.unwrap_or_default(),
+                            description: info
+                                .task
+                                .filter(|t| !t.trim().is_empty())
+                                .or(info.task_prompt)
+                                .unwrap_or_default(),
                         },
                     );
                     Vec::new()
@@ -251,7 +358,17 @@ impl Daemon {
                 HookEvent::SubagentStop {
                     subagent_id: Some(id),
                     ..
-                } => book.end(parent, Some(id), SubagentStatus::Done, now),
+                } => {
+                    let mut changed = book.stop(parent, id, &info, now);
+                    if let Some(list) = &info.background_subagents {
+                        changed.extend(book.settle_waiting(parent, list, now));
+                    }
+                    changed
+                }
+                HookEvent::Stop { .. } => match &info.background_subagents {
+                    Some(list) => book.settle_waiting(parent, list, now),
+                    None => Vec::new(),
+                },
                 _ => Vec::new(),
             }
         };
@@ -267,6 +384,7 @@ impl Daemon {
         let changed = {
             let mut book = self.subagents.lock();
             book.pending_tasks.remove(parent);
+            book.waiting.retain(|(p, _)| p != parent);
             book.end(parent, None, SubagentStatus::EndedUnknown, now)
         };
         for sub in changed {
@@ -403,6 +521,7 @@ mod tests {
             kind: Some("Explore".into()),
             task: None,
             task_kind: None,
+            ..Default::default()
         }
     }
 
@@ -423,6 +542,7 @@ mod tests {
                 kind: None,
                 task: Some("Find the hook fixtures".into()),
                 task_kind: Some("Explore".into()),
+                ..Default::default()
             },
         );
         assert!(
@@ -607,6 +727,76 @@ mod tests {
         assert!(daemon.subagent_rows().is_empty());
     }
 
+    /// A subagent whose SubagentStop lands while the parent's
+    /// `background_tasks` still lists it waits on its own background work:
+    /// it stays running, and a later list that leaves it out ends it done.
+    #[test]
+    fn a_subagent_waiting_on_its_background_work_stays_running() {
+        let daemon = daemon();
+        let p = AgentId("p".into());
+        let (event, info) = launch(Some("general-purpose"), "Rename the server");
+        daemon.track_subagent(&p, &event, info);
+        daemon.track_subagent(&p, &start("r"), typed("general-purpose"));
+        let listed = |names: &[&str]| SubagentHookInfo {
+            background_subagents: Some(names.iter().map(|n| n.to_string()).collect()),
+            ..Default::default()
+        };
+        daemon.track_subagent(&p, &stop("r"), listed(&["Rename the server"]));
+        let status = |d: &Daemon| d.subagent_rows()[0].status;
+        assert_eq!(
+            status(&daemon),
+            SubagentStatus::Running,
+            "waiting, not done"
+        );
+
+        // The parent's next Stop no longer lists it: its work is over.
+        daemon.track_subagent(&p, &HookEvent::Stop { background: None }, listed(&[]));
+        assert_eq!(status(&daemon), SubagentStatus::Done);
+    }
+
+    /// A call with no description names its row from the first line of
+    /// its prompt; a row still unnamed at its stop takes its reply's.
+    #[test]
+    fn an_undescribed_subagent_is_named_from_its_prompt_or_its_reply() {
+        let daemon = daemon();
+        let p = AgentId("p".into());
+        daemon.track_subagent(
+            &p,
+            &HookEvent::PreToolUse {
+                tool_name: Some("Agent".into()),
+                subagent_id: None,
+            },
+            SubagentHookInfo {
+                task_kind: Some("general-purpose".into()),
+                task_prompt: subagent_title("\n  Build WhekoServer and report errors\nmore"),
+                ..Default::default()
+            },
+        );
+        daemon.track_subagent(&p, &start("a"), typed("general-purpose"));
+        daemon.track_subagent(&p, &start("b"), typed("general-purpose"));
+        daemon.track_subagent(
+            &p,
+            &stop("b"),
+            SubagentHookInfo {
+                last_message: subagent_title("All tests pass."),
+                ..Default::default()
+            },
+        );
+        let rows = daemon.subagent_rows();
+        let name = |id: &str| {
+            rows.iter()
+                .find(|r| r.id == id)
+                .unwrap()
+                .description
+                .clone()
+        };
+        assert_eq!(name("a"), "Build WhekoServer and report errors");
+        assert_eq!(name("b"), "All tests pass.");
+        let long = "x".repeat(200);
+        assert_eq!(subagent_title(&long).unwrap().chars().count(), TITLE_MAX);
+        assert_eq!(subagent_title("  \n "), None);
+    }
+
     fn launch(kind: Option<&str>, task: &str) -> (HookEvent, SubagentHookInfo) {
         (
             HookEvent::PreToolUse {
@@ -617,6 +807,7 @@ mod tests {
                 kind: None,
                 task: Some(task.into()),
                 task_kind: kind.map(String::from),
+                ..Default::default()
             },
         )
     }
@@ -626,6 +817,7 @@ mod tests {
             kind: Some(kind.into()),
             task: None,
             task_kind: None,
+            ..Default::default()
         }
     }
 

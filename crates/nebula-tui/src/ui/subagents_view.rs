@@ -264,7 +264,11 @@ fn row_spans(row: &Row, width: usize, now: i64, th: Theme) -> Vec<Span<'static>>
     } else {
         format!("  {}", n.word)
     };
-    let meta = format!("  {}", n.meta);
+    let meta = if n.meta.is_empty() {
+        String::new()
+    } else {
+        format!("  {}", n.meta)
+    };
     let lead = indent.chars().count() + 4;
     let fixed = lead
         + word.chars().count()

@@ -271,6 +271,29 @@ impl HookPayload {
         Some(crate::status::Background { holders })
     }
 
+    /// The descriptions of the `subagent` tasks `background_tasks` lists
+    /// as still in flight: a subagent whose SubagentStop came while it is
+    /// listed here is waiting on its own background work, not done. None
+    /// without a list.
+    fn background_subagents(&self) -> Option<Vec<String>> {
+        let tasks = self.background_tasks.as_ref()?.as_array()?;
+        Some(
+            tasks
+                .iter()
+                .filter(|task| {
+                    task.get("type").and_then(serde_json::Value::as_str) == Some("subagent")
+                })
+                .filter(|task| {
+                    !matches!(
+                        task.get("status").and_then(serde_json::Value::as_str),
+                        Some("completed" | "failed" | "killed" | "stopped")
+                    )
+                })
+                .filter_map(|task| text_of(task.get("description")))
+                .collect(),
+        )
+    }
+
     /// `StopFailure`'s words for a tooltip: its details, else the error
     /// line itself, cut to [`STOP_DETAIL_MAX`] characters.
     fn stop_detail(&self) -> Option<String> {
@@ -619,6 +642,13 @@ async fn receive_hook(
         kind: payload.agent_type.clone().filter(|k| !k.is_empty()),
         task: tool_input_text("description"),
         task_kind: tool_input_text("subagent_type").filter(|k| !k.is_empty()),
+        task_prompt: tool_input_text("prompt")
+            .as_deref()
+            .and_then(crate::registry::subagent_title),
+        last_message: text_of(payload.last_assistant_message.as_ref())
+            .as_deref()
+            .and_then(crate::registry::subagent_title),
+        background_subagents: payload.background_subagents(),
     };
     // Claude's effort for the session: never off a subagent's payload,
     // whose level is the subagent's own (the Agent tool takes an effort).
@@ -883,6 +913,29 @@ mod tests {
     /// running) and on a SubagentStop counts the tasks that carry the work
     /// on; no list is no count, and a list of another shape loses only
     /// that field.
+    /// The subagents `background_tasks` lists in flight, by description:
+    /// what keeps a stopped subagent waiting rather than done.
+    #[test]
+    fn background_tasks_name_the_subagents_still_in_flight() {
+        let payload: HookPayload = serde_json::from_str(
+            r#"{"background_tasks":[
+                {"id":"t1","type":"subagent","status":"running","description":"Rename the server"},
+                {"id":"t2","type":"subagent","status":"completed","description":"Old work"},
+                {"id":"t3","type":"shell","status":"running","description":"cargo build"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            payload.background_subagents(),
+            Some(vec!["Rename the server".to_string()])
+        );
+        let none: HookPayload = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            none.background_subagents(),
+            None,
+            "no list is not an empty one"
+        );
+    }
+
     #[test]
     fn background_tasks_count_what_holds_the_turn() {
         use crate::status::Background;

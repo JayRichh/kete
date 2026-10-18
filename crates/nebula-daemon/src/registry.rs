@@ -281,7 +281,7 @@ mod terminals;
 mod usage;
 mod wake;
 
-pub use subagents::{SubagentCarry, SubagentHookInfo};
+pub use subagents::{subagent_title, SubagentCarry, SubagentHookInfo};
 
 impl Daemon {
     pub fn new(store: Arc<Store>, hook_env: HookEnv) -> Arc<Self> {

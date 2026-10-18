@@ -2,6 +2,7 @@
   import { onMount, tick, untrack } from 'svelte';
   import { app } from '../store.svelte';
   import Empty from '../Empty.svelte';
+  import SubagentBar from '../SubagentBar.svelte';
   import RepoRow from './RepoRow.svelte';
   import { repoRows } from './repos';
   import { scopeModel } from '../scope';
@@ -12,7 +13,11 @@
   let scroller: HTMLDivElement;
 
   // The repos, worktrees and sessions the scope admits (the header's chip).
-  const rows = $derived(repoRows(scopeModel(app.model), { archived: app.showArchived }));
+  // Finished subagents fold under each session while `hide_done_subagents`
+  // is on (the default), as on the board and in the terminal app.
+  const rows = $derived(
+    repoRows(scopeModel(app.model), { archived: app.showArchived, foldFinished: app.launch.hide_done_subagents !== false }),
+  );
 
   // The worktree groups' git state: read while the overview is up, and
   // again when a checkout comes or goes or a session there changes state.
@@ -59,7 +64,9 @@
 
 <svelte:window onkeydown={onKey} />
 
-<div class="@container h-full min-h-0 overflow-y-auto pb-8" bind:this={scroller}>
+<div class="flex h-full min-h-0 flex-col">
+<SubagentBar />
+<div class="@container min-h-0 flex-1 overflow-y-auto pb-8" bind:this={scroller}>
   {#if !rows.length}
     <Empty />
   {:else}
@@ -67,4 +74,5 @@
       <RepoRow {row} />
     {/each}
   {/if}
+</div>
 </div>

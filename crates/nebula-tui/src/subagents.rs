@@ -245,8 +245,11 @@ pub fn build_forest(agents: &[&Agent], subs: &Subagents, hide_done: bool) -> Vec
             depth,
             tone: sub_tone(s),
             label: sub_label(s),
+            // The type, unless the label already is it (no task seen).
             meta: if s.kind.is_empty() {
                 "subagent".into()
+            } else if s.description.is_empty() {
+                String::new()
             } else {
                 s.kind.clone()
             },

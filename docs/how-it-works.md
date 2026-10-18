@@ -187,6 +187,10 @@ exactly the hold a gated `Stop` gets) whenever any subagent is still tracked, an
   process starts; each removal reaches the clients as `ServerEvent::SubagentsRemoved`. The sweep
   also closes a row still running 2 h after its start, the stop gate's own limit, so a lost
   SubagentStop no longer leaves a subagent showing as running for the life of the session.
+  A SubagentStop for a subagent the parent's `background_tasks` still lists (by its task) keeps
+  it running, waiting on its own background work, until a later Stop or SubagentStop list leaves it
+  out. A row with no task description is named from the first line of the Agent call's `prompt`,
+  else from its `last_assistant_message`.
 - **Answering is a hook too, just not its own.** Approving a permission prompt fires nothing: the
   gated tool simply runs, and its `PostToolUse` is the first word that you said yes. So the
   `PostToolUse` group is unmatched (every tool's end reaches kete) and a tool event from the same

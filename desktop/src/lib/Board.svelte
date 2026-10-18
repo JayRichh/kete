@@ -1,11 +1,12 @@
 <script lang="ts">
-  import { app, focusQuickPrompt, markSeen, openReview, openSession, openDiff, refreshLaunchables, setScope, toast } from './store.svelte';
+  import { app, focusQuickPrompt, markSeen, openReview, openSession, openDiff, setScope, toast } from './store.svelte';
   import { offerTip } from './learn.svelte';
   import { LANE_EMPTY, emptyCopy } from './learn';
   import { verbKeys } from './verbs';
   import { LANES, lanes, toneOf, subagentTone, harnessLabel, lastPrompt, age, placeOf, type Lane } from './status';
-  import { cardSubagents, endedTotal, isEnded, movedAt, subagentWord } from './subagents';
-  import { api } from './api';
+  import { cardSubagents, isEnded, movedAt, subagentWord } from './subagents';
+  import { clearFinishedSubagents, foldingFinished } from './subagent-actions';
+  import SubagentBar from './SubagentBar.svelte';
   import Status from './Status.svelte';
   import StopBadge from './StopBadge.svelte';
   import { retract } from './motion';
@@ -121,23 +122,10 @@
 
   // Subagents under their session's card. Finished ones fold into a count
   // while `hide_done_subagents` is on (the default); a card's count opens
-  // its own, the bar's checkbox flips the setting for both apps.
-  const hideDone = $derived(app.launch.hide_done_subagents !== false);
+  // its own, SubagentBar's checkbox flips the setting for both apps.
+  const hideDone = $derived(foldingFinished());
   let openFinished = $state<Record<string, boolean>>({});
-  const subRunning = $derived(app.model.subagents.filter((s) => !isEnded(s)).length);
-  const subEnded = $derived(endedTotal(app.model.subagents));
-
-  function toggleHideDone() {
-    api
-      .settingsSet({ scope: 'global', key: 'hide_done_subagents' }, hideDone ? 'shown' : 'hidden')
-      .then(refreshLaunchables)
-      .catch((e) => toast(`Couldn't save the setting: ${e}`));
-  }
-
-  /** Drop the finished subagents of one session, or of all for null. */
-  function clearFinished(parent: string | null) {
-    api.clearFinishedSubagents(parent).catch((e) => toast(String(e)));
-  }
+  const clearFinished = clearFinishedSubagents;
 
   // First-use tips for the board's own concepts, while it is the one up:
   // a card reaching Review (the lanes), then two cards to drag.
@@ -259,21 +247,7 @@
   <Empty />
 {:else}
   <div class="relative flex h-full min-h-0 flex-col" data-board>
-  {#if app.model.subagents.length}
-    <!-- Every session's subagents, counted; the fold setting and the cleanup. -->
-    <div class="flex h-8 flex-none items-center gap-3 border-b border-rule px-4 text-[12px] text-muted" role="toolbar" aria-label="Subagents">
-      <span class="font-mono">{subRunning} subagent{subRunning === 1 ? '' : 's'} running{' \u00B7 '}{subEnded} finished</span>
-      <label class="ml-auto inline-flex items-center gap-1.5" title="Fold each session's done and closed subagents into a count under its card (Settings, Sessions, Finished subagents, shared with the terminal app)">
-        <input type="checkbox" checked={hideDone} onchange={toggleHideDone} />Fold finished
-      </label>
-      <button
-        class="inline-flex h-6 items-center border border-rule bg-transparent px-2 text-[12px] text-ink hover:border-rule-strong disabled:text-faint"
-        title="Remove every finished subagent record (done, failed, or closed with its session); running ones stay"
-        disabled={!subEnded}
-        onclick={() => clearFinished(null)}>Clear finished</button
-      >
-    </div>
-  {/if}
+  <SubagentBar />
   <div
     class="grid min-h-0 flex-1 grid-cols-[repeat(5,minmax(220px,1fr))] overflow-x-auto"
     role="grid"

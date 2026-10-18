@@ -133,3 +133,18 @@ test('archived sessions show only when asked, as stopped, and never count for at
   expect(shown[0].forest.find((n) => n.id === 'gone')?.status).toBe('stopped');
   expect(tally(shown).needs ?? []).toEqual([]);
 });
+
+test('finished subagents fold into one N finished node that starts folded', () => {
+  const subs = [sub('a', 'live'), sub('a', 'ok', 'done'), sub('a', 'lost', 'ended_unknown')];
+  const forest = buildForest([agent('a', null, 'running')], subs, undefined, true);
+  const group = find(forest, 'f:a')!;
+  expect(group.kind).toBe('finished');
+  expect(group.label).toBe('2 finished');
+  expect(group.children.map((n) => n.id)).toEqual(['ok', 'lost']);
+  const rows = flatten(forest, new Set());
+  expect(rows.map((r) => r.node.key)).toEqual(['a:a', 's:a:live', 'f:a']);
+  expect(rows[2].hidden).toBe(2);
+  expect(flatten(forest, new Set(['f:a'])).length).toBe(5);
+  // Off, every subagent is a row of its own, as before.
+  expect(flatten(buildForest([agent('a', null, 'running')], subs), new Set()).length).toBe(4);
+});
