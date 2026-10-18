@@ -100,10 +100,12 @@ let stampTimer: ReturnType<typeof setInterval> | undefined;
 let stamps: Record<string, string> = {};
 let stamping = false;
 
-/** Take the shown checkouts' stamps and read the ones that moved, and any
- *  checkout a session is working in whose slower beat is due. */
+/** Take the shown checkouts' stamps and read the ones that moved, and,
+ *  while the window has focus, any checkout a session is working in whose
+ *  slower beat is due. Stamps are file metadata alone, so they are taken
+ *  unfocused too: a commit made in another window shows behind it. */
 async function stampTick() {
-  if (stamping || !document.hasFocus()) return;
+  if (stamping) return;
   const shown = shownIds();
   if (!shown.length) return;
   stamping = true;
@@ -113,7 +115,7 @@ async function stampTick() {
     // The first look only records: watchGit has just read them all.
     const first = !Object.keys(stamps).length;
     stamps = next;
-    const due = dueRunning(app.model.agents, shown, readAt, Date.now());
+    const due = document.hasFocus() ? dueRunning(app.model.agents, shown, readAt, Date.now()) : [];
     const ids = [...new Set([...(first ? [] : moved), ...due])];
     if (ids.length) await refreshGit(ids, true);
   } catch {
