@@ -4,7 +4,7 @@ import { recentCheckouts } from './recent';
 
 const wt = (id: string, project_id = 'p'): Worktree => ({ id, project_id, path: `C:/r/${id}`, branch: id, is_main: false, sort_order: 0 });
 const agent = (id: string, worktree_id: string, status_changed_at: number, archived = false): Agent =>
-  ({ id, worktree_id, name: id, status: 'finished', archived, unseen: false, status_changed_at, sort_order: 0, parent: null, recent_prompts: [], role: 'worker' }) as Agent;
+  ({ id, worktree_id, name: id, status: 'finished', archived, unseen: false, status_changed_at, sort_order: 0, parent: null, recent_prompts: [], role: 'worker' }) as unknown as Agent;
 const model = (worktrees: Worktree[], agents: Agent[]): Model =>
   ({ projects: [{ id: 'p', name: 'repo', repo_path: 'C:/r', sort_order: 0 }], worktrees, agents }) as unknown as Model;
 
