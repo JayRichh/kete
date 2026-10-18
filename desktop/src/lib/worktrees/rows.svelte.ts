@@ -1,8 +1,8 @@
 // The window-side state behind the overview's worktree groups and the
 // Worktrees view: which groups are folded (saved under `desktop` in
 // config.json), each checkout's git state (read in the background,
-// cached, again on focus, as a session's turn ends there, and every so
-// often while a view shows it), and
+// cached, again on focus, as a session's turn ends there, as soon as its
+// git stamp moves, and every so often while a view shows it), and
 // the checkouts git is still cutting, drawn as placeholders until the
 // daemon lists them.
 
@@ -12,6 +12,7 @@ import { app, toast } from '../store.svelte';
 import { worktreeApi, type WorktreeGit } from './api';
 import { pruneKeys, repoKey, setKey } from './groups';
 import { turnMarks, turnedWorktrees, type TurnMarks } from './turns';
+import { STAMP_MS, changedGit, dueRunning, movedStamps } from './watch';
 
 export const rows = $state({
   /** Folded groups: `repo:<id>`, `wt:<id>`. */
@@ -54,7 +55,8 @@ export function loadCollapsed(keys: unknown) {
 
 /** The least time between two reads of one checkout. */
 const MIN_GAP_MS = 4_000;
-/** How often the views read again while one is up. */
+/** How often the views read every checkout again while one is up: the
+ *  backstop behind the stamps (watch.ts). */
 const POLL_MS = 30_000;
 const readAt = new Map<string, number>();
 let reading = false;
@@ -77,7 +79,8 @@ export async function refreshGit(ids: string[], force = false) {
   for (const id of due) readAt.set(id, now);
   try {
     const got = await worktreeApi.git(due);
-    rows.git = { ...rows.git, ...got };
+    // Only what changed is written: an unchanged row keeps its object.
+    for (const [id, g] of Object.entries(changedGit(rows.git, got))) rows.git[id] = g;
   } catch {
     /* the next poll tries again */
   } finally {
@@ -92,6 +95,33 @@ export async function refreshGit(ids: string[], force = false) {
 
 let watchers = 0;
 let timer: ReturnType<typeof setInterval> | undefined;
+let stampTimer: ReturnType<typeof setInterval> | undefined;
+/** Each checkout's stamp as last taken. */
+let stamps: Record<string, string> = {};
+let stamping = false;
+
+/** Take the shown checkouts' stamps and read the ones that moved, and any
+ *  checkout a session is working in whose slower beat is due. */
+async function stampTick() {
+  if (stamping || !document.hasFocus()) return;
+  const shown = shownIds();
+  if (!shown.length) return;
+  stamping = true;
+  try {
+    const next = await worktreeApi.stamps(shown);
+    const moved = movedStamps(stamps, next);
+    // The first look only records: watchGit has just read them all.
+    const first = !Object.keys(stamps).length;
+    stamps = next;
+    const due = dueRunning(app.model.agents, shown, readAt, Date.now());
+    const ids = [...new Set([...(first ? [] : moved), ...due])];
+    if (ids.length) await refreshGit(ids, true);
+  } catch {
+    /* the next tick tries again */
+  } finally {
+    stamping = false;
+  }
+}
 /** Checkouts in repos the overview has open (a folded repo's are not
  *  read), and every checkout with a card on the board, folded or not: the
  *  board's Review and Ship lanes read the same git state (src-tauri keeps
@@ -129,8 +159,10 @@ function watchTurns(): () => void {
 }
 
 /** Keep the git state fresh while a view that shows it is mounted: at
- *  once, on window focus, as a session's turn ends, and every half
- *  minute. Returns the stop. */
+ *  once, on window focus, as a session's turn ends, when a checkout's
+ *  stamp moves (a commit, checkout, reset or stage from anywhere), every
+ *  few seconds where a session is working, and every half minute.
+ *  Returns the stop. */
 export function watchGit(): () => void {
   watchers += 1;
   if (watchers === 1) {
@@ -138,6 +170,7 @@ export function watchGit(): () => void {
     timer = setInterval(() => {
       if (document.hasFocus()) refreshGit(shownIds());
     }, POLL_MS);
+    stampTimer = setInterval(stampTick, STAMP_MS);
     stopTurns = watchTurns();
   }
   // A turn may have ended while this view was unmounted; bypass the read gap.
@@ -147,6 +180,8 @@ export function watchGit(): () => void {
     if (watchers === 0) {
       window.removeEventListener('focus', onFocus);
       clearInterval(timer);
+      clearInterval(stampTimer);
+      stamps = {};
       stopTurns?.();
       stopTurns = undefined;
     }

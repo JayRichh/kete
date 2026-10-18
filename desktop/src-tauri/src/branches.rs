@@ -60,6 +60,33 @@ pub async fn checkout_state(
         .map_err(|e| e.to_string())?
 }
 
+/// Each named worktree's [`git::git_stamp`]: a fingerprint read off file
+/// metadata alone, cheap enough to poll every couple of seconds. The
+/// window reads a checkout's [`worktree_git`] again only when its stamp
+/// moves. A worktree that is gone, or not a checkout, is left out.
+#[tauri::command]
+pub async fn git_stamps(
+    client: State<'_, Arc<Client>>,
+    worktrees: Vec<String>,
+) -> Res<std::collections::BTreeMap<String, String>> {
+    let snap = client.snapshot();
+    let roots: Vec<(String, PathBuf)> = worktrees
+        .into_iter()
+        .filter_map(|id| {
+            let w = snap.worktrees.iter().find(|w| w.id.0 == id)?;
+            Some((id, w.path.clone()))
+        })
+        .collect();
+    tauri::async_runtime::spawn_blocking(move || {
+        roots
+            .into_iter()
+            .filter_map(|(id, root)| git::git_stamp(&root).map(|s| (id, s)))
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 /// How many checkouts one [`worktree_git`] call reads at once.
 const GIT_READERS: usize = 4;
 

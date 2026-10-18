@@ -67,6 +67,8 @@ export const worktreeApi = {
   checkoutState: (worktree: string) => invoke<CheckoutState>('checkout_state', { worktree }),
   /** Each named checkout's git state; one that can't be read is left out. */
   git: (worktrees: string[]) => invoke<Record<string, WorktreeGit>>('worktree_git', { worktrees }),
+  /** A metadata-only fingerprint per checkout (src-tauri git.rs `git_stamp`). */
+  stamps: (worktrees: string[]) => invoke<Record<string, string>>('git_stamps', { worktrees }),
   /** Open the checkout's folder in the file manager. */
   reveal: (worktree: string) => invoke<void>('worktree_reveal', { worktree }),
   /** Wake the PR poll now. */

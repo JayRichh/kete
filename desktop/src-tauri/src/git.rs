@@ -934,6 +934,65 @@ pub fn has_open_pr_onto(root: &Path, branch: &str) -> Option<bool> {
     Some(!list.is_empty())
 }
 
+/// The files a commit, checkout, reset, stage, fetch or pack touches, read
+/// off the checkout's own git dir and its repository's common dir.
+const OWN_STAMP_FILES: [&str; 3] = ["HEAD", "index", "logs/HEAD"];
+const COMMON_STAMP_FILES: [&str; 2] = ["packed-refs", "FETCH_HEAD"];
+
+/// The git dir and common dir of the checkout at `root`, without running
+/// git: `.git` is the git dir in a main checkout, and in a linked one a
+/// file naming it (`gitdir: <path>`), whose `commondir` names the shared one.
+pub fn git_dirs(root: &Path) -> Option<(PathBuf, PathBuf)> {
+    let dot = root.join(".git");
+    let meta = std::fs::metadata(&dot).ok()?;
+    let own = if meta.is_dir() {
+        dot
+    } else {
+        let text = std::fs::read_to_string(&dot).ok()?;
+        let named = text.trim().strip_prefix("gitdir:")?.trim();
+        let p = PathBuf::from(named);
+        if p.is_absolute() {
+            p
+        } else {
+            root.join(p)
+        }
+    };
+    let common = match std::fs::read_to_string(own.join("commondir")) {
+        Ok(text) => {
+            let p = PathBuf::from(text.trim());
+            if p.is_absolute() {
+                p
+            } else {
+                own.join(p)
+            }
+        }
+        Err(_) => own.clone(),
+    };
+    Some((own, common))
+}
+
+/// A cheap fingerprint of the checkout's git state: each stamp file's
+/// size and modified time, with no git process. It changes when a commit,
+/// checkout, reset, stage or fetch lands; an edit to a working-tree file
+/// leaves it as it was. None when `root` is not a checkout.
+pub fn git_stamp(root: &Path) -> Option<String> {
+    let (own, common) = git_dirs(root)?;
+    let part = |p: PathBuf| match std::fs::metadata(p) {
+        Ok(m) => {
+            let at = m
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_nanos());
+            format!("{}:{at}", m.len())
+        }
+        Err(_) => "-".to_string(),
+    };
+    let own_parts = OWN_STAMP_FILES.iter().map(|f| part(own.join(f)));
+    let common_parts = COMMON_STAMP_FILES.iter().map(|f| part(common.join(f)));
+    Some(own_parts.chain(common_parts).collect::<Vec<_>>().join("|"))
+}
+
 /// What deleting a checkout would throw away, for the delete confirm.
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
 pub struct CheckoutState {
@@ -1901,5 +1960,78 @@ u UU N... 100644 100644 100644 100644 a a a c.txt\0\
     fn checkout_state_of_a_missing_folder_is_an_error() {
         let gone = std::env::temp_dir().join("kete-git-test-no-such-checkout");
         assert!(checkout_state(&gone).is_err());
+    }
+
+    #[test]
+    fn a_main_checkout_stamp_moves_on_commit_and_stage_but_not_on_an_edit() {
+        let repo = Repo::new("stamp");
+        repo.write("a.txt", b"a\n");
+        repo.commit("one");
+        let (own, common) = git_dirs(&repo.0).unwrap();
+        assert_eq!(own, repo.0.join(".git"));
+        assert_eq!(common, own);
+        let first = git_stamp(&repo.0).unwrap();
+        assert_eq!(git_stamp(&repo.0).unwrap(), first, "nothing changed");
+        // A working-tree edit touches no git file.
+        repo.write("a.txt", b"edited\n");
+        assert_eq!(git_stamp(&repo.0).unwrap(), first);
+        repo.git(&["add", "a.txt"]);
+        let staged = git_stamp(&repo.0).unwrap();
+        assert_ne!(staged, first, "staging rewrites the index");
+        repo.git(&["commit", "-q", "-m", "two"]);
+        assert_ne!(
+            git_stamp(&repo.0).unwrap(),
+            staged,
+            "a commit appends to logs/HEAD"
+        );
+    }
+
+    #[test]
+    fn a_linked_checkout_reads_its_own_git_dir_and_the_shared_common_dir() {
+        let repo = Repo::new("stamp-main");
+        repo.write("a.txt", b"a\n");
+        repo.commit("one");
+        let linked = repo.0.with_file_name(format!(
+            "{}-linked",
+            repo.0.file_name().unwrap().to_string_lossy()
+        ));
+        let _ = std::fs::remove_dir_all(&linked);
+        repo.git(&[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "topic",
+            &linked.to_string_lossy(),
+        ]);
+        let (own, common) = git_dirs(&linked).unwrap();
+        assert!(
+            std::fs::canonicalize(&own)
+                .unwrap()
+                .starts_with(std::fs::canonicalize(repo.0.join(".git/worktrees")).unwrap()),
+            "a linked checkout has its own git dir under the common one"
+        );
+        assert_eq!(
+            std::fs::canonicalize(&common).unwrap(),
+            std::fs::canonicalize(repo.0.join(".git")).unwrap()
+        );
+        let before = git_stamp(&linked).unwrap();
+        let main_before = git_stamp(&repo.0).unwrap();
+        std::fs::write(linked.join("b.txt"), b"b\n").unwrap();
+        git_raw(&linked, &["add", "b.txt"]).unwrap();
+        git_raw(&linked, &["commit", "-q", "-m", "two"]).unwrap();
+        assert_ne!(git_stamp(&linked).unwrap(), before);
+        assert_eq!(
+            git_stamp(&repo.0).unwrap(),
+            main_before,
+            "the main checkout's own files are untouched"
+        );
+        let _ = std::fs::remove_dir_all(&linked);
+    }
+
+    #[test]
+    fn a_folder_that_is_no_checkout_has_no_stamp() {
+        let gone = std::env::temp_dir().join("kete-git-test-no-such-stamp");
+        assert_eq!(git_stamp(&gone), None);
     }
 }
