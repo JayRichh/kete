@@ -51,6 +51,8 @@ export interface Agent {
   sort_order: number;
   /** The session that started this one with `kete spawn`; null for a root. */
   parent: string | null;
+  /** The Claude Cloud session a `claude --cloud` row launched; absent or null for a local one. */
+  cloud_session_id?: string | null;
 }
 /** A Claude in-session subagent, hung off the session it runs inside. */
 export interface Subagent {

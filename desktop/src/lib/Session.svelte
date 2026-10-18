@@ -6,6 +6,7 @@
   import Terminal from './Terminal.svelte';
   import OrchBadge from './orchestrator/OrchBadge.svelte';
   import ContextBar from './accounts/ContextBar.svelte';
+  import SessionRail from './SessionRail.svelte';
   import { followUp, newTerminal, openTargetMenu, restartAgent, unarchiveAgent } from './actions';
   import { openMenu } from './ui/ui.svelte';
   import { ownMenu } from './menus/router';
@@ -36,6 +37,9 @@
   const tone = $derived(agent ? toneOf(agent) : terminal ? terminalTone(terminal) : 'idle');
   const prompt = $derived(agent ? lastPrompt(agent) : null);
   const target = $derived(agent ? `agent:${agent.id}` : terminal ? `terminal:${terminal.id}` : undefined);
+  // The details rail beside the terminal; hidden by the reader, and
+  // always in a pane too narrow to spare it (the header has the essentials).
+  let railOpen = $state(true);
 </script>
 
 {#if s && (agent || terminal)}
@@ -79,6 +83,14 @@
               btn="inline-flex h-7 min-w-7 flex-none items-center justify-center border border-rule bg-transparent px-1.5 text-ink hover:border-rule-strong"
             />
           </span>
+          {#if agent}
+            <button
+              class="hidden h-7 flex-none items-center border border-rule px-1.5 text-[12px] text-ink hover:border-rule-strong @min-[720px]:inline-flex {railOpen ? 'bg-surface' : 'bg-transparent'}"
+              aria-pressed={railOpen}
+              title={railOpen ? 'Hide the session details' : 'Show the session details: where it runs, context, changed files'}
+              onclick={() => (railOpen = !railOpen)}>Details</button
+            >
+          {/if}
           <IconButton icon="diff" label="Diff this worktree" word="Diff" title={withKey('Diff this worktree', ['diff', 'open_diff'])} onclick={() => openDiff(wt)} />
           <IconButton
             icon={app.paneMax ? 'restore' : 'maximize'}
@@ -126,8 +138,13 @@
         {#if agent}<span class="ml-auto flex-none font-mono text-[12px]">{age(agent.status_changed_at, app.now)}</span>{/if}
       </div>
     </div>
-    <div class="min-h-0 flex-1">
-      <Terminal session={s} dark={app.dark} />
+    <div class="@container flex min-h-0 flex-1">
+      <div class="min-w-0 flex-1">
+        <Terminal session={s} dark={app.dark} />
+      </div>
+      {#if agent && railOpen}
+        <div class="hidden @min-[720px]:flex"><SessionRail {agent} /></div>
+      {/if}
     </div>
   </div>
 {:else}
