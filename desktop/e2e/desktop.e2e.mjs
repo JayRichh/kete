@@ -705,3 +705,26 @@ flow('moving a session out of a checkout with uncommitted work says what stays b
   await d.waitForGone('1 changed file stays in');
   assert.equal((await d.agents()).find((a) => a.id === id).worktree_id, home, 'still where it was');
 });
+
+// 0.55: a follow-up started as a session of its own. From the session's
+// Follow-up box, Start as new session spawns a sibling in the same
+// checkout (the daemon's SpawnSiblingAgent), the window opens it, and the
+// overview nests it under the session it came from.
+flow('Start as new session from the follow-up box nests the new session under its parent', { script: 'stop;echo' }, async (d) => {
+  const repo = d.makeRepo('aside-proj');
+  await d.addRepo(repo);
+  const parent = await d.launch('build the feature');
+  await d.el('.xterm-helper-textarea');
+  await d.click('button[aria-label="Follow-up prompt"]');
+  await d.type('[role="dialog"] textarea', 'write the docs for it');
+  await d.click('[role="dialog"] button', 'Start as new session');
+  const child = await d.waitFor('the follow-up session, nested under its parent', async () =>
+    (await d.agents()).find((a) => a.parent === parent),
+  );
+  assert.equal(child.worktree_id, (await d.agents()).find((a) => a.id === parent).worktree_id, 'in the same checkout');
+  // The window follows it into its own session.
+  await d.waitForText(child.name);
+  await d.click('[aria-label="Home view"] button', 'Overview');
+  await d.el(`[role="treeitem"][aria-level="2"][data-target="agent:${child.id}"]`);
+  await d.el(`[role="treeitem"][aria-level="1"][data-target="agent:${parent}"]`);
+});
