@@ -281,7 +281,7 @@ mod terminals;
 mod usage;
 mod wake;
 
-pub use subagents::{SubagentCarry, SubagentHookInfo};
+pub use subagents::{subagent_title, SubagentCarry, SubagentHookInfo};
 
 impl Daemon {
     pub fn new(store: Arc<Store>, hook_env: HookEnv) -> Arc<Self> {
@@ -2477,6 +2477,114 @@ pub(crate) mod tests {
         assert_eq!(daemon.store.get_agent(&id).unwrap().unwrap().profile, None);
         assert!(daemon.is_alive(&sref));
         daemon.kill_session(&sref);
+    }
+
+    fn start_subagent(daemon: &Daemon, parent: &AgentId, id: &str) {
+        daemon.track_subagent(
+            parent,
+            &crate::status::HookEvent::SubagentStart {
+                subagent_id: Some(id.into()),
+            },
+            SubagentHookInfo::default(),
+        );
+    }
+
+    fn subagent_status(daemon: &Daemon, id: &str) -> Option<nebula_core::SubagentStatus> {
+        daemon
+            .subagent_rows()
+            .into_iter()
+            .find(|r| r.id == id)
+            .map(|r| r.status)
+    }
+
+    /// Restart, account switch and a move into its worktree each drop the
+    /// old process's subagent rows before the new process starts.
+    #[tokio::test]
+    async fn every_restart_path_reaps_the_old_process_subagents() {
+        #[cfg(unix)]
+        let stand_in = "/bin/cat";
+        #[cfg(windows)]
+        let stand_in = "cmd.exe";
+        let data = profiles_data_dir();
+        let _env = EnvGuard::set_all(&[
+            (env::AGENT_CMD, stand_in),
+            (env::DATA_DIR, data.path().to_str().unwrap()),
+            (env::CONFIG_FILE, ""),
+        ]);
+        let daemon = test_daemon();
+        let dir = tempfile::tempdir().unwrap();
+        seed_projects(&daemon, &["p"]);
+        seed_worktree(&daemon, "p", "w", dir.path().to_str().unwrap(), true);
+        seed_agent(&daemon, "a", "w", None);
+        let id = AgentId("a".into());
+        let sref = SessionRef::Agent(id.clone());
+        daemon.ensure_session(&sref, 80, 24).unwrap();
+
+        start_subagent(&daemon, &id, "before-restart");
+        daemon.restart_agent(&id).await.unwrap();
+        assert!(daemon.subagent_rows().is_empty(), "restart reaps");
+
+        start_subagent(&daemon, &id, "before-switch");
+        daemon
+            .switch_agent_account(&id, Some("work"))
+            .await
+            .unwrap();
+        assert!(daemon.subagent_rows().is_empty(), "account switch reaps");
+
+        start_subagent(&daemon, &id, "before-move");
+        let home = daemon
+            .store
+            .get_worktree(&WorktreeId("w".into()))
+            .unwrap()
+            .unwrap();
+        // Its return says whether the stand-in opened on the move; the
+        // kill and the reap happen either way.
+        daemon.relocate_into(&id, &home, false);
+        assert!(daemon.subagent_rows().is_empty(), "relocation reaps");
+        daemon.kill_session(&sref);
+    }
+
+    /// A deliberate kill (archive, the idle reap) closes the session's open
+    /// subagents at once. The killed PTY's exit lands later, after a
+    /// respawn has started subagents of its own, and leaves those running.
+    #[tokio::test]
+    async fn a_kill_closes_its_subagents_and_its_late_exit_spares_the_respawn() {
+        #[cfg(unix)]
+        let stand_in = "/bin/cat";
+        #[cfg(windows)]
+        let stand_in = "cmd.exe";
+        let _cmd = EnvGuard::set(env::AGENT_CMD, stand_in);
+        let daemon = test_daemon();
+        let dir = tempfile::tempdir().unwrap();
+        seed_projects(&daemon, &["p"]);
+        seed_worktree(&daemon, "p", "w", dir.path().to_str().unwrap(), true);
+        seed_agent(&daemon, "a", "w", None);
+        let id = AgentId("a".into());
+        let sref = SessionRef::Agent(id.clone());
+        daemon.ensure_session(&sref, 80, 24).unwrap();
+        start_subagent(&daemon, &id, "old");
+
+        daemon.kill_session(&sref);
+        assert_eq!(
+            subagent_status(&daemon, "old"),
+            Some(nebula_core::SubagentStatus::EndedUnknown),
+            "closed with the kill"
+        );
+
+        // Respawned before the old PTY's exit has landed.
+        daemon.ensure_session(&sref, 80, 24).unwrap();
+        start_subagent(&daemon, &id, "new");
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        assert_eq!(
+            subagent_status(&daemon, "new"),
+            Some(nebula_core::SubagentStatus::Running),
+            "the old exit closed the new process's subagent"
+        );
+        daemon.kill_session(&sref);
+        assert_eq!(
+            subagent_status(&daemon, "new"),
+            Some(nebula_core::SubagentStatus::EndedUnknown)
+        );
     }
 
     /// A create naming no profile takes its project's default account for

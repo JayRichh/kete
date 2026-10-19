@@ -12,7 +12,8 @@ use crate::{
     agent_kind_names, choices, effort_choices_in, model_choices_in, Config, HarnessField,
     SettingKind, SettingSpec, TabBody, AGENTS_HEAD, CRITTER_SIZES, CRITTER_VISITS, DEFAULT_CHOICE,
     DIFF_CONTEXTS, EDITORS, INLINE_GRAPHICS, KANBAN_SCOPES, ORCHESTRATOR_VIEWS, PRESET_TEXTS,
-    PROJECT_FILE_CHOICE, SESSION_IDLE_TIMEOUTS, SETTINGS_TABS, SOUNDS, WORKTREE_LAYOUTS,
+    PROJECT_FILE_CHOICE, SESSION_IDLE_TIMEOUTS, SETTINGS_TABS, SOUNDS, SUBAGENT_RETENTIONS,
+    WORKTREE_LAYOUTS,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -119,6 +120,8 @@ impl SettingKind {
             SettingKind::Critters => "critters",
             SettingKind::CrittersSize => "critters_size",
             SettingKind::CrittersOften => "critters_often",
+            SettingKind::HideDoneSubagents => "hide_done_subagents",
+            SettingKind::SubagentRetention => "subagent_retention",
         }
     }
 }
@@ -291,7 +294,8 @@ fn choice_options(cfg: &Config, kind: SettingKind) -> Option<Vec<String>> {
         SettingKind::DiffContext => (strs(DIFF_CONTEXTS), String::new()),
         SettingKind::CrittersSize => (strs(CRITTER_SIZES), String::new()),
         SettingKind::CrittersOften => (strs(CRITTER_VISITS), String::new()),
-        SettingKind::HideCardMarks | SettingKind::HideDraftPrs => {
+        SettingKind::SubagentRetention => (strs(SUBAGENT_RETENTIONS), String::new()),
+        SettingKind::HideCardMarks | SettingKind::HideDraftPrs | SettingKind::HideDoneSubagents => {
             (strs(&["shown", "hidden"]), String::new())
         }
         SettingKind::QuickPromptKind => (agent_kind_names(), cfg.quick_prompt_kind.clone()),
@@ -404,6 +408,8 @@ pub fn set_value(cfg: &mut Config, kind: SettingKind, value: &Value) -> Result<(
         SettingKind::CrittersOften => cfg.critters_often = word,
         SettingKind::HideCardMarks => cfg.hide_card_marks = word == "hidden",
         SettingKind::HideDraftPrs => cfg.hide_draft_prs = word == "hidden",
+        SettingKind::HideDoneSubagents => cfg.hide_done_subagents = word == "hidden",
+        SettingKind::SubagentRetention => cfg.subagent_retention = word,
         SettingKind::QuickPromptKind => cfg.quick_prompt_kind = word,
         SettingKind::AccountSpread => cfg.account_spread = word,
         SettingKind::AccountSpreadThreshold => cfg.account_spread_threshold = word,

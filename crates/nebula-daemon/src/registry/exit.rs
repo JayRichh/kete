@@ -48,9 +48,13 @@ impl Daemon {
                             SessionRef::Agent(id) => daemon.take_resume_watch(id, &session),
                             SessionRef::Terminal(_) => None,
                         };
-                        // Any exit, deliberate or not: the process its
-                        // subagents ran in is gone either way.
-                        if let SessionRef::Agent(id) = &sref {
+                        // A natural death: the process its subagents ran in
+                        // is gone. A deliberate kill (archive, restart, the
+                        // idle reap, delete) closed them in `kill_session`
+                        // already, and by the time its exit lands here a
+                        // respawn may have put a new process's rows in the
+                        // book, which this exit must leave alone.
+                        if let (SessionRef::Agent(id), true) = (&sref, was_registered) {
                             daemon.close_subagents(id);
                         }
                         if !was_registered {

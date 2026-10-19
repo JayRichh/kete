@@ -43,7 +43,8 @@ pub fn tally(app: &App) -> HashMap<Tone, Vec<AgentId>> {
                     .any(|w| w.id == a.worktree_id && w.project_id == p.id)
             })
             .collect();
-        let forest = build_forest(&agents, &app.desk.subagents);
+        // Every ended subagent counts on its own, folded or not.
+        let forest = build_forest(&agents, &app.desk.subagents, false);
         for n in walk_all(&forest) {
             out.entry(n.tone).or_default().push(n.opens.clone());
         }

@@ -117,6 +117,90 @@ pub(crate) fn card_chip_hit(
     Some((r, HitTarget::SubagentChip(row.agent.id.clone())))
 }
 
+/// Most of a session card's prompt rows its SUBAGENT LINES take.
+pub(crate) const CARD_SUBAGENT_LINES: usize = 2;
+
+/// A session card's SUBAGENT LINES, under its prompt: each running
+/// subagent (newest first) as `⑂ <task>   running 3m`, and the ended ones
+/// either one by one (`done`, `failed`, `closed`) or, with the
+/// `hide_done_subagents` SETTING, folded into one `⑂ 3 finished` count.
+/// At most [`CARD_SUBAGENT_LINES`]; what does not fit is counted on the
+/// last line, and `⇧S` (or the chip) opens the whole tree. Empty for a
+/// session without subagents.
+pub(crate) fn card_lines(
+    app: &App,
+    id: &AgentId,
+    width: usize,
+    quiet: bool,
+    th: Theme,
+) -> Vec<Vec<Span<'static>>> {
+    let book = &app.desk.subagents;
+    let all = book.of(id);
+    if all.is_empty() || width < 12 {
+        return Vec::new();
+    }
+    let hide_done = book.hide_done;
+    let mut shown: Vec<&nebula_core::SubagentSummary> = all
+        .iter()
+        .filter(|s| !hide_done || s.status == nebula_core::SubagentStatus::Running)
+        .collect();
+    // Running first, then the most recent.
+    shown.sort_by_key(|s| {
+        (
+            s.status != nebula_core::SubagentStatus::Running,
+            std::cmp::Reverse(s.ended_at.unwrap_or(s.started_at)),
+        )
+    });
+    let folded = if hide_done { book.ended(id) } else { 0 };
+    let wanted = shown.len() + usize::from(folded > 0);
+    let (rows, rest) = if wanted <= CARD_SUBAGENT_LINES {
+        (shown.len(), 0)
+    } else {
+        let rows = CARD_SUBAGENT_LINES - 1;
+        (rows, shown.len() - rows)
+    };
+    let now = crate::app::now_ms();
+    let fg = |c: Color| if quiet { th.dim } else { c };
+    let mut lines: Vec<Vec<Span<'static>>> = shown
+        .iter()
+        .take(rows)
+        .map(|s| {
+            let tone = crate::subagents::sub_tone(s);
+            let tail = format!(
+                "{} {}",
+                crate::subagents::sub_word(s),
+                crate::hosts::ago_label(now - s.ended_at.unwrap_or(s.started_at))
+            )
+            .trim_end()
+            .to_string();
+            let lead = format!("{FORK} ");
+            let room = width.saturating_sub(lead.chars().count() + tail.chars().count() + 1);
+            let label = truncate(&crate::subagents::sub_label(s), room);
+            let pad = width.saturating_sub(
+                lead.chars().count() + label.chars().count() + tail.chars().count(),
+            );
+            vec![
+                Span::styled(lead, Style::default().fg(fg(tone_color(tone, th)))),
+                Span::styled(label, Style::default().fg(fg(th.muted))),
+                Span::raw(" ".repeat(pad)),
+                Span::styled(tail, Style::default().fg(fg(tone_color(tone, th)))),
+            ]
+        })
+        .collect();
+    let mut summary = Vec::new();
+    if rest > 0 {
+        summary.push(format!("+{rest} more"));
+    }
+    if folded > 0 {
+        summary.push(format!("{folded} finished"));
+    }
+    if !summary.is_empty() {
+        let text = truncate(&format!("{FORK} {}", summary.join(" · ")), width);
+        lines.push(vec![Span::styled(text, Style::default().fg(th.dim))]);
+    }
+    lines
+}
+
 /// The PANE header's chip for session `id`: `⑂ 2 of 3 subagents
 /// running`, or `⑂ 3 subagents` once none runs. None without any.
 pub(crate) fn pane_chip(app: &App, id: &AgentId) -> Option<Vec<Span<'static>>> {
@@ -175,8 +259,16 @@ fn row_spans(row: &Row, width: usize, now: i64, th: Theme) -> Vec<Span<'static>>
     } else {
         String::new()
     };
-    let word = format!("  {}", n.tone.word());
-    let meta = format!("  {}", n.meta);
+    let word = if n.word.is_empty() {
+        String::new()
+    } else {
+        format!("  {}", n.word)
+    };
+    let meta = if n.meta.is_empty() {
+        String::new()
+    } else {
+        format!("  {}", n.meta)
+    };
     let lead = indent.chars().count() + 4;
     let fixed = lead
         + word.chars().count()

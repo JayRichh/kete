@@ -64,6 +64,9 @@ pub const DIFF_CONTEXTS: &[&str] = &["collapsed", "full"];
 pub const CRITTER_SIZES: &[&str] = &["small", "medium", "large"];
 /// What **Critters visit** cycles through: how often a visitor turns up.
 pub const CRITTER_VISITS: &[&str] = &["rare", "normal", "busy"];
+/// What **Keep finished subagents** cycles through (the daemon reads the
+/// same key): how long an ended subagent stays listed.
+pub use nebula_core::settings::{DEFAULT_SUBAGENT_RETENTION, SUBAGENT_RETENTIONS};
 
 /// Inline graphics choices (Settings → Appearance).
 pub const INLINE_GRAPHICS: &[&str] = crate::choices::INLINE_GRAPHICS_MODES;
@@ -455,6 +458,8 @@ pub enum SettingKind {
     Critters,
     CrittersSize,
     CrittersOften,
+    HideDoneSubagents,
+    SubagentRetention,
 }
 
 /// One harness field row in the Agents tab. The tab renders one section
@@ -563,6 +568,7 @@ impl SettingKind {
             SettingKind::Critters | SettingKind::CrittersSize | SettingKind::CrittersOften => {
                 (2026, 10, 16)
             }
+            SettingKind::HideDoneSubagents | SettingKind::SubagentRetention => (2026, 10, 18),
         }
     }
 
@@ -718,6 +724,18 @@ pub const SETTINGS_TABS: &[SettingsTab] = &[
                 label: "Confirm drag move",
                 hint: "A session card dropped on another worktree or project tab asks before it moves (off = the drop moves it at once; m's picker never asks)",
                 group: "",
+            },
+            SettingSpec {
+                kind: SettingKind::HideDoneSubagents,
+                label: "Finished subagents",
+                hint: "Fold a session's done and closed subagents into a count under it on the board, the cards and the session tree (click the count or press d in the tree to show them); running ones always show",
+                group: "Subagents",
+            },
+            SettingSpec {
+                kind: SettingKind::SubagentRetention,
+                label: "Keep finished subagents",
+                hint: "How long a done or closed subagent stays listed before kete drops it (off = until you clear them); restarting a session clears its old ones at once",
+                group: "Subagents",
             },
             SettingSpec {
                 kind: SettingKind::AccountSpread,
@@ -1395,6 +1413,16 @@ pub struct Config {
     /// Install kete's statusLine wrapper into Claude sessions, the source
     /// of their plan usage and context (`kete _statusline`).
     pub usage_statusline: bool,
+    /// FINISHED SUBAGENTS: a session's ended subagents (done, failed,
+    /// closed with their session) fold into a count under it on the board,
+    /// the grid's cards and the session tree, one click or key from
+    /// showing; running ones always show. On by default, a config
+    /// predating the key too.
+    pub hide_done_subagents: bool,
+    /// KEEP FINISHED SUBAGENTS ([`SUBAGENT_RETENTIONS`]): how long the
+    /// daemon keeps an ended subagent before its sweep drops it. Read
+    /// through [`Config::subagent_retention_word`]; default `1h`.
+    pub subagent_retention: String,
     /// The key of the **Focused panel tint** SETTING (Settings →
     /// Appearance, through 0.34): whether the faint accent wash behind
     /// whatever keys land in — the card under the cursor, or the session
@@ -1802,6 +1830,8 @@ impl Default for Config {
             account_spread: nebula_core::accounts::SPREADS[0].into(),
             account_spread_threshold: nebula_core::accounts::DEFAULT_THRESHOLD.to_string(),
             usage_statusline: true,
+            hide_done_subagents: true,
+            subagent_retention: DEFAULT_SUBAGENT_RETENTION.into(),
             focus_tint: true,
             show_workspaces: true,
             hide_projects: false,
@@ -2141,6 +2171,16 @@ impl Config {
             .copied()
             .find(|w| w.eq_ignore_ascii_case(stored))
             .unwrap_or(CRITTER_SIZES[1])
+    }
+
+    /// `subagent_retention` as one of [`SUBAGENT_RETENTIONS`].
+    pub fn subagent_retention_word(&self) -> &'static str {
+        let stored = self.subagent_retention.trim();
+        SUBAGENT_RETENTIONS
+            .iter()
+            .copied()
+            .find(|w| w.eq_ignore_ascii_case(stored))
+            .unwrap_or(DEFAULT_SUBAGENT_RETENTION)
     }
 
     /// `critters_often` as one of [`CRITTER_VISITS`].
@@ -3019,6 +3059,8 @@ impl Config {
             SettingKind::Critters => on_off(self.critters).into(),
             SettingKind::CrittersSize => self.critters_size_word().into(),
             SettingKind::CrittersOften => self.critters_often_word().into(),
+            SettingKind::HideDoneSubagents => shown_hidden(self.hide_done_subagents).into(),
+            SettingKind::SubagentRetention => self.subagent_retention_word().into(),
         }
     }
 
@@ -3211,6 +3253,13 @@ impl Config {
             SettingKind::CrittersOften => {
                 let now = self.critters_often_word();
                 self.critters_often = cycle_choice(now, CRITTER_VISITS, step).into();
+            }
+            SettingKind::HideDoneSubagents => {
+                self.hide_done_subagents = !self.hide_done_subagents;
+            }
+            SettingKind::SubagentRetention => {
+                let now = self.subagent_retention_word();
+                self.subagent_retention = cycle_choice(now, SUBAGENT_RETENTIONS, step).into();
             }
         }
     }

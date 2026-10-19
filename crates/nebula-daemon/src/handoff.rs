@@ -522,6 +522,7 @@ mod tests {
                     status: nebula_core::SubagentStatus::Running,
                 }],
                 pending: vec![],
+                ..SubagentCarry::default()
             },
         };
         let bytes = rmp_serde::to_vec_named(&state).unwrap();

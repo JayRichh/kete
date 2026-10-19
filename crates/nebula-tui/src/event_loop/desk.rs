@@ -28,6 +28,80 @@ pub(crate) fn on_subagent_changed(app: &mut App, sub: SubagentSummary) {
     app.chrome.dirty = true;
 }
 
+/// The daemon dropped some of `parent`'s subagents.
+pub(crate) fn on_subagents_removed(app: &mut App, parent: &AgentId, ids: &[String]) {
+    app.desk.subagents.remove(parent, ids);
+    refresh_subagents(app);
+    app.chrome.dirty = true;
+}
+
+/// Can the daemon take `ClearEndedSubagents`? None (no handshake yet:
+/// tests) counts as yes, as `account_switch::daemon_switches` does.
+fn daemon_clears_subagents(app: &App) -> bool {
+    app.orch
+        .daemon_protocol
+        .is_none_or(|v| v >= nebula_core::SUBAGENT_CLEANUP_PROTOCOL)
+}
+
+/// `x` in the SUBAGENTS OVERLAY (`X`: every session): ask the daemon to
+/// drop the ended subagents of the cursor row's session. Running ones
+/// stay; the rows leave as the daemon's `SubagentsRemoved` comes back.
+pub(crate) fn clear_finished_subagents(
+    app: &mut App,
+    every_session: bool,
+    out: &mut Vec<ClientRequest>,
+) {
+    let parent = if every_session {
+        None
+    } else {
+        let Some(Overlay::Subagents(view)) = &app.modals.overlay else {
+            return;
+        };
+        let Some(row) = view.rows.get(view.cursor) else {
+            return;
+        };
+        Some(row.node.opens.clone())
+    };
+    let ended = match &parent {
+        Some(p) => app.desk.subagents.ended(p),
+        None => app.desk.subagents.ended_total(),
+    };
+    if ended == 0 {
+        app.chrome.flash = Some("no finished subagents to clear".into());
+        return;
+    }
+    if !daemon_clears_subagents(app) {
+        app.chrome.flash = Some(
+            "the running daemon predates clearing subagents: `kete reload` moves it onto this build"
+                .into(),
+        );
+        return;
+    }
+    let req_id = app.alloc_req_id(PendingIntent::None);
+    out.push(ClientRequest::ClearEndedSubagents { req_id, parent });
+    app.chrome.flash = Some(format!(
+        "clearing {ended} finished subagent{}",
+        if ended == 1 { "" } else { "s" }
+    ));
+}
+
+/// `d` in the SUBAGENTS OVERLAY: flip the `hide_done_subagents` SETTING
+/// and write it back, so the cards and the window's board follow too.
+fn toggle_hide_done_subagents(app: &mut App) {
+    let mut cfg = crate::config::Config::load();
+    cfg.hide_done_subagents = !app.desk.subagents.hide_done;
+    if !super::settings_handlers::save_config(app, &cfg) {
+        return;
+    }
+    app.desk.subagents.hide_done = cfg.hide_done_subagents;
+    refresh_subagents(app);
+    app.chrome.flash = Some(if cfg.hide_done_subagents {
+        "finished subagents folded under their session (Settings → Sessions)".into()
+    } else {
+        "finished subagents shown one by one".into()
+    });
+}
+
 /// The SESSION TREE of `project`'s live sessions — every project's, one
 /// after another, for None.
 pub(crate) fn forest_of(app: &App, project: Option<&ProjectId>) -> Vec<Node> {
@@ -48,7 +122,7 @@ pub(crate) fn forest_of(app: &App, project: Option<&ProjectId>) -> Vec<Node> {
                         .any(|w| w.id == a.worktree_id && w.project_id == p.id)
                 })
                 .collect();
-            build_forest(&agents, &app.desk.subagents)
+            build_forest(&agents, &app.desk.subagents, app.desk.subagents.hide_done)
         })
         .collect()
 }
@@ -121,6 +195,19 @@ pub(crate) fn handle_subagents_key(app: &mut App, key: KeyEvent, out: &mut Vec<C
     if matches!(key.code, KeyCode::Enter) {
         open_row(app, out);
         return;
+    }
+    match key.code {
+        KeyCode::Char('d') => {
+            toggle_hide_done_subagents(app);
+            app.chrome.dirty = true;
+            return;
+        }
+        KeyCode::Char(c @ ('x' | 'X')) => {
+            clear_finished_subagents(app, c == 'X', out);
+            app.chrome.dirty = true;
+            return;
+        }
+        _ => {}
     }
     if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
         let current = app.selected_project().map(|p| p.id.clone());
@@ -474,6 +561,83 @@ mod tests {
             app.modals.overlay = None;
             let text = buffer_text(&draw(&mut app));
             assert!(text.contains("⑂ 0/1"), "{text}");
+        });
+    }
+
+    /// The card lists its running subagent under the prompt; once it ends
+    /// it folds into the `1 finished` count, the tree shows it under that
+    /// fold, `x` asks the daemon to clear it, and the daemon's removal
+    /// takes it off the card.
+    #[test]
+    fn a_card_lists_its_subagents_and_x_clears_the_finished_ones() {
+        with_default_config(|| {
+            let mut app = app();
+            let mut out = Vec::new();
+            hse(
+                &mut app,
+                ServerEvent::SubagentChanged {
+                    sub: sub("a1", "x", SubagentStatus::Running),
+                },
+            );
+            let text = buffer_text(&draw(&mut app));
+            assert!(text.contains("⑂ look into x"), "{text}");
+            assert!(text.contains("running"), "{text}");
+
+            hse(
+                &mut app,
+                ServerEvent::SubagentChanged {
+                    sub: sub("a1", "x", SubagentStatus::Done),
+                },
+            );
+            let text = buffer_text(&draw(&mut app));
+            assert!(text.contains("⑂ 1 finished"), "{text}");
+            assert!(!text.contains("⑂ look into x"), "{text}");
+
+            press(&mut app, KeyCode::Char('S'), KeyModifiers::SHIFT, &mut out);
+            assert_eq!(tree_keys(&app), vec!["a:a1", "f:a1"], "folded by default");
+            press(&mut app, KeyCode::Down, KeyModifiers::NONE, &mut out);
+            press(&mut app, KeyCode::Right, KeyModifiers::NONE, &mut out);
+            assert_eq!(tree_keys(&app), vec!["a:a1", "f:a1", "s:a1:x"]);
+
+            out.clear();
+            press(&mut app, KeyCode::Char('x'), KeyModifiers::NONE, &mut out);
+            assert!(
+                out.iter().any(|r| matches!(
+                    r,
+                    ClientRequest::ClearEndedSubagents { parent: Some(p), .. } if p.0 == "a1"
+                )),
+                "{out:?}"
+            );
+            hse(
+                &mut app,
+                ServerEvent::SubagentsRemoved {
+                    parent: AgentId("a1".into()),
+                    ids: vec!["x".into()],
+                },
+            );
+            assert_eq!(tree_keys(&app), vec!["a:a1"]);
+            app.modals.overlay = None;
+            let text = buffer_text(&draw(&mut app));
+            assert!(!text.contains("⑂ 1 finished"), "{text}");
+        });
+    }
+
+    /// With `hide_done_subagents` off the ended ones show one by one,
+    /// with their own words.
+    #[test]
+    fn shown_one_by_one_an_ended_subagent_says_how_it_ended() {
+        with_default_config(|| {
+            let mut app = app();
+            app.desk.subagents.hide_done = false;
+            hse(
+                &mut app,
+                ServerEvent::SubagentChanged {
+                    sub: sub("a1", "x", SubagentStatus::EndedUnknown),
+                },
+            );
+            let text = buffer_text(&draw(&mut app));
+            assert!(text.contains("⑂ look into x"), "{text}");
+            assert!(text.contains("closed"), "{text}");
         });
     }
 

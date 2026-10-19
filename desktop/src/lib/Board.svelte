@@ -3,7 +3,10 @@
   import { offerTip } from './learn.svelte';
   import { LANE_EMPTY, emptyCopy } from './learn';
   import { verbKeys } from './verbs';
-  import { LANES, lanes, toneOf, harnessLabel, lastPrompt, age, placeOf, type Lane } from './status';
+  import { LANES, lanes, toneOf, subagentTone, harnessLabel, lastPrompt, age, placeOf, type Lane } from './status';
+  import { cardSubagents, isEnded, movedAt, subagentWord } from './subagents';
+  import { clearFinishedSubagents, foldingFinished } from './subagent-actions';
+  import SubagentBar from './SubagentBar.svelte';
   import Status from './Status.svelte';
   import StopBadge from './StopBadge.svelte';
   import { retract } from './motion';
@@ -116,6 +119,13 @@
   const board = $derived(lanes(app.model));
   const total = $derived(LANES.reduce((n, l) => n + board[l.id].length, 0));
   const outside = $derived(hiddenTotal(app.model));
+
+  // Subagents under their session's card. Finished ones fold into a count
+  // while `hide_done_subagents` is on (the default); a card's count opens
+  // its own, SubagentBar's checkbox flips the setting for both apps.
+  const hideDone = $derived(foldingFinished());
+  let openFinished = $state<Record<string, boolean>>({});
+  const clearFinished = clearFinishedSubagents;
 
   // First-use tips for the board's own concepts, while it is the one up:
   // a card reaching Review (the lanes), then two cards to drag.
@@ -236,9 +246,10 @@
 {#if total === 0 && outside === 0}
   <Empty />
 {:else}
-  <div class="relative h-full min-h-0" data-board>
+  <div class="relative flex h-full min-h-0 flex-col" data-board>
+  <SubagentBar />
   <div
-    class="grid h-full min-h-0 grid-cols-[repeat(5,minmax(220px,1fr))] overflow-x-auto"
+    class="grid min-h-0 flex-1 grid-cols-[repeat(5,minmax(220px,1fr))] overflow-x-auto"
     role="grid"
     aria-label="Sessions by status"
   >
@@ -286,6 +297,8 @@
             {@const stop = app.model.stops?.[a.id]}
             {@const sel = cursor !== null && LANES[cursor.lane].id === lane.id && cursor.row === ri}
             {@const alert = lane.id === 'needs'}
+            {@const subs = cardSubagents(app.model.subagents, a.id, hideDone, !!openFinished[a.id])}
+            {@const hasSubs = subs.shown.length > 0 || subs.ended > 0}
             <!-- The card's verbs show on hover or focus; the card keys (Space, A,
                  D, Shift+F10) do the same from the card. -->
             {@const mark = dragged && target?.card?.id === a.id ? target.card.place : null}
@@ -307,7 +320,7 @@
             <button
               title="{a.name}: {lane.id === 'unseen' || lane.id === 'pr' ? 'Enter opens its review (the diff against its base, with its verbs); ' : ''}{withKey('drag to reorder beside cards of its worktree', ['move_up', 'move_down'])}, or onto a lane, Archived or a repo in the rail"
               data-card-sel={sel || undefined}
-              class="relative flex w-full flex-col gap-1 border-0 border-b border-rule px-4 py-2.5 text-left focus-visible:-outline-offset-2
+              class="relative flex w-full flex-col gap-1 border-0 {hasSubs ? '' : 'border-b border-rule'} px-4 py-2.5 text-left focus-visible:-outline-offset-2
                 {sel ? 'bg-surface' : 'bg-transparent hover:bg-surface'} {app.review === a.id ? 'shadow-[inset_3px_0_0_var(--color-ink)]' : ''}"
               onclick={() => openCard(a, lane.id)}
               onfocus={() => (selId = a.id)}
@@ -332,6 +345,35 @@
               {/if}
               {#if prompt}<span class="line-clamp-2 text-[13px] text-muted">{prompt}</span>{/if}
             </button>
+            {#if hasSubs}
+              <!-- Its subagents, under it: running first, finished folded into a count. -->
+              <ul class="m-0 flex list-none flex-col gap-1 border-0 border-b border-rule pt-0 pr-4 pb-2 pl-6" aria-label="{a.name} subagents">
+                {#each subs.shown as s (s.id)}
+                  <li class="flex min-w-0 items-center gap-2 text-[12px]" title="{s.kind || 'subagent'}: {s.description || 'no task seen'}">
+                    <Status tone={subagentTone(s)} word={false} />
+                    <span class="min-w-0 truncate {isEnded(s) ? 'text-faint' : 'text-muted'}">{s.description || s.kind || 'subagent'}</span>
+                    <span class="ml-auto flex-none font-mono text-[11px] text-muted">{subagentWord(s)} {age(movedAt(s), app.now)}</span>
+                  </li>
+                {/each}
+                {#if subs.ended}
+                  <li class="flex items-center gap-2">
+                    {#if hideDone}
+                      <button
+                        class="{chip} border-rule bg-transparent text-muted hover:text-ink"
+                        aria-expanded={!subs.folded}
+                        title={subs.folded ? 'Show the finished subagents' : 'Fold the finished subagents'}
+                        onclick={() => (openFinished[a.id] = !openFinished[a.id])}>{subs.folded ? `${subs.ended} finished` : 'fold finished'}</button
+                      >
+                    {/if}
+                    <button
+                      class="{chip} border-rule bg-transparent text-muted hover:text-ink"
+                      title="Remove this session's finished subagent records"
+                      onclick={() => clearFinished(a.id)}>clear</button
+                    >
+                  </li>
+                {/if}
+              </ul>
+            {/if}
             <div
               data-card-tools
               class="absolute top-2 right-3 hidden border border-rule bg-bg group-focus-within:flex group-hover:flex"

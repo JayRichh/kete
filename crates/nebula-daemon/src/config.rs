@@ -68,6 +68,11 @@ pub struct Config {
     /// Install kete's statusLine wrapper into Claude sessions (Settings →
     /// Sessions → Usage status line): their plan usage and context.
     pub usage_statusline: bool,
+    /// KEEP FINISHED SUBAGENTS (Settings → Sessions): how long an ended
+    /// subagent stays in its session's book before the 30 s sweep drops
+    /// it (`nebula_core::settings::SUBAGENT_RETENTIONS`). Read through
+    /// [`Config::subagent_retention_ms`].
+    pub subagent_retention: String,
 }
 
 /// One project's entry under `projects` — the rows of the TUI's Project
@@ -102,6 +107,7 @@ impl Default for Config {
             port_base: nebula_core::ports::DEFAULT_BASE,
             port_block: nebula_core::ports::DEFAULT_BLOCK,
             usage_statusline: true,
+            subagent_retention: nebula_core::settings::DEFAULT_SUBAGENT_RETENTION.into(),
         }
     }
 }
@@ -123,10 +129,26 @@ impl Config {
         loaded.value
     }
 
+    /// [`Config::load`] without its warnings, for a reader on a timer (the
+    /// 30 s subagent sweep) that would repeat what the other loads already
+    /// reported.
+    pub fn load_quiet() -> Self {
+        nebula_core::settings::load::<Self>(
+            &nebula_core::paths::config_path(),
+            &nebula_core::paths::config_local_path(),
+        )
+        .value
+    }
+
     /// `session_idle_timeout` parsed to a duration; None = reaping disabled.
     pub fn session_idle_timeout(&self) -> Option<std::time::Duration> {
         parse_timeout(&self.session_idle_timeout)
             .unwrap_or_else(|| parse_timeout(DEFAULT_SESSION_IDLE_TIMEOUT).expect("default parses"))
+    }
+
+    /// `subagent_retention` in milliseconds; None keeps ended subagents.
+    pub fn subagent_retention_ms(&self) -> Option<i64> {
+        nebula_core::settings::subagent_retention_ms(&self.subagent_retention)
     }
 
     /// The configured WORKTREE BASE BRANCH, or None for the default
@@ -235,6 +257,31 @@ mod tests {
         assert!(cfg.prewarm_agents);
         let cfg: Config = serde_json::from_str(r#"{"prewarm_agents": false}"#).unwrap();
         assert!(!cfg.prewarm_agents);
+    }
+
+    #[test]
+    fn subagent_retention_reads_its_words_and_survives_a_bad_value() {
+        let retention = |json: &str| {
+            let obj: serde_json::Value = serde_json::from_str(json).unwrap();
+            let (cfg, skipped) =
+                nebula_core::settings::parse_lenient::<Config>(obj.as_object().unwrap());
+            (cfg.subagent_retention_ms(), skipped)
+        };
+        assert_eq!(retention("{}").0, Some(3_600_000), "default 1h");
+        assert_eq!(
+            retention(r#"{"subagent_retention": "10m"}"#).0,
+            Some(600_000)
+        );
+        assert_eq!(retention(r#"{"subagent_retention": "off"}"#).0, None);
+        // A word off the list reads as the default.
+        assert_eq!(
+            retention(r#"{"subagent_retention": "soon"}"#).0,
+            Some(3_600_000)
+        );
+        // A value of the wrong type costs only its own key.
+        let (ms, skipped) = retention(r#"{"subagent_retention": 7, "prewarm_agents": false}"#);
+        assert_eq!(ms, Some(3_600_000));
+        assert!(skipped.contains("subagent_retention"), "{skipped:?}");
     }
 
     #[test]

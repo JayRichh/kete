@@ -2619,14 +2619,21 @@ fn draw_card(
     // The last thing it was asked to do, on the prompt's own `›` (which
     // `hide_card_marks` leaves off), over the card's last rows rather than
     // clipped at the first.
+    // Its SUBAGENT LINES take the prompt's last rows: what the session
+    // has working for it right now is worth more than the prompt's tail.
+    let subagents = super::subagents_view::card_lines(app, &a.id, width, archived, th);
+    let prompt_rows = crate::launcher::PROMPT_LINES - subagents.len();
     let mut lines = vec![first, second];
     lines.resize(crate::launcher::CARD_HEAD_H as usize, Vec::new());
-    lines.extend(prompt_lines(
+    let mut prompt = prompt_lines(
         crate::launcher::last_prompt(a).unwrap_or_default(),
         width,
         (!app.launcher.hide_card_marks).then(|| quiet_or(dim)),
         quiet_or(prompt),
-    ));
+    );
+    prompt.resize(prompt_rows, Vec::new());
+    lines.extend(prompt);
+    lines.extend(subagents);
 
     for (i, spans) in lines.into_iter().enumerate() {
         if spans.is_empty() {

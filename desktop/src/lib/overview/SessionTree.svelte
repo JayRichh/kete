@@ -62,14 +62,22 @@
   function meta(n: Node): string {
     if (n.agent?.archived) return ['archived', harnessLabel(n.agent)].join(' \u00b7 ');
     if (n.agent) return [harnessLabel(n.agent), n.agent.profile].filter(Boolean).join(' \u00b7 ');
-    // Indent and the lighter name already say "subagent"; the type is the news.
-    if (n.sub) return n.sub.kind || 'subagent';
+    // Indent and the lighter name already say "subagent"; the type is the
+    // news, unless the name already is the type. `closed`: still open when
+    // its session ended or restarted.
+    if (n.sub) {
+      const closedWord = n.sub.status === 'ended_unknown' ? 'closed' : '';
+      const kind = n.sub.description ? n.sub.kind : '';
+      return [closedWord, kind].filter(Boolean).join(' \u00B7 ');
+    }
+    if (n.kind === 'finished') return 'subagents, folded';
     return '';
   }
 
   function when(n: Node): number {
     if (n.agent) return n.agent.status_changed_at;
     if (n.sub) return n.sub.ended_at ?? n.sub.started_at;
+    if (n.kind === 'finished') return Math.max(0, ...n.children.map(when));
     return 0;
   }
 
@@ -131,7 +139,7 @@
       ondragleave={(e) => leftFor(e) && mark?.id === n.agent?.id && (mark = null)}
       ondrop={(e) => dropOn(e, n)}
       use:pathDrop={{ target: () => (n.agent ? { Agent: n.agent.id } : null) }}
-      onclick={() => openNode(n)}
+      onclick={() => (n.kind === 'finished' ? toggle(n, !expanded) : openNode(n))}
       onkeydown={(e) => onRowKey(e, n, expanded, hasKids)}
     >
       {#if mark && drag.item && mark.id === n.agent?.id}
@@ -185,7 +193,7 @@
             >from {#if from.role === 'orchestrator'}<span aria-hidden="true">&#9670;</span> Orchestrator{:else}{from.name}{/if}</button
           >
         {/if}
-        {#if hidden}
+        {#if hidden && n.kind !== 'finished'}
           <button
             class="ml-2 flex-none border-0 bg-transparent p-0 font-mono text-[12px] text-muted hover:text-ink hover:underline hover:underline-offset-4"
             onclick={(e) => {

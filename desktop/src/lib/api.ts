@@ -301,6 +301,8 @@ export interface Launchables {
   ask_before_archive?: boolean;
   /** Show all worktrees: an empty checkout keeps its overview group. */
   show_all_worktrees?: boolean;
+  /** Finished subagents fold into a count under their session; absent from an old backend. */
+  hide_done_subagents?: boolean;
 }
 /** An agent preset (agent_presets.json, shared with the terminal app). */
 export interface Preset {
@@ -616,6 +618,8 @@ export const api = {
    *  order after it. Refused (with what to run) by a daemon older than
    *  protocol 56. */
   reorder: (scope: ReorderScope, ids: string[]) => invoke<void>('reorder', { scope, ids }),
+  /** Drop the ended subagents of one session, or of every session for null. */
+  clearFinishedSubagents: (parent: string | null) => invoke<void>('clear_finished_subagents', { parent }),
   /** Rejects with a {@link ShipError}, as do the two below. */
   shipStatus: (worktree: string, session?: string | null) =>
     invoke<ShipStatus>('ship_status', { worktree, session: session ?? null }),

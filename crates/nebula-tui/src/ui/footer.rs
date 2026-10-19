@@ -198,7 +198,7 @@ fn overlay_footer_hint(app: &App, overlay: &Overlay, th: Theme) -> FooterHint {
             th,
         ),
         Overlay::Subagents(_) => dim_hint(
-            "↑/↓: move  →/←: open/fold  Enter: open session  Tab: this project/all  Esc: close",
+            "↑/↓: move  →/←: open/fold  Enter: open session  d: fold/show finished  x: clear finished (X: all)  Tab: project/all  Esc: close",
             th,
         ),
         Overlay::Palette(_) => dim_hint(

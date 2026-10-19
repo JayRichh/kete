@@ -23,7 +23,7 @@ export type RepoRow = {
 /** Rows for every repo. `archived` lists archived sessions too (the
  *  overview's Show archived): never for the rail, strip or board, which
  *  count what wants attention. */
-export function repoRows(m: Model, opts: { archived?: boolean } = {}): RepoRow[] {
+export function repoRows(m: Model, opts: { archived?: boolean; foldFinished?: boolean } = {}): RepoRow[] {
   const rows = m.projects.map((project): RepoRow => {
     const worktrees = m.worktrees
       .filter((w) => w.project_id === project.id)
@@ -42,7 +42,7 @@ export function repoRows(m: Model, opts: { archived?: boolean } = {}): RepoRow[]
     return {
       project,
       name: project.name,
-      forest: buildForest(agents, subs, outside),
+      forest: buildForest(agents, subs, outside, opts.foldFinished),
       terminals: m.terminals.filter((t) => wids.has(t.worktree_id)).sort((a, b) => a.sort_order - b.sort_order),
       worktrees,
       main: worktrees.find((w) => w.is_main) ?? worktrees[0],

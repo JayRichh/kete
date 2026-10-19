@@ -639,6 +639,15 @@ impl Client {
                 drop(m);
                 self.touch();
             }
+            // A clear, the daemon's retention sweep, or the session
+            // restarting took these rows out of its book.
+            ServerEvent::SubagentsRemoved { parent, ids } => {
+                let mut m = self.model.lock().expect("model lock");
+                m.subagents
+                    .retain(|s| s.parent_agent != parent || !ids.contains(&s.id));
+                drop(m);
+                self.touch();
+            }
             ServerEvent::WorktreePorts { ports } => {
                 self.model.lock().expect("model lock").ports = ports;
                 self.touch();
@@ -1261,6 +1270,35 @@ mod tests {
         let model = client.snapshot();
         assert_eq!(model.subagents.len(), 1);
         assert_eq!(model.subagents[0].parent_agent, AgentId("lead".into()));
+    }
+
+    /// `SubagentsRemoved` takes exactly the named rows of that parent out
+    /// of the model: the same id under another session stays, and so do
+    /// the parent's other rows.
+    #[test]
+    fn removed_subagents_leave_the_frontend_model() {
+        let client = Client::new();
+        for s in [
+            sub("a", "x", SubagentStatus::Done),
+            sub("a", "y", SubagentStatus::Running),
+            sub("b", "x", SubagentStatus::Done),
+        ] {
+            client.handle(ServerEvent::SubagentChanged { sub: s });
+        }
+        client.handle(ServerEvent::SubagentsRemoved {
+            parent: AgentId("a".into()),
+            ids: vec!["x".into(), "gone-already".into()],
+        });
+        let left: Vec<(String, String)> = client
+            .snapshot()
+            .subagents
+            .iter()
+            .map(|s| (s.parent_agent.0.clone(), s.id.clone()))
+            .collect();
+        assert_eq!(
+            left,
+            vec![("a".into(), "y".into()), ("b".into(), "x".into())]
+        );
     }
 
     /// Usage events reach the frontend model: the account list replaces

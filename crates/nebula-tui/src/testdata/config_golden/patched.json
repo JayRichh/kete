@@ -42,6 +42,7 @@
   "git_init_on_create": true,
   "hide_card_marks": true,
   "hide_card_prompt": false,
+  "hide_done_subagents": true,
   "hide_draft_prs": false,
   "hide_projects": false,
   "hide_root_worktree": false,
@@ -91,6 +92,7 @@
   "skip_session_naming": false,
   "source_control_graph": false,
   "ssh_sync_config": true,
+  "subagent_retention": "1h",
   "usage_statusline": true,
   "worktree_base_branch": "",
   "worktree_layout": "cards"

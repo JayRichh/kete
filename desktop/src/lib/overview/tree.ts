@@ -9,7 +9,9 @@ export type Status = Tone;
 
 export type Node = {
   id: string;
-  kind: 'session' | 'subagent';
+  /** `finished`: the FINISHED GROUP, a session's ended subagents under one
+   *  `N finished` row that starts folded. */
+  kind: 'session' | 'subagent' | 'finished';
   status: Status;
   label: string;
   children: Node[];
@@ -22,6 +24,8 @@ export type Node = {
    *  most often): drawn with a "from <parent>" cue that opens it, rather
    *  than as a root that came from nowhere. */
   from?: Agent;
+  /** Starts folded whatever its depth: the FINISHED GROUP. */
+  folded?: boolean;
 };
 
 /** Children deeper than this start collapsed. */
@@ -51,9 +55,12 @@ function forestRank(forest: Node[]): number {
 /**
  * `agents` nested by `parent`, subagents under the session they run in.
  * `outside`: sessions that are not in `agents` (another repo's), so a
- * root whose parent is one of them carries it as `from`.
+ * root whose parent is one of them carries it as `from`. `foldFinished`
+ * (the `hide_done_subagents` setting) puts each session's ended subagents
+ * under one FINISHED GROUP node, `3 finished`, that starts folded; running
+ * ones stay one by one.
  */
-export function buildForest(agents: Agent[], subs: Subagent[], outside?: Map<string, Agent>): Node[] {
+export function buildForest(agents: Agent[], subs: Subagent[], outside?: Map<string, Agent>, foldFinished = false): Node[] {
   const byId = new Map(agents.map((a) => [a.id, a]));
   const nodes = new Map<string, Node>();
   for (const a of agents) {
@@ -99,6 +106,7 @@ export function buildForest(agents: Agent[], subs: Subagent[], outside?: Map<str
   }
 
   const orderedSubs = [...subs].sort((x, y) => x.started_at - y.started_at);
+  const groups = new Map<string, Node>();
   for (const s of orderedSubs) {
     const n: Node = {
       id: s.id,
@@ -111,8 +119,22 @@ export function buildForest(agents: Agent[], subs: Subagent[], outside?: Map<str
       sub: s,
     };
     const parent = nodes.get(s.parent_agent);
-    if (parent) parent.children.push(n);
-    else roots.push(n);
+    if (!parent) {
+      roots.push(n);
+      continue;
+    }
+    if (foldFinished && s.status !== 'running') {
+      let group = groups.get(s.parent_agent);
+      if (!group) {
+        group = { id: `f:${s.parent_agent}`, kind: 'finished', status: 'done', label: '', children: [], depth: 0, key: `f:${s.parent_agent}`, folded: true };
+        groups.set(s.parent_agent, group);
+      }
+      group.children.push(n);
+    } else parent.children.push(n);
+  }
+  for (const [parentId, group] of groups) {
+    group.label = `${group.children.length} finished`;
+    nodes.get(parentId)!.children.push(group);
   }
 
   const setDepth = (n: Node, d: number) => {
@@ -144,7 +166,7 @@ export function flatten(forest: Node[], expanded: Set<string>, collapsed: Set<st
   const out: Row[] = [];
   const walk = (n: Node) => {
     const has = n.children.length > 0;
-    const open = has && !collapsed.has(n.id) && (expanded.has(n.id) || n.depth + 1 <= OPEN_DEPTH);
+    const open = has && !collapsed.has(n.id) && (expanded.has(n.id) || (!n.folded && n.depth + 1 <= OPEN_DEPTH));
     out.push({ node: n, expanded: open, hidden: has && !open ? count(n) : 0 });
     if (open) for (const c of n.children) walk(c);
   };
