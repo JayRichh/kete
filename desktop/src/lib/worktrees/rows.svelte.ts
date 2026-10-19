@@ -8,7 +8,7 @@
 
 import { untrack } from 'svelte';
 import { api } from '../api';
-import { app, toast } from '../store.svelte';
+import { app, sessionWorktree, toast } from '../store.svelte';
 import { worktreeApi, type WorktreeGit } from './api';
 import { pruneKeys, repoKey, setKey } from './groups';
 import { turnMarks, turnedWorktrees, type TurnMarks } from './turns';
@@ -112,7 +112,8 @@ async function stampTick() {
   try {
     const next = await worktreeApi.stamps(shown);
     const moved = movedStamps(stamps, next);
-    // The first look only records: watchGit has just read them all.
+    // With no baseline (its read failed) the first look only records:
+    // watchGit has just read them all.
     const first = !Object.keys(stamps).length;
     stamps = next;
     const due = document.hasFocus() ? dueRunning(app.model.agents, shown, readAt, Date.now()) : [];
@@ -124,10 +125,26 @@ async function stampTick() {
     stamping = false;
   }
 }
+/** The stamps to compare the first tick against, taken as a view starts
+ *  watching and before its first read: a commit or stage between the
+ *  mount and that tick still moves a stamp. */
+async function takeBaseline() {
+  const shown = shownIds();
+  if (stamping || !shown.length) return;
+  stamping = true;
+  try {
+    stamps = await worktreeApi.stamps(shown);
+  } catch {
+    /* the first tick records instead */
+  } finally {
+    stamping = false;
+  }
+}
 /** Checkouts in repos the overview has open (a folded repo's are not
- *  read), and every checkout with a card on the board, folded or not: the
- *  board's Review and Ship lanes read the same git state (src-tauri keeps
- *  the last read). */
+ *  read), every checkout with a card on the board, folded or not (the
+ *  board's Review and Ship lanes read the same git state; src-tauri keeps
+ *  the last read), and the open session's checkout, whose changes its
+ *  Details rail counts. */
 export function shownIds(): string[] {
   const onBoard = new Set<string>();
   const byId = new Map(app.model.agents.map((a) => [a.id, a.worktree_id]));
@@ -135,6 +152,8 @@ export function shownIds(): string[] {
     const w = byId.get(id);
     if (w) onBoard.add(w);
   }
+  const open = sessionWorktree(app.session);
+  if (open) onBoard.add(open);
   return app.model.worktrees
     .filter((w) => onBoard.has(w.id) || !rows.collapsed.includes(repoKey(w.project_id)))
     .map((w) => w.id);
@@ -174,9 +193,11 @@ export function watchGit(): () => void {
     }, POLL_MS);
     stampTimer = setInterval(stampTick, STAMP_MS);
     stopTurns = watchTurns();
+    // A turn may have ended while no view watched; bypass the read gap.
+    void takeBaseline().then(() => refreshGit(shownIds(), true));
+  } else {
+    refreshGit(shownIds(), true);
   }
-  // A turn may have ended while this view was unmounted; bypass the read gap.
-  refreshGit(shownIds(), true);
   return () => {
     watchers -= 1;
     if (watchers === 0) {

@@ -2,14 +2,18 @@
   // The session view's side rail: where the session runs, its context,
   // what its checkout has changed, its model and effort, and how its
   // children stand. Facts only; the header keeps the verbs.
+  import { onMount } from 'svelte';
   import type { Agent } from './api';
   import { api } from './api';
   import { app, openDiff, toast } from './store.svelte';
   import ContextBar from './accounts/ContextBar.svelte';
-  import { rows } from './worktrees/rows.svelte';
+  import { rows, watchGit } from './worktrees/rows.svelte';
   import { changedWords, railFacts } from './sessionRail';
 
   let { agent }: { agent: Agent } = $props();
+  // The rail counts the checkout's changes, so it keeps them fresh itself:
+  // with the pane full, no overview or board is mounted to.
+  onMount(watchGit);
   const f = $derived(railFacts(app.model, agent, rows.git));
   const kids = $derived(f.children.working + f.children.needs + f.children.done);
 
