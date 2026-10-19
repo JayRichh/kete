@@ -14,7 +14,8 @@
   import { isDiffMode } from './lib/diff-api';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { nav } from './lib/shell/history.svelte';
-  import Rail from './lib/shell/Rail.svelte';
+  import Sidebar from './lib/shell/Sidebar.svelte';
+  import { loadSidebar } from './lib/shell/rail-state.svelte';
   import Breadcrumb from './lib/shell/Breadcrumb.svelte';
   import ScopeChip from './lib/shell/ScopeChip.svelte';
   import ShipSheet from './lib/ship/ShipSheet.svelte';
@@ -244,6 +245,7 @@
     loadDesktopKeys();
     const prefs = await loadDesktopPrefs();
     loadCollapsed(prefs?.collapsed);
+    loadSidebar(prefs);
     const s = await api.startup().catch(() => null);
     // Flags that need no daemon apply at once.
     if (s?.theme && knownTheme(s.theme, look.prefs.themes)) app.themePref = s.theme;
@@ -297,8 +299,8 @@
 
 <svelte:window onkeydown={onKey} onmouseup={onMouseUp} onfocusin={onFocusIn} />
 
-<div class="grid h-full {narrow ? 'grid-cols-[52px_minmax(0,1fr)]' : 'grid-cols-[220px_minmax(0,1fr)]'}">
-  <Rail compact={narrow} />
+<div class="grid h-full grid-cols-[auto_minmax(0,1fr)]">
+  <Sidebar {narrow} />
   <main class="relative flex min-h-0 min-w-0 flex-col">
     <header class="@container flex h-10 flex-none items-center border-b border-rule pl-2 {narrow ? 'gap-3 pr-2' : 'gap-3 pr-4'}">
       <Breadcrumb />

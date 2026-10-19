@@ -34,6 +34,7 @@ mod ship;
 mod subagents;
 mod tree;
 mod update;
+mod wacup;
 mod wake;
 
 use ado::client::CmdError;
@@ -1001,6 +1002,10 @@ fn main() {
             look::look_use_vscode_fonts,
             look::look_zoom,
             settings::desktop_set_collapsed,
+            settings::desktop_set_sidebar,
+            wacup::wacup_state,
+            wacup::wacup_transport,
+            wacup::wacup_launch,
             learn::learn_state,
             learn::learn_seen,
             learn::learn_tips,

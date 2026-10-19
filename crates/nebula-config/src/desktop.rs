@@ -50,6 +50,12 @@ const SIZE_DEFAULTS: [(&str, &str); 4] = [
 ];
 /// The font preferences: a family name, or empty for Kete's own.
 pub const FONT_KEYS: [&str; 3] = ["font_ui", "font_mono", "font_term"];
+/// The sidebar's narrowest and widest width in px; the window clamps a
+/// drag to them and a hand edit of the saved width is clamped here.
+pub const SIDEBAR_MIN: u16 = 200;
+pub const SIDEBAR_MAX: u16 = 480;
+/// The sidebar's width with none saved: the 220 px it was, and 24 more.
+pub const SIDEBAR_DEFAULT: u16 = 244;
 /// The Diff view's layout for a repo with none saved yet.
 pub const DIFF_MODES: &[&str] = &["side", "inline", "replacement"];
 /// What the main column shows with no view open.
@@ -82,6 +88,13 @@ pub struct DesktopPrefs {
     /// `wt:<worktree id>`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub collapsed: Vec<String>,
+    /// The sidebar's width in px, [`SIDEBAR_MIN`] to [`SIDEBAR_MAX`]; 0 is
+    /// [`SIDEBAR_DEFAULT`], and is not written.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub sidebar_width: u16,
+    /// The sidebar is folded to its icon rail.
+    #[serde(skip_serializing_if = "is_false")]
+    pub sidebar_collapsed: bool,
     /// What Open in editor uses on a folder ([`EDITOR_FOLDERS`]).
     pub editor_folder: String,
     /// What Open in editor uses on a file ([`EDITOR_FILES`]).
@@ -131,6 +144,8 @@ impl Default for DesktopPrefs {
             approved_open: BTreeMap::new(),
             startup: STARTUPS[0].into(),
             collapsed: Vec::new(),
+            sidebar_width: 0,
+            sidebar_collapsed: false,
             editor_folder: EDITOR_FOLDERS[0].into(),
             editor_file: EDITOR_FILES[0].into(),
             editor_reuse: EDITOR_REUSE[0].into(),
@@ -156,6 +171,12 @@ pub fn size_default(key: &str) -> &'static str {
         .map_or("", |(_, v)| v)
 }
 
+fn is_zero(v: &u16) -> bool {
+    *v == 0
+}
+fn is_false(v: &bool) -> bool {
+    !*v
+}
 fn is_default_ui_size(v: &str) -> bool {
     v == size_default("ui_size")
 }
@@ -226,6 +247,9 @@ impl DesktopPrefs {
             if !ok {
                 prefs.set_unchecked(key, fallback.get(key));
             }
+        }
+        if prefs.sidebar_width != 0 {
+            prefs.sidebar_width = prefs.sidebar_width.clamp(SIDEBAR_MIN, SIDEBAR_MAX);
         }
         if !prefs.theme_ok(&prefs.theme) {
             prefs.theme = fallback.theme;
@@ -544,6 +568,43 @@ mod tests {
         let saved: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert!(saved["desktop"].get("collapsed").is_none());
+    }
+
+    #[test]
+    fn sidebar_width_and_fold_round_trip_clamped_and_default_is_not_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let local = dir.path().join("config.local.json");
+        let fresh = DesktopPrefs::load_at(&path, &local);
+        assert_eq!((fresh.sidebar_width, fresh.sidebar_collapsed), (0, false));
+        DesktopPrefs::update_in(&path, &local, |p| {
+            p.sidebar_width = 300;
+            p.sidebar_collapsed = true;
+            Ok(())
+        })
+        .unwrap();
+        let back = DesktopPrefs::load_at(&path, &local);
+        assert_eq!((back.sidebar_width, back.sidebar_collapsed), (300, true));
+        std::fs::write(&path, r#"{"desktop": {"sidebar_width": 9000}}"#).unwrap();
+        assert_eq!(
+            DesktopPrefs::load_at(&path, &local).sidebar_width,
+            SIDEBAR_MAX
+        );
+        std::fs::write(&path, r#"{"desktop": {"sidebar_width": 40}}"#).unwrap();
+        assert_eq!(
+            DesktopPrefs::load_at(&path, &local).sidebar_width,
+            SIDEBAR_MIN
+        );
+        DesktopPrefs::update_in(&path, &local, |p| {
+            p.sidebar_width = 0;
+            p.sidebar_collapsed = false;
+            Ok(())
+        })
+        .unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(saved["desktop"].get("sidebar_width").is_none());
+        assert!(saved["desktop"].get("sidebar_collapsed").is_none());
     }
 
     #[test]

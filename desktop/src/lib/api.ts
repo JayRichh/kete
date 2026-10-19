@@ -4,6 +4,7 @@
 
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import type { WacupControl, WacupState } from './shell/wacup';
 import type { WakeNowResult, WakeOverview, WakeSchedule } from './wake/types';
 
 export type AgentStatus =
@@ -467,6 +468,9 @@ export interface DesktopPrefs {
   startup?: string;
   /** Folded overview groups: `repo:<id>`, `wt:<id>`. */
   collapsed?: string[];
+  /** The sidebar's width in px (0 or absent: the default) and whether it is folded to its rail. */
+  sidebar_width?: number;
+  sidebar_collapsed?: boolean;
   /** What opens a folder: `auto`, `vscode`, `visual-studio` or `command`. */
   editor_folder?: string;
   /** What opens a file: `auto`, `vscode`, `visual-studio` or `kete`. */
@@ -740,6 +744,10 @@ export const api = {
    *  null put it back to its default. Answers every binding now. */
   desktopKeySet: (id: string, chords: string[] | null) => invoke<Record<string, string[]>>('desktop_key_set', { id, chords }),
   desktopSetCollapsed: (keys: string[]) => invoke<void>('desktop_set_collapsed', { keys }),
+  wacupState: () => invoke<WacupState>('wacup_state'),
+  wacupTransport: (what: WacupControl) => invoke<void>('wacup_transport', { what }),
+  wacupLaunch: () => invoke<void>('wacup_launch'),
+  desktopSetSidebar: (width: number, collapsed: boolean) => invoke<void>('desktop_set_sidebar', { width, collapsed }),
   /** First-use tips and What's new: the shared seen-state (src-tauri learn.rs). */
   learnState: () => invoke<LearnState>('learn_state'),
   learnSeen: (id: string) => invoke<void>('learn_seen', { id }),

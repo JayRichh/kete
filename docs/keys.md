@@ -248,6 +248,7 @@ rows.
 | `Alt+→` | anywhere but a terminal | Forward |
 | `Ctrl+Shift+B` | anywhere, a terminal too | Board |
 | `Ctrl+Shift+O` | anywhere, a terminal too | Overview |
+| `Ctrl+B` | anywhere but a terminal | Collapse the sidebar to its icon rail, or open it again |
 | `Shift+K` | not while typing | Switch overview and board |
 | `Ctrl+Shift+T` | anywhere, a terminal too | Show the session |
 | `d` | not while typing | Diff the checkout in context: the focused row or card, the session, the repo; again, back from the diff |
