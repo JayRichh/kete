@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { ELEMENT } from './webdriver.mjs';
 import { Desktop, FEATURE, Key, clipboardText, git, ghDirs, setClipboard } from './harness.mjs';
 
 /** One window per test, closed (driver, daemon, temp root) however it ends. */
@@ -789,4 +790,85 @@ flow('the session view lists its subagents under the chat, with a splitter and a
   await d.waitFor('the chat back', () =>
     d.wd.exec(`return getComputedStyle(document.querySelector('[data-chat]')).display !== 'none';`),
   );
+
+flow('the sidebar drags to a width, folds to a rail, peeks on hover and restores', {}, async (d) => {
+  const box = () =>
+    d.wd.exec(
+      `const s = document.querySelector('[data-sidebar]');
+       const main = document.querySelector('main').getBoundingClientRect();
+       return { w: Math.round(s.getBoundingClientRect().width), state: s.dataset.sidebarState, mainLeft: Math.round(main.left) };`,
+    );
+  const savedWidth = async () => d.config().desktop?.sidebar_width;
+  const pointerTo = async (css, x = 0, y = 0) =>
+    d.wd.pointer([{ type: 'pointerMove', duration: 0, origin: { [ELEMENT]: await d.wd.find(css) }, x, y }], true);
+  const releasePointer = () => d.wd.call('DELETE', '/actions');
+
+  await d.el('[data-sidebar]');
+  // The default is 24 px wider than the 220 it was.
+  assert.deepEqual(await box(), { w: 244, state: 'open', mainLeft: 244 });
+
+  // Drag the handle 100 px right.
+  await d.wd.pointer([
+    { type: 'pointerMove', duration: 0, origin: { [ELEMENT]: await d.wd.find('[data-sidebar-resizer]') }, x: 0, y: 0 },
+    { type: 'pointerDown', button: 0 },
+    { type: 'pointerMove', duration: 200, origin: 'pointer', x: 100, y: 0 },
+    { type: 'pointerUp', button: 0 },
+  ]);
+  const dragged = (await box()).w;
+  assert.ok(dragged >= 340 && dragged <= 350, `dragged to ${dragged}`);
+  // It is remembered in the desktop settings.
+  await d.waitFor('the width saved', async () => (await savedWidth()) === dragged);
+
+  // A drag far past either edge stops at the limits.
+  const grab = async (dx) =>
+    d.wd.pointer([
+      { type: 'pointerMove', duration: 0, origin: { [ELEMENT]: await d.wd.find('[data-sidebar-resizer]') }, x: 0, y: 0 },
+      { type: 'pointerDown', button: 0 },
+      { type: 'pointerMove', duration: 200, origin: 'pointer', x: dx, y: 0 },
+      { type: 'pointerUp', button: 0 },
+    ]);
+  await grab(400);
+  assert.equal((await box()).w, 480);
+  await grab(-300);
+  assert.equal((await box()).w, 200);
+  await grab(144);
+  const chosen = (await box()).w;
+  await d.waitFor('the chosen width saved', async () => (await savedWidth()) === chosen);
+
+  // Ctrl+B folds to the 44 px rail, and again opens at the same width.
+  await d.press('b', Key.Control);
+  await d.waitFor('the rail', async () => (await box()).state === 'folded');
+  assert.deepEqual(await box(), { w: 44, state: 'folded', mainLeft: 44 });
+  await d.waitFor('the fold saved', async () => d.config().desktop?.sidebar_collapsed === true);
+  await d.press('b', Key.Control);
+  await d.waitFor('the sidebar open', async () => (await box()).state === 'open');
+  assert.deepEqual(await box(), { w: chosen, state: 'open', mainLeft: chosen });
+
+  // The fold button does the same.
+  await pointerTo('[data-sidebar]', 20, 0);
+  await d.click('[data-sidebar-collapse]');
+  await d.waitFor('the rail', async () => (await box()).state === 'folded');
+  await releasePointer();
+
+  // Hover on the rail: the full sidebar peeks after 300 ms, over the page.
+  await d.wd.pointer([{ type: 'pointerMove', duration: 0, origin: 'viewport', x: 600, y: 300 }]);
+  assert.equal(await d.wd.exec(`return !!document.querySelector('[data-sidebar-peek]');`), false);
+  await pointerTo('[data-sidebar-rail]', 0, 150);
+  const t0 = Date.now();
+  await d.el('[data-sidebar-peek]');
+  assert.ok(Date.now() - t0 >= 250, 'not before the pointer has rested');
+  const peek = await d.wd.exec(`return { w: Math.round(document.querySelector('[data-sidebar-peek]').getBoundingClientRect().width), main: Math.round(document.querySelector('main').getBoundingClientRect().left) };`);
+  assert.equal(peek.w, chosen);
+  assert.equal(peek.main, 44, 'the layout does not move under a peek');
+  // Leaving closes it.
+  await d.wd.pointer([{ type: 'pointerMove', duration: 0, origin: 'viewport', x: 700, y: 300 }]);
+  await d.waitFor('the peek closed', async () => !(await d.wd.exec(`return !!document.querySelector('[data-sidebar-peek]');`)));
+  await releasePointer();
+
+  // A click on a rail icon opens the sidebar and goes there.
+  await d.click('[data-rail="settings"]');
+  await d.waitFor('the sidebar open on Settings', async () => (await box()).state === 'open');
+  await d.waitFor('Settings up', () => d.wd.exec(`return document.querySelector('nav[aria-label="Where you are"] [aria-current="page"]')?.innerText === 'Settings';`));
+  assert.equal((await box()).w, chosen);
+  await d.waitFor('the fold cleared', async () => d.config().desktop?.sidebar_collapsed !== true);
 });

@@ -112,6 +112,7 @@ export type ActionId =
   | "wake_schedule"
   | "ask_aside"
   | "cycle_theme"
+  | "toggle_sidebar"
   | "home_board"
   | "home_overview"
   | "open_session"
@@ -141,6 +142,7 @@ export type DeskKeyId =
   | "new_worktree"
   | "back"
   | "forward"
+  | "toggle_sidebar"
   | "home_board"
   | "home_overview"
   | "toggle_home"
@@ -1641,6 +1643,19 @@ export const ACTIONS: readonly ActionRow[] = [
     desktop: ["cycle_theme"],
   },
   {
+    id: "toggle_sidebar",
+    label: "Sidebar",
+    hint: "Fold the sidebar to its icon rail, or open it again",
+    group: "VIEWS",
+    word: "sidebar",
+    destructive: false,
+    appliesTo: ["global"],
+    worksIn: ["grid", "board", "pane", "diff"],
+    surface: "desktop",
+    tui: [],
+    desktop: ["toggle_sidebar"],
+  },
+  {
     id: "home_board",
     label: "Board",
     hint: "Show the board: the sessions as lanes by status",
@@ -1815,6 +1830,7 @@ export const DESK_KEYS: readonly DeskKey[] = [
   { id: "new_worktree", action: "new_worktree", label: "New worktree in this repo", group: "General", scope: "global", editorOwns: false, chords: ["shift+n"] },
   { id: "back", action: "nav_back", label: "Back", group: "Views", scope: "fields", editorOwns: false, chords: ["alt+arrowleft"] },
   { id: "forward", action: "nav_forward", label: "Forward", group: "Views", scope: "fields", editorOwns: false, chords: ["alt+arrowright"] },
+  { id: "toggle_sidebar", action: "toggle_sidebar", label: "Collapse or expand the sidebar", group: "Views", scope: "fields", editorOwns: false, chords: ["ctrl+b"] },
   { id: "home_board", action: "home_board", label: "Board", group: "Views", scope: "anywhere", editorOwns: false, chords: ["ctrl+shift+b"] },
   { id: "home_overview", action: "home_overview", label: "Overview", group: "Views", scope: "anywhere", editorOwns: false, chords: ["ctrl+shift+o"] },
   { id: "toggle_home", action: "toggle_kanban", label: "Switch overview and board", group: "Views", scope: "global", editorOwns: false, chords: ["shift+k"] },

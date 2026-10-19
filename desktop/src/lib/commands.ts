@@ -61,6 +61,7 @@ import { insertRows, layout } from './menus/layout';
 import { exportSettings, importSettings } from './settings/io';
 import { bringBack, critters, hiddenNow, hideUntilTomorrow, toggleCritters } from './critters/state.svelte';
 import { openCritterLog } from './critters/sheet.svelte';
+import { toggleSidebar } from './shell/rail-state.svelte';
 import { closeFilesView, openFilesView } from './files/tree.svelte';
 
 /** F10: the orchestrator, or the Start form when there is none. */
@@ -349,6 +350,7 @@ export function runShortcut(id: ShortcutId): boolean {
     home_board: () => setHome('board', nav.current.repo),
     home_overview: () => setHome('overview', nav.current.repo),
     toggle_home: toggleHome,
+    toggle_sidebar: toggleSidebar,
     open_session: () => app.session && openSession(app.session),
     open_diff: toggleDiff,
     diff: toggleDiff,
@@ -489,6 +491,7 @@ export function paletteCommands(): Command[] {
     cmd('files', 'Files of the worktree', 'Window', () => openFilesView(diffTarget()), ['files', 'open_files'], 'tree explorer browse folder'),
     ...diffAgainstCommand(cmd),
     ...(split() ? [cmd('maximize', app.paneMax ? 'Bring the pane back down' : 'Full pane', 'Window', toggleMaximize, ['maximize_z', 'maximize'], 'maximize zoom full screen')] : []),
+    cmd('sidebar', 'Collapse or expand the sidebar', 'Window', toggleSidebar, 'toggle_sidebar', 'rail panel hide show'),
     cmd('theme', `Cycle Workshop theme (now ${themeLabel(app.themePref, look.prefs.themes)})`, 'Window', cycleTheme, 'cycle_theme', 'dark light system'),
     cmd('import-theme', 'Import a VS Code theme\u2026', 'Window', () => void importVsCodeTheme(), undefined, 'appearance colours colors one dark vscode'),
     ...(lookIsKetes() ? [] : [cmd('reset-look', 'Reset appearance to Kete defaults', 'Window', () => void resetAppearance(), undefined, 'appearance theme font workshop default')]),

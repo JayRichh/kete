@@ -7,7 +7,7 @@
 use crate::daemon::{Client, Model};
 use crate::Res;
 use nebula_config::actions;
-use nebula_config::desktop::DesktopPrefs;
+use nebula_config::desktop::{DesktopPrefs, SIDEBAR_MAX, SIDEBAR_MIN};
 use nebula_config::schema::{self, ProjectRef, Target};
 use nebula_config::Config;
 use nebula_core::project_file::{self, ProjectCommand};
@@ -145,6 +145,22 @@ pub fn desktop_key_set_at(
 pub fn desktop_set_collapsed(keys: Vec<String>) -> Res<()> {
     DesktopPrefs::update(|p| {
         p.collapsed = keys;
+        Ok(())
+    })
+    .map(|_| ())
+}
+
+/// The sidebar's width and fold, saved together. A width outside the
+/// limits is clamped; 0 is the default width.
+#[tauri::command]
+pub fn desktop_set_sidebar(width: u16, collapsed: bool) -> Res<()> {
+    DesktopPrefs::update(|p| {
+        p.sidebar_width = if width == 0 {
+            0
+        } else {
+            width.clamp(SIDEBAR_MIN, SIDEBAR_MAX)
+        };
+        p.sidebar_collapsed = collapsed;
         Ok(())
     })
     .map(|_| ())
