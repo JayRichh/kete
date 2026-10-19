@@ -7,6 +7,10 @@
 /// The first prompt of an ASK ASIDE session: the question, framed so the
 /// agent answers it and leaves the checkout as it found it. `session` is
 /// the name of the session the question is about.
+///
+/// A request, not a guard: the session runs with its caller's permission
+/// mode (`SpawnSiblingAgent` carries none), so the apps say it is asked not
+/// to change files rather than that it cannot.
 pub fn aside_prompt(session: &str, question: &str) -> String {
     let session = session.trim();
     let question = question.trim();

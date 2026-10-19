@@ -293,7 +293,7 @@ export async function askAside(id: string) {
   if (!a) return;
   const v = await ask.prompt({
     title: `Ask aside about ${a.name}`,
-    note: 'A new session in the same checkout answers it without changing files. This one keeps working.',
+    note: 'A new session in the same checkout answers it, asked not to change files. It runs with this session's permissions. This one keeps working.',
     fields: [{ key: 'question', label: 'Question', multiline: true, placeholder: 'What do you want to know?' }],
     confirm: 'Ask aside',
   });

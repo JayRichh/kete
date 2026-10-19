@@ -1617,7 +1617,7 @@ export const ACTIONS: readonly ActionRow[] = [
   {
     id: "ask_aside",
     label: "Ask aside",
-    hint: "Ask a side question about the session: a new session beside it, in the same checkout and nested under it, answers without changing files while this one keeps working",
+    hint: "Ask a side question about the session: a new session beside it, in the same checkout and nested under it, is asked to answer without changing files while this one keeps working",
     group: "SESSIONS",
     word: "ask aside",
     destructive: false,

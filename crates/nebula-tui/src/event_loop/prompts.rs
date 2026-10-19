@@ -115,7 +115,7 @@ pub(crate) fn open_prompt(app: &mut App, kind: PromptKind) {
                     .map_or("session", |a| a.name.as_str())
             )
             .into(),
-            "a side question: a new session beside this one answers it without changing files"
+            "a side question: a new session beside this one answers it, asked not to change files"
                 .into(),
             String::new(),
         ),
