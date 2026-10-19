@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.59.0
 
 Usage windows read in your own time zone.
 

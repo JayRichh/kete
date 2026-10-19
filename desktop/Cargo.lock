@@ -1953,7 +1953,7 @@ dependencies = [
 
 [[package]]
 name = "kete-ado"
-version = "0.58.0"
+version = "0.59.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1968,14 +1968,14 @@ dependencies = [
 
 [[package]]
 name = "kete-critters"
-version = "0.58.0"
+version = "0.59.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "kete-desktop"
-version = "0.58.0"
+version = "0.59.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2214,7 +2214,7 @@ dependencies = [
 
 [[package]]
 name = "nebula-config"
-version = "0.58.0"
+version = "0.59.0"
 dependencies = [
  "nebula-core",
  "serde",
@@ -2224,7 +2224,7 @@ dependencies = [
 
 [[package]]
 name = "nebula-core"
-version = "0.58.0"
+version = "0.59.0"
 dependencies = [
  "directories",
  "libc",
