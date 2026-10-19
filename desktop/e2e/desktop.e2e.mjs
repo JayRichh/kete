@@ -790,6 +790,7 @@ flow('the session view lists its subagents under the chat, with a splitter and a
   await d.waitFor('the chat back', () =>
     d.wd.exec(`return getComputedStyle(document.querySelector('[data-chat]')).display !== 'none';`),
   );
+});
 
 flow('the sidebar drags to a width, folds to a rail, peeks on hover and restores', {}, async (d) => {
   const box = () =>
