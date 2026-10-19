@@ -47,6 +47,9 @@ pub struct AccountRow {
     /// or switches, only the way to Settings, Profiles.
     pub problem: Option<String>,
     pub usage: Option<AccountUsage>,
+    /// The email the login belongs to (Claude's `.claude.json`), shown
+    /// beside the meter.
+    pub email: Option<String>,
     /// Its PROFILE HOME; None for an own login or an adopted one.
     pub home: Option<String>,
     /// The variable names its profile sets; values never leave Rust.
@@ -88,6 +91,7 @@ pub fn rows(
                     login_hint: None,
                     problem: Some(problem),
                     usage: None,
+                    email: None,
                     home: None,
                     env_keys: p.env.keys().cloned().collect(),
                 };
@@ -105,6 +109,7 @@ pub fn rows(
                 login_hint: accounts::login_command(Some(p), &harness),
                 problem: None,
                 usage: reading(&name),
+                email: email_of(p.harness.trim(), p.home().map(|h| h.join("claude"))),
                 home: p.home().map(|h| h.display().to_string()),
                 env_keys: p.env.keys().cloned().collect(),
                 profile: true,
@@ -118,6 +123,7 @@ pub fn rows(
         let check = login(None, harness);
         out.push(AccountRow {
             usage: reading(&key),
+            email: email_of(harness, nebula_core::paths::claude_config_dir()),
             key,
             name: harness.clone(),
             profile: false,
@@ -163,6 +169,21 @@ fn list_at(config: &Path, root: &Path, model: &crate::daemon::Model) -> Vec<Acco
 
 pub fn set_enabled_at(config: &Path, name: &str, enabled: bool) -> Res<()> {
     profiles::set_enabled_in_file(config, name, enabled)
+}
+
+/// The account email of a Claude login whose config dir is `dir`.
+fn email_of(harness: &str, dir: Option<std::path::PathBuf>) -> Option<String> {
+    (harness == "claude")
+        .then_some(dir)
+        .flatten()
+        .and_then(|dir| nebula_core::claude_usage::account_email(&dir))
+}
+
+/// A window coming back to the front: ask the daemon for fresh plan usage
+/// now instead of within the minute.
+#[tauri::command]
+pub fn accounts_usage_nudge() {
+    nebula_core::claude_usage::nudge();
 }
 
 #[tauri::command]

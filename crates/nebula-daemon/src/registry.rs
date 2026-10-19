@@ -265,6 +265,7 @@ pub struct Daemon {
     wakes: Mutex<HashMap<AgentId, wake::WakeSession>>,
 }
 
+mod agent_repos;
 mod exit;
 mod lifecycle;
 mod order;
@@ -4717,6 +4718,93 @@ pub(crate) mod tests {
         );
         let rt = worktrees.iter().find(|w| w.id.as_str() == "rt").unwrap();
         assert!(rt.is_main, "the surviving root row keeps the badge");
+    }
+
+    /// A checkout an agent cuts beside the repo (`repo-economy` next to
+    /// `repo`, outside any registered root) is adopted by the next sync, and
+    /// leaves the sidebar's rows once it is removed on disk.
+    #[tokio::test]
+    async fn a_sibling_worktree_is_adopted_and_dropped_once_removed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = nebula_core::paths::canonical(tmp.path()).unwrap();
+        let repo = init_repo(&root);
+        let sibling = root.join("repo-economy");
+        git_in(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                &sibling.to_string_lossy(),
+                "-b",
+                "economy",
+            ],
+        );
+        let daemon = test_daemon();
+        let project = Project {
+            id: ProjectId("p".into()),
+            name: "p".into(),
+            repo_path: repo.clone(),
+            sort_order: 0,
+        };
+        daemon.store.insert_project(&project).unwrap();
+        seed_worktree(&daemon, "p", "rt", &repo.to_string_lossy(), true);
+
+        daemon.sync_project_worktrees(&project).await.unwrap();
+        let (_, worktrees, _, _) = daemon.store.load_tree().unwrap();
+        let found = worktrees.iter().find(|w| w.path == sibling).unwrap();
+        assert_eq!(found.branch, "economy");
+
+        git_in(
+            &repo,
+            &["worktree", "remove", "--force", &sibling.to_string_lossy()],
+        );
+        daemon.sync_project_worktrees(&project).await.unwrap();
+        let (_, worktrees, _, _) = daemon.store.load_tree().unwrap();
+        assert!(
+            worktrees.iter().all(|w| w.path != sibling),
+            "{worktrees:#?}"
+        );
+    }
+
+    /// A repo nobody registered, found because it holds an agent's checkout
+    /// and sits beside a registered one, becomes a project with its checkouts.
+    #[tokio::test]
+    async fn an_unregistered_repo_with_agent_checkouts_is_registered() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = nebula_core::paths::canonical(tmp.path()).unwrap();
+        let known = init_repo(&root);
+        let other = root.join("other");
+        std::fs::create_dir(&other).unwrap();
+        git_in(&other, &["init", "-b", "main"]);
+        git_in(&other, &["commit", "--allow-empty", "-m", "init"]);
+        let cut = root.join("other-audio");
+        git_in(
+            &other,
+            &["worktree", "add", &cut.to_string_lossy(), "-b", "audio"],
+        );
+        let daemon = test_daemon();
+        let project = Project {
+            id: ProjectId("p".into()),
+            name: "p".into(),
+            repo_path: known.clone(),
+            sort_order: 0,
+        };
+        daemon.store.insert_project(&project).unwrap();
+        seed_worktree(&daemon, "p", "rt", &known.to_string_lossy(), true);
+
+        let mut tried = std::collections::HashSet::new();
+        assert_eq!(daemon.adopt_agent_repos(&mut tried).await, 1);
+
+        let (projects, worktrees, _, _) = daemon.store.load_tree().unwrap();
+        let added = projects.iter().find(|p| p.repo_path == other).unwrap();
+        let mine: Vec<_> = worktrees
+            .iter()
+            .filter(|w| w.project_id == added.id)
+            .collect();
+        assert_eq!(mine.len(), 2, "{mine:#?}");
+        assert!(mine.iter().any(|w| w.path == cut && w.branch == "audio"));
+        // A second pass finds nothing new.
+        assert_eq!(daemon.adopt_agent_repos(&mut tried).await, 0);
     }
 
     /// A fresh repo with one commit, at a canonical path (the macOS

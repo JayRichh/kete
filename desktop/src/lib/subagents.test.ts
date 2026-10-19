@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Subagent } from './api';
-import { cardSubagents, endedTotal, subagentWord, subagentRun } from './subagents';
+import type { Model } from './api';
+import { cardSubagents, clampPane, endedTotal, offBoardSubagents, subagentWord, subagentRun, tally } from './subagents';
 
 function sub(parent: string, id: string, status: Subagent['status'], at: number): Subagent {
   return {
@@ -60,4 +61,29 @@ it('a subagent says the model and effort it runs at when known', () => {
   expect(subagentRun(s)).toBe('');
   expect(subagentRun({ ...s, run: { model: 'claude-haiku-4-5', effort: 'low' } })).toBe('haiku-4-5 \u00b7 low');
   expect(subagentRun({ ...s, run: { model: '', effort: 'max' } })).toBe('max');
+});
+
+describe('offBoardSubagents', () => {
+  it("lists the orchestrator's subagents, running first, and no worker's", () => {
+    const m = {
+      agents: [
+        { id: 'orch', role: 'orchestrator', archived: false },
+        { id: 'w', role: 'worker', archived: false },
+      ],
+      subagents: [sub('orch', 'done1', 'done', 5), sub('orch', 'live1', 'running', 2), sub('w', 'mine', 'running', 9)],
+    } as unknown as Model;
+    expect(offBoardSubagents(m).map((s) => s.id)).toEqual(['live1', 'done1']);
+  });
+});
+
+describe('tally and clampPane', () => {
+  it('counts open and ended subagents', () => {
+    expect(tally([sub('a', '1', 'running', 1), sub('a', '2', 'done', 2), sub('a', '3', 'failed', 3)])).toEqual({ total: 3, running: 1, done: 2 });
+  });
+  it('keeps the pane between its header and a strip of chat', () => {
+    expect(clampPane(10, 600)).toBe(72);
+    expect(clampPane(900, 600)).toBe(480);
+    expect(clampPane(250.4, 600)).toBe(250);
+    expect(clampPane(300, 100)).toBe(72);
+  });
 });

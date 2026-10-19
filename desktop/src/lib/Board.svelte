@@ -4,9 +4,10 @@
   import { LANE_EMPTY, emptyCopy } from './learn';
   import { verbKeys } from './verbs';
   import { LANES, lanes, toneOf, subagentTone, harnessLabel, lastPrompt, age, placeOf, type Lane } from './status';
-  import { cardSubagents, isEnded, movedAt, subagentRun, subagentWord } from './subagents';
+  import { cardSubagents, isEnded, movedAt, offBoardSubagents, subagentRun, subagentWord } from './subagents';
   import { clearFinishedSubagents, foldingFinished } from './subagent-actions';
   import SubagentBar from './SubagentBar.svelte';
+  import TeammateStrip from './TeammateStrip.svelte';
   import Status from './Status.svelte';
   import StopBadge from './StopBadge.svelte';
   import { retract } from './motion';
@@ -243,11 +244,12 @@
 <svelte:window onkeydown={onKey} />
 
 <!-- The alternate home: lanes are ruled columns, sessions are ruled rows. -->
-{#if total === 0 && outside === 0}
+{#if total === 0 && outside === 0 && !offBoardSubagents(app.model).length}
   <Empty />
 {:else}
   <div class="relative flex h-full min-h-0 flex-col" data-board>
   <SubagentBar />
+  <TeammateStrip />
   <div
     class="grid min-h-0 flex-1 grid-cols-[repeat(5,minmax(220px,1fr))] overflow-x-auto"
     role="grid"

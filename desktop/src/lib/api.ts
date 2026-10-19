@@ -170,6 +170,9 @@ export interface AccountRow {
   /** Why a profile entry cannot be used (shown, with the way to Settings). */
   problem?: string | null;
   usage: AccountUsage | null;
+  /** The email the login belongs to, when Claude's files name it. */
+  email?: string | null;
+  /** Its profile home| null;
   /** Its profile home; null for an own login or an adopted one. */
   home?: string | null;
   /** The variable names its profile sets (values stay in Rust). */
@@ -675,6 +678,8 @@ export const api = {
   profileRename: (old: string, name: string) => invoke<ProfileRenamed>('profile_rename', { old, new: name }),
   profileSetDefault: (name: string) => invoke<ProfileRow[]>('profile_set_default', { name }),
   accounts: () => invoke<AccountRow[]>('accounts_list'),
+  /** Ask the daemon for fresh plan usage now (a window coming to the front). */
+  nudgeAccountUsage: () => invoke<void>('accounts_usage_nudge'),
   /** Whakaoho: every Claude account's wake-up schedule, next run, usual
    *  hours, suggestion, each anchor's preview and last decisions
    *  (`kete wake status --json`). */

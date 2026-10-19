@@ -6,7 +6,7 @@
   // terminal); a broken profile shows what is wrong and the way to fix it.
   // The heading opens the Accounts view, where everything else lives.
   import { onMount } from 'svelte';
-  import type { AccountRow } from '../api';
+  import { api, type AccountRow } from '../api';
   import { app, focusQuickPrompt, openSession, refreshAccounts, refreshLaunchables } from '../store.svelte';
   import { nav } from '../shell/history.svelte';
   import { copySignIn, openAccounts, runLogin as startLogin, setAccountEnabled, setDefaultAccount } from './actions';
@@ -33,7 +33,11 @@
   // once, so one removed from the config cannot loop.
   onMount(() => {
     const again = () => {
-      if (document.visibilityState === 'visible') refreshLaunchables();
+      if (document.visibilityState !== 'visible') return;
+      refreshLaunchables();
+      // The meter follows the account, not the last statusLine: ask for a
+      // fresh reading as the window returns.
+      api.nudgeAccountUsage().catch(() => {});
     };
     window.addEventListener('focus', again);
     document.addEventListener('visibilitychange', again);
@@ -110,7 +114,7 @@
               : r.profile
                 ? `Edit ${r.name} in Accounts\n${loginTitle(r)}`
                 : `${r.harness}'s own login. Add it as an account in Accounts\n${loginTitle(r)}`}
-            >{r.name}{#if !r.profile}<span class="ml-1 text-faint">own login</span>{/if}</button
+            >{r.name}{#if !r.profile}<span class="ml-1 text-faint">own login</span>{/if}{#if r.email}<span class="ml-1 text-faint" data-account-email>{r.email}</span>{/if}</button
           >
           {#if on.length}
             <button

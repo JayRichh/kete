@@ -17,11 +17,16 @@ export interface RecentCheckout {
 export const RECENT_KEPT = 5;
 
 /** Per checkout, the newest `status_changed_at` of its sessions (archived
- *  ones count: they were started there), newest first. Checkouts and repos
+ *  ones count: they were started there), newest first. Linked checkouts with
+ *  no session yet come last, at 0. Checkouts and repos
  *  gone from the model drop out. */
 export function recentCheckouts(m: Model, limit = RECENT_KEPT): RecentCheckout[] {
   const newest = new Map<string, number>();
   for (const a of m.agents) newest.set(a.worktree_id, Math.max(newest.get(a.worktree_id) ?? 0, a.status_changed_at));
+  // A linked checkout nobody has run a session in yet (an agent cut it, or
+  // it was adopted from git) is still somewhere to start one: it follows
+  // the ones that have history.
+  for (const w of m.worktrees) if (!w.is_main && !newest.has(w.id)) newest.set(w.id, 0);
   const out: RecentCheckout[] = [];
   for (const [id, at] of newest) {
     const w = m.worktrees.find((x) => x.id === id);

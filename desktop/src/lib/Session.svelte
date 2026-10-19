@@ -7,6 +7,8 @@
   import OrchBadge from './orchestrator/OrchBadge.svelte';
   import ContextBar from './accounts/ContextBar.svelte';
   import SessionRail from './SessionRail.svelte';
+  import SessionSubagents from './SessionSubagents.svelte';
+  import { clampPane } from './subagents';
   import { followUp, newTerminal, openTargetMenu, restartAgent, unarchiveAgent } from './actions';
   import { openMenu } from './ui/ui.svelte';
   import { ownMenu } from './menus/router';
@@ -40,6 +42,38 @@
   // The details rail beside the terminal; hidden by the reader, and
   // always in a pane too narrow to spare it (the header has the essentials).
   let railOpen = $state(true);
+
+  // The subagent list under the chat: its height and the chat collapse are
+  // remembered for the next session opened (per viewer, so browser storage).
+  const PANE_KEY = 'kete.subagentPane';
+  const PANE_DEFAULT = 200;
+  function readPane(): { height: number; collapsed: boolean } {
+    try {
+      const v = JSON.parse(localStorage.getItem(PANE_KEY) ?? '{}');
+      return { height: Number(v.height) || PANE_DEFAULT, collapsed: v.collapsed === true };
+    } catch {
+      return { height: PANE_DEFAULT, collapsed: false };
+    }
+  }
+  const saved = readPane();
+  let paneHeight = $state(saved.height);
+  let chatCollapsed = $state(saved.collapsed);
+  let column = $state<HTMLElement>();
+  function keepPane() {
+    try {
+      localStorage.setItem(PANE_KEY, JSON.stringify({ height: paneHeight, collapsed: chatCollapsed }));
+    } catch {
+      /* storage can be blocked; the position just is not remembered */
+    }
+  }
+  function setPaneHeight(px: number, commit: boolean) {
+    paneHeight = clampPane(px, column?.clientHeight ?? 600);
+    if (commit) keepPane();
+  }
+  function toggleChat() {
+    chatCollapsed = !chatCollapsed;
+    keepPane();
+  }
 </script>
 
 {#if s && (agent || terminal)}
@@ -139,8 +173,13 @@
       </div>
     </div>
     <div class="@container flex min-h-0 flex-1">
-      <div class="min-w-0 flex-1">
-        <Terminal session={s} dark={app.dark} />
+      <div class="flex min-h-0 min-w-0 flex-1 flex-col" bind:this={column} data-session-column>
+        <div class="min-h-0 flex-1 {agent && chatCollapsed && app.model.subagents.some((x) => x.parent_agent === agent.id) ? 'hidden' : ''}" data-chat>
+          <Terminal session={s} dark={app.dark} />
+        </div>
+        {#if agent}
+          <SessionSubagents agent={agent.id} height={paneHeight} collapsed={chatCollapsed} onheight={setPaneHeight} ontoggle={toggleChat} />
+        {/if}
       </div>
       {#if agent && railOpen}
         <div class="hidden @min-[720px]:flex"><SessionRail {agent} /></div>

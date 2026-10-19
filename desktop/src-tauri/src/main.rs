@@ -972,6 +972,7 @@ fn main() {
             profiles::profile_remove,
             profiles::profile_set_default,
             accounts::accounts_list,
+            accounts::accounts_usage_nudge,
             // Whakaoho (wake-up)
             wake::wake_overview,
             wake::wake_now,
