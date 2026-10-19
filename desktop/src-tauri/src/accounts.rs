@@ -386,7 +386,8 @@ mod tests {
                 label: None,
                 percent: 34.0,
                 resets_at: None,
-                read_at: 0, estimated: false,
+                read_at: 0,
+                estimated: false,
             }],
             source: UsageSource::Statusline,
             at: 1,
@@ -647,7 +648,9 @@ mod tests {
         let tz = |_| 13 * 3600;
         let none = std::collections::HashMap::new();
         assert_eq!(window_title(&none, now, tz), "kete");
-        let two = [account("a", 40.0), account("b", 87.0)].into_iter().collect();
+        let two = [account("a", 40.0), account("b", 87.0)]
+            .into_iter()
+            .collect();
         assert_eq!(window_title(&two, now, tz), "kete · 87% · resets 9:50 pm");
     }
 }

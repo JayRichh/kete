@@ -9,7 +9,9 @@ Usage windows read in your own time zone.
 - **Meter colours.** Usage steps at 70, 85 and 95 percent (was 80 and 95) in both apps. At 95 the desktop banner says when the 5-hour window resets.
 - **Countdown wording.** Countdowns read `in 3 h 12 m` (was `in 3h 12m`).
 - **Stale readings.** A window with no reset time that has aged past its length shows an em dash, not its last percent.
-- **Upgrade note.** No protocol break: the new `estimated` window field is optional.
+- **Headline window.** The footer, window title and desktop header lead with the 5-hour window only, never a monthly one labelled "5h". The terminal footer drops the reset, then the whole readout, on narrow terminals before it drops key hints.
+- **Estimates stay estimates.** A guessed reset is marked, dropped once passed, never feeds stop notes or wake decisions, and a small dip in the percent no longer discards a reported reset.
+- **Upgrade note.** The protocol moved from 64 to 65 (additive: older peers get windows without the estimate). Run `kete kill` and reopen.
 
 ## 0.58.0
 

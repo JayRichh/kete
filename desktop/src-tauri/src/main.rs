@@ -867,7 +867,11 @@ async fn title_loop(app: tauri::AppHandle, client: Arc<Client>) {
     let mut last = String::new();
     loop {
         let now = nebula_core::clock::now_secs() as i64;
-        let title = accounts::window_title(&client.snapshot().accounts, now, nebula_core::usage_window::local);
+        let title = accounts::window_title(
+            &client.snapshot().accounts,
+            now,
+            nebula_core::usage_window::local,
+        );
         if title != last {
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.set_title(&title);
