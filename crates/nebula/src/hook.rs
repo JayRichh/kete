@@ -64,6 +64,37 @@ fn post(endpoint: &str, event: &str) -> Option<String> {
 pub(crate) fn post_to(path: &str, payload: &[u8]) -> Option<String> {
     let url = env::non_empty(env::API_URL)?;
     let token = env::non_empty(env::API_TOKEN).unwrap_or_default();
+    match send(&url, &token, path, payload) {
+        Sent::Reply(body) => body,
+        // A background job outlives the daemon whose port and token its env
+        // carries: when they are dead, the endpoint the running daemon
+        // recorded (`hook_endpoint`) is where the event goes.
+        Sent::Unreachable => {
+            let current = nebula_core::hook_endpoint::read()?;
+            if current.url() == url && current.token == token {
+                return None;
+            }
+            match send(&current.url(), &current.token, path, payload) {
+                Sent::Reply(body) => body,
+                Sent::Unreachable => None,
+            }
+        }
+    }
+}
+
+/// What one POST came to: the daemon answered (its body when a 200), or the
+/// endpoint was not the running daemon's (nothing listening, or a 401 for a
+/// token from an earlier start).
+enum Sent {
+    Reply(Option<String>),
+    Unreachable,
+}
+
+fn send(url: &str, token: &str, path: &str, payload: &[u8]) -> Sent {
+    send_inner(url, token, path, payload).unwrap_or(Sent::Unreachable)
+}
+
+fn send_inner(url: &str, token: &str, path: &str, payload: &[u8]) -> Option<Sent> {
     let rest = url.strip_prefix("http://")?;
     let (authority, base) = match rest.find('/') {
         Some(slash) => rest.split_at(slash),
@@ -87,7 +118,10 @@ pub(crate) fn post_to(path: &str, payload: &[u8]) -> Option<String> {
     stream.write_all(payload).ok()?;
     let mut response = Vec::new();
     stream.read_to_end(&mut response).ok()?;
-    response_body(&response)
+    if response.starts_with(b"HTTP/1.1 401") {
+        return Some(Sent::Unreachable);
+    }
+    Some(Sent::Reply(response_body(&response)))
 }
 
 /// A word that goes into the query string as it is: ids and event names
@@ -145,6 +179,42 @@ mod tests {
         let denied = b"HTTP/1.1 401 Unauthorized\r\n\r\nnope";
         assert_eq!(response_body(denied), None);
         assert_eq!(response_body(b"garbage"), None);
+    }
+
+    fn serve_once(reply: &'static str) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            // The request is headers then the body: take all of it, or the
+            // close with unread bytes resets the connection under the reply.
+            let mut got = Vec::new();
+            let mut buf = [0u8; 1024];
+            while !got.ends_with(b"{}") {
+                match conn.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => got.extend_from_slice(&buf[..n]),
+                }
+            }
+            let _ = conn.write_all(reply.as_bytes());
+        });
+        url
+    }
+
+    #[test]
+    fn a_stale_endpoint_reads_as_unreachable_and_a_live_one_replies() {
+        let denied = serve_once("HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\n\r\n");
+        assert!(matches!(
+            send(&denied, "old", "/p", b"{}"),
+            Sent::Unreachable
+        ));
+        let ok = serve_once("HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nhi");
+        assert!(matches!(send(&ok, "new", "/p", b"{}"), Sent::Reply(Some(b)) if b == "hi"));
+        let dead = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            format!("http://{}", l.local_addr().unwrap())
+        };
+        assert!(matches!(send(&dead, "x", "/p", b"{}"), Sent::Unreachable));
     }
 
     #[test]

@@ -503,6 +503,60 @@ impl Daemon {
         }
     }
 
+    /// The periodic Claude sweep: each enabled Claude profile's login, and
+    /// the default login once a Claude session runs under it, asked for the
+    /// account's usage (`nebula_core::claude_usage`). The statusLine feed
+    /// moves only while a session draws a status line and reaches the
+    /// daemon; this reads the account itself, so the meter follows the real
+    /// figure whichever session spent it. Blocking; run it off the async
+    /// workers.
+    pub fn poll_claude_accounts(&self) {
+        let config = crate::config::Config::load();
+        let root = nebula_core::profiles::profiles_root();
+        let mut logins: Vec<(Option<String>, PathBuf)> =
+            nebula_core::profiles::enabled_for(&config.profiles, "claude")
+                .into_iter()
+                .filter_map(|p| {
+                    let dir = p
+                        .dirs_in(&root)
+                        .into_iter()
+                        .find(|(var, _)| *var == nebula_core::env::CLAUDE_CONFIG_DIR)?
+                        .1;
+                    Some((Some(p.name.clone()), dir))
+                })
+                .collect();
+        let any_default = self
+            .store
+            .load_tree()
+            .map(|(_, _, agents, _)| {
+                agents
+                    .iter()
+                    .any(|a| a.kind == AgentKind::Claude && a.profile.is_none() && !a.archived)
+            })
+            .unwrap_or(false);
+        if any_default {
+            if let Some(dir) = nebula_core::paths::claude_config_dir() {
+                logins.push((None, dir));
+            }
+        }
+        for (profile, dir) in logins {
+            let now = nebula_core::clock::now_ms();
+            let Some(windows) = nebula_core::claude_usage::fetch(&dir, now) else {
+                continue;
+            };
+            self.record_account(AccountUsage {
+                account: usage::account_key(profile.as_deref(), "claude"),
+                harness: "claude".into(),
+                windows,
+                // The wire's source names are fixed per protocol; this is
+                // a plan reading like the statusLine's.
+                source: UsageSource::Statusline,
+                at: now,
+                plan: None,
+            });
+        }
+    }
+
     /// The on-screen usage notice of a Claude session (`pty::usage`),
     /// folded into its account: it names one window, the rest stay.
     pub(crate) fn on_pty_usage(&self, id: &AgentId, notice: nebula_core::profiles::Usage) {

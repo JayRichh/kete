@@ -157,6 +157,12 @@ async fn serve(opts: DaemonOpts) -> Result<()> {
     let (hook_env, mut hook_rx, mut usage_rx, hook_fd) =
         hooks::start_hook_server_with_usage(store.clone(), inherited_hooks).await?;
     tracing::info!(port = hook_env.port, "hook receiver listening");
+    // Background jobs outlive this process with its predecessor's port and
+    // token in their env: `kete _hook` finds the live ones here.
+    nebula_core::hook_endpoint::write(&nebula_core::hook_endpoint::HookEndpoint {
+        port: hook_env.port,
+        token: hook_env.token.clone(),
+    });
 
     let daemon = registry::Daemon::new(store, hook_env);
 
@@ -321,6 +327,30 @@ async fn serve(opts: DaemonOpts) -> Result<()> {
         });
     }
 
+    // Claude plan usage: each login asked for its account's figures every
+    // minute, and at once when a window came back to the front
+    // (`claude_usage::nudge`).
+    {
+        let daemon = daemon.clone();
+        tokio::spawn(async move {
+            let mut look = tokio::time::interval(std::time::Duration::from_secs(2));
+            let mut last = std::time::Instant::now() - std::time::Duration::from_secs(3600);
+            loop {
+                tokio::select! {
+                    _ = daemon.shutdown.cancelled() => break,
+                    _ = look.tick() => {}
+                }
+                let nudged = nebula_core::claude_usage::take_nudge();
+                if !nudged && last.elapsed() < std::time::Duration::from_secs(60) {
+                    continue;
+                }
+                last = std::time::Instant::now();
+                let daemon = daemon.clone();
+                let _ = tokio::task::spawn_blocking(move || daemon.poll_claude_accounts()).await;
+            }
+        });
+    }
+
     // SESSION SNAPSHOTS: this daemon's sessions' 0.51 refs moved into its
     // namespace, and its refs for sessions it no longer has swept (on the
     // snapshot worker, never another daemon's).
@@ -412,11 +442,18 @@ async fn serve(opts: DaemonOpts) -> Result<()> {
             let mut interval = env_interval(env::WORKTREE_SYNC_MS, 2_000);
             let mut seen: std::collections::HashMap<nebula_core::ProjectId, std::time::SystemTime> =
                 std::collections::HashMap::new();
+            let mut tried_repos = std::collections::HashSet::new();
+            let mut tick: u64 = 0;
             loop {
                 tokio::select! {
                     _ = daemon.shutdown.cancelled() => break,
                     _ = interval.tick() => {}
                 }
+                // Repos agents cut checkouts beside: at boot, then every fifth tick.
+                if tick.is_multiple_of(5) {
+                    daemon.adopt_agent_repos(&mut tried_repos).await;
+                }
+                tick += 1;
                 let Ok((projects, _, _, _)) =
                     daemon.store_blocking(|store| store.load_tree()).await
                 else {

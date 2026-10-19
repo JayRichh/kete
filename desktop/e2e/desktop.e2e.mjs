@@ -752,3 +752,41 @@ flow("the overview's session tree names a subagent's model and effort", { script
   assert.equal(subs[0].parent_agent, id);
   assert.deepEqual(subs[0].run, { model: 'haiku', effort: 'low' });
 });
+
+flow('the session view lists its subagents under the chat, with a splitter and a collapse', { script: 'subagent-open:Explore:haiku:low:Map the hooks;stop;echo' }, async (d) => {
+  const repo = d.makeRepo('split-proj');
+  await d.addRepo(repo);
+  await d.launch('map the hooks');
+  await d.waitForAgent('step stop');
+  // The launch leaves the window in the session: the pane has its header
+  // counts and the subagent's row.
+  const pane = '[data-subagent-pane]';
+  await d.el(pane);
+  await d.waitFor('the tally', async () =>
+    (await d.wd.exec(`return document.querySelector('[data-subagent-tally]')?.innerText ?? '';`)).startsWith('1 subagents · 1 running · 0 done'),
+  );
+  await d.waitForText('Map the hooks');
+  const height = () => d.wd.exec(`return document.querySelector('[data-subagent-pane]').getBoundingClientRect().height;`);
+  const before = await height();
+  // A drag upward on the splitter grows the list (pointer events by hand:
+  // WebDriver's pointer actions don't reach window listeners here).
+  await d.wd.exec(`
+    const bar = document.querySelector('[data-subagent-splitter]');
+    const y = bar.getBoundingClientRect().top;
+    bar.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientY: y, pointerId: 1 }));
+    window.dispatchEvent(new PointerEvent('pointermove', { clientY: y - 60, pointerId: 1 }));
+    window.dispatchEvent(new PointerEvent('pointerup', { clientY: y - 60, pointerId: 1 }));
+  `);
+  await d.waitFor('the pane taller', async () => (await height()) >= before + 50);
+  const kept = JSON.parse(await d.wd.exec(`return localStorage.getItem('kete.subagentPane');`));
+  assert.ok(kept.height >= before + 50, 'the position is remembered');
+  // Collapse chat: the chat leaves, the list takes the pane.
+  await d.click('[data-collapse-chat]');
+  await d.waitFor('the chat collapsed', () =>
+    d.wd.exec(`return getComputedStyle(document.querySelector('[data-chat]')).display === 'none';`),
+  );
+  await d.click('[data-collapse-chat]', 'Show chat');
+  await d.waitFor('the chat back', () =>
+    d.wd.exec(`return getComputedStyle(document.querySelector('[data-chat]')).display !== 'none';`),
+  );
+});

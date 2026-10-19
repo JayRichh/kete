@@ -5,7 +5,7 @@
 // one by one with how they ended. The terminal app's cards follow the
 // same rule (`nebula-tui/src/ui/subagents_view.rs`, `card_lines`).
 
-import type { Subagent } from './api';
+import type { Model, Subagent } from './api';
 
 /** A subagent's word: `closed` for one still open when its session ended
  *  or restarted, which says more than `stopped`. */
@@ -63,4 +63,36 @@ export function cardSubagents(subs: Subagent[], parent: string, hideDone: boolea
 /** Every ended subagent the model holds: what the board's Clear drops. */
 export function endedTotal(subs: Subagent[]): number {
   return subs.filter(isEnded).length;
+}
+
+/** The subagents of sessions that have no card on the board: the
+ *  orchestrator's own (`on_board` leaves it off the lanes, so nothing
+ *  would draw them), running first, then the most recent. */
+export function offBoardSubagents(m: Pick<Model, 'agents' | 'subagents'>): Subagent[] {
+  const off = new Set(m.agents.filter((a) => a.role === 'orchestrator' && !a.archived).map((a) => a.id));
+  return m.subagents
+    .filter((s) => off.has(s.parent_agent))
+    .sort((a, b) => Number(isEnded(a)) - Number(isEnded(b)) || movedAt(b) - movedAt(a));
+}
+
+export interface Tally {
+  total: number;
+  /** Open ones; a subagent paused on its own background work is among them
+   *  (the daemon reports it running while it waits). */
+  running: number;
+  done: number;
+}
+
+export function tally(subs: Subagent[]): Tally {
+  const done = subs.filter(isEnded).length;
+  return { total: subs.length, running: subs.length - done, done };
+}
+
+/** The subagent pane's height, kept between the least that shows its header
+ *  and a few rows, and the most that leaves the chat a strip to type in. */
+export const PANE_MIN = 72;
+export const CHAT_MIN = 120;
+export function clampPane(height: number, available: number): number {
+  const max = Math.max(PANE_MIN, available - CHAT_MIN);
+  return Math.round(Math.min(max, Math.max(PANE_MIN, height)));
 }

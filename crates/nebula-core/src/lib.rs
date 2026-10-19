@@ -1,6 +1,7 @@
 pub mod accounts;
 pub mod board;
 pub mod branch_name;
+pub mod claude_usage;
 pub mod clock;
 pub mod codec;
 pub mod crashlog;
@@ -9,6 +10,7 @@ pub mod entities;
 pub mod env;
 pub mod follow_up;
 pub mod harness;
+pub mod hook_endpoint;
 pub mod host;
 pub mod ids;
 pub mod mem;

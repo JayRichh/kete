@@ -14,6 +14,16 @@ describe('recentCheckouts', () => {
     expect(recentCheckouts(m).map((r) => [r.worktree, r.at, r.label])).toEqual([
       ['b', 30, 'repo / b'],
       ['a', 20, 'repo / a'],
+      ['c', 0, 'repo / c'],
+    ]);
+  });
+
+  it('lists a linked checkout no session ran in after those that have history, and never the repo root', () => {
+    const root = { ...wt('main'), is_main: true };
+    const m = model([root, wt('fresh'), wt('used')], [agent('1', 'used', 5)]);
+    expect(recentCheckouts(m).map((r) => [r.worktree, r.at])).toEqual([
+      ['used', 5],
+      ['fresh', 0],
     ]);
   });
 

@@ -264,6 +264,9 @@ impl Daemon {
         // Removing a project only forgets it in nebula — never touches disk
         // (but for the session snapshot refs Kete itself wrote there).
         self.store.delete_project(id)?;
+        if let Some(repo) = &repo {
+            Self::decline_repo(repo);
+        }
         if let Some((repo, agents)) = refs {
             self.drop_snapshot_refs(repo, agents);
         }
