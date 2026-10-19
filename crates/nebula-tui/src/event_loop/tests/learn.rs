@@ -165,13 +165,14 @@ fn whats_new_reads_at_80x24_and_turns_to_the_keys_and_back() {
         crate::learn::open_whats_new(&mut app);
         let text = draw_80x24(&mut app);
         assert!(text.contains("What's new"), "{text}");
+        let newest = &nebula_config::learn::WHATS_NEW[0];
         assert!(
-            text.contains("0.52") && text.contains("Learn in place"),
+            text.contains(newest.version) && text.contains(newest.title),
             "{text}"
         );
         assert!(text.contains("Esc: close"), "{text}");
         let mut out = Vec::new();
-        for _ in 0..40 {
+        for _ in 0..80 {
             press(&mut app, KeyCode::Char('j'), KeyModifiers::NONE, &mut out);
         }
         let text = draw_80x24(&mut app);

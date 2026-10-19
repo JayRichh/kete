@@ -797,7 +797,14 @@ fn draw_whats_new(f: &mut Frame, app: &mut App, view: crate::app::HelpView) {
         .sum();
     let height = (rows + 4).min(screen.height.saturating_sub(2)).max(6);
     let area = centered_rect(screen, width, height);
-    let inner = render_modal_frame(f, area, " What's new in 0.49 to 0.52 ", th);
+    let releases = nebula_config::learn::WHATS_NEW;
+    let span = match (releases.last(), releases.first()) {
+        (Some(oldest), Some(newest)) => {
+            format!(" What's new in {} to {} ", oldest.version, newest.version)
+        }
+        _ => " What's new ".to_string(),
+    };
+    let inner = render_modal_frame(f, area, &span, th);
     let [body, _, foot] = Layout::vertical([
         Constraint::Min(1),
         Constraint::Length(1),
