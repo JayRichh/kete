@@ -708,7 +708,7 @@ flow('moving a session out of a checkout with uncommitted work says what stays b
   assert.equal((await d.agents()).find((a) => a.id === id).worktree_id, home, 'still where it was');
 });
 
-// 0.55: a follow-up started as a session of its own. From the session's
+// 0.56: a follow-up started as a session of its own. From the session's
 // Follow-up box, Start as new session spawns a sibling in the same
 // checkout (the daemon's SpawnSiblingAgent), the window opens it, and the
 // overview nests it under the session it came from.

@@ -462,7 +462,7 @@ fn handle_global_action(
         | Action::DockEditor
         | Action::RevealInExplorer
         | Action::OpenWithDefault
-        // 0.55: a side question about the selected session.
+        // 0.56: a side question about the selected session.
         | Action::AskAside => super::verbs::run_on_selection(app, action, out),
         // Wake up now: on the account the accounts overlay has picked, else
         // the overlay opens on its Wake view to pick one.

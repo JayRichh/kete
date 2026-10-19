@@ -281,7 +281,7 @@ pub enum Action {
     /// WHAKAOHO's schedule: the wake-up view, on the account it was asked
     /// from.
     WakeSchedule,
-    // 0.55: work that starts from a session as a session of its own.
+    // 0.56: work that starts from a session as a session of its own.
     /// ASK ASIDE: a side question about the session, answered by a new
     /// session beside it in the same checkout that changes no files.
     AskAside,
@@ -2079,7 +2079,7 @@ pub const ACTIONS: &[ActionSpec] = &[
         surface: Surface::Both,
         desktop: &[],
     },
-    // 0.55, appended and unbound: a session's follow-ups that run as
+    // 0.56, appended and unbound: a session's follow-ups that run as
     // sessions of their own.
     ActionSpec {
         action: Action::AskAside,
@@ -3560,7 +3560,7 @@ mod tests {
             matrix,
             ["mark_seen", "copy_pr_url", "archive_done", "wake_schedule"]
         );
-        // 0.55's, after those.
+        // 0.56's, after those.
         let sessions: Vec<&str> = ACTIONS[106..].iter().map(|s| s.id).collect();
         assert_eq!(sessions, ["ask_aside"]);
         assert!(ACTIONS[91..]
@@ -3798,7 +3798,7 @@ mod tests {
         // a live card (Unarchive is an archived one's), the fullest
         // checkout a linked one (Switch branch is the root's). A live
         // card's 15 are its registry rows with Mark seen and Make
-        // orchestrator both showing (0.55 adds Ask aside); read, with
+        // orchestrator both showing (0.56 adds Ask aside); read, with
         // another session pinned, it is 13, and each app adds the
         // checkout's row after (14). A
         // file's and a folder's never fold.
