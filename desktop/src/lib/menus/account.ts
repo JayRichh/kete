@@ -13,8 +13,9 @@ import type { MenuEntry, MenuHeading, MenuItem } from '../ui/ui.svelte';
 import type { MenuSection } from '../actions.gen';
 import { layout, type Row } from './layout';
 import { submenu } from './model';
-import { resetsIn, shownAt } from '../accounts/usage';
-import type { AccountUsage } from '../api';
+import { labelFor } from '../accounts/labels.svelte';
+import { shownAt } from '../accounts/usage';
+import type { AccountUsage, UsageWindow } from '../api';
 
 /** An account as its menu needs it. `profile`: a named profile (false: a
  *  harness's own login). `repos`: every repo, with the account that is its
@@ -35,7 +36,8 @@ export interface AccountState {
   named: boolean;
   renameBlocked: string | null;
   repos: { id: string; name: string; now: string | null }[];
-  /** A window at 100% that resets: when, as `resetsIn` says it. */
+  /** A window at 100% that resets: when, in local time, as the shared
+ *  formatter words it (`9:50 pm - in 3 h 12 m`). */
   limitedResets: string | null;
   /** The session (5-hour) window's use now, whole percent. */
   sessionPercent: number | null;
@@ -76,15 +78,17 @@ const NEAR_AT = 90;
  *  how far the 5-hour window is. A window full with no reset time is not
  *  "limited": nothing says when. */
 export function usageWords(u: AccountUsage | null | undefined, nowMs: number): Pick<AccountState, 'limitedResets' | 'sessionPercent'> {
-  let resets = 0;
+  let latest: UsageWindow | null = null;
   let session: number | null = null;
   for (const w of u?.windows ?? []) {
     const p = shownAt(w, nowMs);
     if (p === null) continue;
     if (w.kind === 'session') session = Math.round(p);
-    if (p >= 100 && w.resets_at != null && w.resets_at * 1000 > nowMs) resets = Math.max(resets, w.resets_at);
+    if (p >= 100 && w.resets_at != null && w.resets_at * 1000 > nowMs) if (!latest || w.resets_at > (latest.resets_at ?? 0)) latest = w;
   }
-  return { limitedResets: resets ? resetsIn(resets, nowMs) : null, sessionPercent: session };
+  const l = labelFor(latest);
+  const when = l?.clock ? `${l.clock} \u00b7 ${l.countdown}` : (l?.countdown ?? 'soon');
+  return { limitedResets: latest ? when : null, sessionPercent: session };
 }
 
 /** The line the menu opens with, when the account is in a state worth

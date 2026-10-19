@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AccountRow, AccountUsage, Agent, UsageWindow } from '../api';
+import { setLabels } from './labels.svelte';
+import type { UsageLabel } from '../api';
 import {
   accountKey,
   bars,
@@ -13,7 +15,7 @@ import {
   sessionsOn,
   starTitle,
   percentAt,
-  resetsIn,
+  headline,
   shownAt,
   staleAt,
   tone,
@@ -39,11 +41,29 @@ const usage = (windows: UsageWindow[], extra: Partial<AccountUsage> = {}): Accou
   ...extra,
 });
 
+/** A label as the Rust formatter would hand it, for the parts a test reads. */
+const label = (compact: string, resets: string, countdown: string): UsageLabel => ({
+  percent: 34,
+  step: 0,
+  clock: resets.replace('resets ', ''),
+  countdown,
+  start: null,
+  iso: null,
+  estimated: false,
+  compact,
+  long: compact,
+  resets,
+  hover: '',
+  banner: null,
+});
+
 describe('bar thresholds', () => {
-  it('goes ember at 80 and red at 95', () => {
+  it('steps at 70, 85 and 95', () => {
     expect(tone(0)).toBe('ok');
-    expect(tone(79.9)).toBe('ok');
-    expect(tone(80)).toBe('warn');
+    expect(tone(69.9)).toBe('ok');
+    expect(tone(70)).toBe('watch');
+    expect(tone(84.9)).toBe('watch');
+    expect(tone(85)).toBe('warn');
     expect(tone(94.9)).toBe('warn');
     expect(tone(95)).toBe('hot');
     expect(tone(120)).toBe('hot');
@@ -131,13 +151,15 @@ describe('accounts', () => {
   });
   it('the tooltip names each window, its reset, the source and the age', () => {
     const now = 1_000_000_000;
+    const five = w('session', 34, { resets_at: now / 1000 + 3 * 3600 + 12 * 60 });
+    setLabels([[five, label('34% resets 9:50 pm', 'resets 9:50 pm', 'in 3 h 12 m')]]);
     const t = usageTitle(
       { name: 'claude', harness: 'claude', profile: false },
-      usage([w('session', 34, { resets_at: now / 1000 + 3 * 3600 + 12 * 60 }), w('weekly', 82, { read_at: now / 1000 - 180 })], { at: now - 180_000 }),
+      usage([five, w('weekly', 82, { read_at: now / 1000 - 180 })], { at: now - 180_000 }),
       now,
     );
     expect(t).toContain("claude: the CLI's own login");
-    expect(t).toContain('5-hour: 34%, resets in 3h 12m');
+    expect(t).toContain('5-hour: 34%, resets 9:50 pm in 3 h 12 m');
     expect(t).toContain('weekly: 82%');
     expect(t).toContain('From the Claude status line, 3m ago');
   });
@@ -179,9 +201,11 @@ describe('accounts', () => {
     expect(starTitle({ ...r, disabled: false, flaggedDefault: false })).toBe('Make work the claude default');
     expect(starTitle({ ...r, default: true, disabled: false })).toBe('work is the claude default');
   });
-  it('resets read as time left', () => {
-    expect(resetsIn(100 + 2 * 86400 + 4 * 3600, 100_000)).toBe('in 2d 4h');
-    expect(resetsIn(5, 10_000)).toBe('now');
+  it('the headline is the fullest 5-hour window of any account', () => {
+    const now = 1_000_000_000;
+    const acct = (account: string, percent: number): AccountUsage => usage([w('session', percent, { read_at: now / 1000 })], { account });
+    expect(headline({}, now)).toBeNull();
+    expect(headline({ a: acct('a', 40), b: acct('b', 87) }, now)?.account).toBe('b');
   });
   it('a context tooltip counts compactions', () => {
     const t = contextTitle(

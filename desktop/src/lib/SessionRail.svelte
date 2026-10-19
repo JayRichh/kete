@@ -7,6 +7,9 @@
   import { api } from './api';
   import { app, openDiff, toast } from './store.svelte';
   import ContextBar from './accounts/ContextBar.svelte';
+  import UsageMeter from './accounts/UsageMeter.svelte';
+  import { labelFor } from './accounts/labels.svelte';
+  import { accountKey, sessionHarness } from './accounts/usage';
   import { rows, watchGit } from './worktrees/rows.svelte';
   import { changedWords, railFacts } from './sessionRail';
 
@@ -15,6 +18,7 @@
   // with the pane full, no overview or board is mounted to.
   onMount(watchGit);
   const f = $derived(railFacts(app.model, agent, rows.git));
+  const plan = $derived(app.model.accounts?.[accountKey(agent.profile, sessionHarness(agent))]?.windows.find((x) => x.kind === 'session') ?? null);
   const kids = $derived(f.children.working + f.children.needs + f.children.done);
 
   const DOT = ` ${String.fromCharCode(0xb7)} `;
@@ -38,6 +42,15 @@
       <span class="truncate font-mono text-[11px] text-muted" title={f.place.path}>{f.place.path}</span>
     {/if}
   </section>
+
+  {#if plan}
+    <section class="flex flex-col gap-1">
+      <h3 class={LABEL}>Plan usage</h3>
+      <UsageMeter window={plan} />
+      {#if labelFor(plan)?.countdown}<span class="font-mono text-[11px] text-muted">{labelFor(plan)?.countdown}</span>{/if}
+      {#if labelFor(plan)?.banner}<span class="text-[12px] text-fail" data-usage-banner>{labelFor(plan)?.banner}</span>{/if}
+    </section>
+  {/if}
 
   {#if f.context && f.context.percent != null}
     <section class="flex flex-col gap-1">

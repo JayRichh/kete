@@ -859,6 +859,25 @@ async fn emit_state(app: tauri::AppHandle, client: Arc<Client>) {
     }
 }
 
+/// The window title carries the usage and its reset in local time, so the
+/// taskbar button and its hover tooltip show them without opening the app.
+/// Redone when usage changes and every 30 s (a reset passes, the title
+/// follows).
+async fn title_loop(app: tauri::AppHandle, client: Arc<Client>) {
+    let mut last = String::new();
+    loop {
+        let now = nebula_core::clock::now_secs() as i64;
+        let title = accounts::window_title(&client.snapshot().accounts, now, nebula_core::usage_window::local);
+        if title != last {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.set_title(&title);
+            }
+            last = title;
+        }
+        let _ = tokio::time::timeout(Duration::from_secs(30), client.changed.notified()).await;
+    }
+}
+
 fn main() {
     // Kete was Bro: carry Bro's dirs over (or keep using them while Bro's
     // daemon runs) before the client works out where the daemon is. This
@@ -902,6 +921,7 @@ fn main() {
             tauri::async_runtime::spawn(update::run(handle.clone()));
             tauri::async_runtime::spawn(daemon::run(client.clone()));
             tauri::async_runtime::spawn(emit_state(handle.clone(), client.clone()));
+            tauri::async_runtime::spawn(title_loop(handle.clone(), client.clone()));
             tauri::async_runtime::spawn(pr_poll::poll_prs(client.clone(), handle));
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.set_title("kete");
@@ -974,6 +994,7 @@ fn main() {
             profiles::profile_set_default,
             accounts::accounts_list,
             accounts::accounts_usage_nudge,
+            accounts::usage_labels,
             // Whakaoho (wake-up)
             wake::wake_overview,
             wake::wake_now,

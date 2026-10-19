@@ -4,22 +4,42 @@
 // `accounts` / `contexts`, and `accounts_list` for the rows.
 
 import type { AccountRow, AccountUsage, Agent, ContextUsage, UsageWindow } from '../api';
+import { labelFor } from './labels.svelte';
 
-export type Tone = 'ok' | 'warn' | 'hot';
+export type Tone = 'ok' | 'watch' | 'warn' | 'hot';
 
-/** Ember from 80%, red from 95%: the same lines the terminal app draws. */
-export const WARN_AT = 80;
+/** Steps at 70, 85 and 95%: the same lines the terminal app draws
+ *  (`nebula_core::usage::tone`). */
+export const WATCH_AT = 70;
+export const WARN_AT = 85;
 export const HOT_AT = 95;
 
 export function tone(percent: number | null | undefined): Tone {
   if (percent == null) return 'ok';
   if (percent >= HOT_AT) return 'hot';
   if (percent >= WARN_AT) return 'warn';
+  if (percent >= WATCH_AT) return 'watch';
   return 'ok';
 }
 
 /** The fill class a tone paints with. */
-export const FILL: Record<Tone, string> = { ok: 'bg-ink', warn: 'bg-ember', hot: 'bg-fail' };
+export const FILL: Record<Tone, string> = { ok: 'bg-ink', watch: 'bg-muted', warn: 'bg-ember', hot: 'bg-fail' };
+
+/** The account whose 5-hour window is fullest, with that window: what the
+ *  header meter, the window title and the Details rail lead with. */
+export function headline(accounts: Record<string, AccountUsage> | undefined, nowMs: number): { account: string; window: UsageWindow } | null {
+  let best: { account: string; window: UsageWindow } | null = null;
+  let bestPct = -1;
+  for (const [account, u] of Object.entries(accounts ?? {})) {
+    const win = u.windows.find((x) => x.kind === 'session');
+    const p = win ? shownAt(win, nowMs) : null;
+    if (win && p != null && p > bestPct) {
+      best = { account, window: win };
+      bestPct = p;
+    }
+  }
+  return best;
+}
 
 /** `21%`, or an em dash when unknown. */
 export function pct(percent: number | null | undefined): string {
@@ -102,18 +122,6 @@ const SOURCE: Record<string, string> = {
 };
 export const sourceLabel = (s: string) => SOURCE[s] ?? s;
 
-/** `in 3h 12m`, `in 2d 4h`, `now`. */
-export function resetsIn(resetsAtSecs: number, nowMs: number): string {
-  const left = Math.floor(resetsAtSecs - nowMs / 1000);
-  if (left <= 0) return 'now';
-  const d = Math.floor(left / 86400);
-  const h = Math.floor((left % 86400) / 3600);
-  const m = Math.floor((left % 3600) / 60);
-  if (d > 0) return `in ${d}d ${h}h`;
-  if (h > 0) return `in ${h}h ${m}m`;
-  return `in ${Math.max(1, m)}m`;
-}
-
 /** `3m ago`, for "last update". */
 export function ago(ms: number, nowMs: number): string {
   const s = Math.max(0, Math.floor((nowMs - ms) / 1000));
@@ -129,7 +137,8 @@ export function usageTitle(row: Pick<AccountRow, 'name' | 'harness' | 'profile'>
   if (!u || !u.windows.length) return `${head}\nNo usage read yet: it shows after the account's next turn.`;
   const lines = u.windows.map((w) => {
     const name = w.label ? `${w.label} ${w.kind === 'monthly' ? 'monthly' : 'weekly'}` : { session: '5-hour', weekly: 'weekly', model_weekly: 'model weekly', monthly: 'monthly' }[w.kind];
-    const reset = w.resets_at && w.resets_at * 1000 > nowMs ? `, resets ${resetsIn(w.resets_at, nowMs)}` : '';
+    const l = labelFor(w);
+    const reset = l && l.resets ? `, ${l.resets} ${l.countdown ?? ''}`.trimEnd() : '';
     const read = staleAt(w, nowMs) ? (w.read_at > 0 ? `, read ${ago(w.read_at * 1000, nowMs)} (stale)` : ', read time unknown') : '';
     return `${name}: ${pct(shownAt(w, nowMs))}${reset}${read}`;
   });

@@ -1326,7 +1326,7 @@ mod tests {
                     label: None,
                     percent: 34.0,
                     resets_at: Some(10),
-                    read_at: 0,
+                    read_at: 0, estimated: false,
                 }],
                 source: UsageSource::Statusline,
                 at: 1,

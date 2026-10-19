@@ -11,6 +11,7 @@ use crate::Res;
 use nebula_core::accounts::{self, LoginCheck, LoginState};
 use nebula_core::profiles::{self, Profile};
 use nebula_core::usage::{self, AccountUsage};
+use nebula_core::usage_window;
 use nebula_core::{ClientRequest, SessionRef, TerminalId};
 use serde::Serialize;
 use std::path::Path;
@@ -186,6 +187,39 @@ pub fn accounts_usage_nudge() {
     nebula_core::claude_usage::nudge();
 }
 
+/// The shared formatter (`usage_window::format`) for the windows the
+/// view is showing, in the OS time zone. One call per refresh, not one per
+/// bar, so the view and the window title cannot word a reset differently.
+#[tauri::command]
+pub fn usage_labels(windows: Vec<usage::UsageWindow>, now_secs: i64) -> Vec<usage_window::Label> {
+    windows
+        .iter()
+        .map(|w| usage_window::format(w, now_secs, usage_window::local))
+        .collect()
+}
+
+/// The window title and taskbar tooltip: `kete · 87% · resets 9:50 pm`
+/// for the fullest account's 5-hour window, plain `kete` with no reading.
+pub fn window_title(
+    accounts: &std::collections::HashMap<String, AccountUsage>,
+    now_secs: i64,
+    tz: impl Fn(i64) -> i32 + Copy,
+) -> String {
+    let fullest = accounts
+        .values()
+        .filter_map(|u| usage_window::headline(&u.windows, now_secs))
+        .filter(|w| w.shown_at(now_secs).is_some())
+        .max_by(|a, b| {
+            a.percent_at(now_secs)
+                .partial_cmp(&b.percent_at(now_secs))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    match fullest {
+        Some(w) => format!("kete · {}", usage_window::format(w, now_secs, tz).compact),
+        None => "kete".into(),
+    }
+}
+
 #[tauri::command]
 pub fn accounts_list(client: tauri::State<'_, Arc<Client>>) -> Vec<AccountRow> {
     list_in(
@@ -352,7 +386,7 @@ mod tests {
                 label: None,
                 percent: 34.0,
                 resets_at: None,
-                read_at: 0,
+                read_at: 0, estimated: false,
             }],
             source: UsageSource::Statusline,
             at: 1,
@@ -584,5 +618,36 @@ mod tests {
         };
         assert_eq!(*session, SessionRef::Terminal(TerminalId("t9".into())));
         assert_eq!(data, b"kete profile login work\r");
+    }
+
+    #[test]
+    fn the_window_title_carries_the_fullest_five_hour_window_in_local_time() {
+        let now = nebula_core::claude_usage::epoch_secs("2026-10-19T07:38:00Z").unwrap();
+        let reset = nebula_core::claude_usage::epoch_secs("2026-10-19T08:50:00Z").unwrap();
+        let account = |name: &str, percent: f32| {
+            (
+                name.to_string(),
+                AccountUsage {
+                    account: name.into(),
+                    harness: "claude".into(),
+                    windows: vec![UsageWindow {
+                        kind: WindowKind::Session,
+                        label: None,
+                        percent,
+                        resets_at: Some(reset),
+                        read_at: now - 60,
+                        estimated: false,
+                    }],
+                    source: UsageSource::Statusline,
+                    at: 0,
+                    plan: None,
+                },
+            )
+        };
+        let tz = |_| 13 * 3600;
+        let none = std::collections::HashMap::new();
+        assert_eq!(window_title(&none, now, tz), "kete");
+        let two = [account("a", 40.0), account("b", 87.0)].into_iter().collect();
+        assert_eq!(window_title(&two, now, tz), "kete · 87% · resets 9:50 pm");
     }
 }

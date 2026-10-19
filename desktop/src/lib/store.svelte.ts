@@ -12,6 +12,7 @@ import { diffItem, isDiffMode, parseDiffItem, type DiffMode, type DiffRange } fr
 import type { Against, ReviewBase } from './diff-base';
 import { knownTheme } from './look';
 import { look, setLookPrefs } from './look.svelte';
+import { refreshLabels } from './accounts/labels.svelte';
 
 /** Workshop's `system`, `light` or `dark`, `one-dark`, `one-light`,
  *  `vscode`, or `import:<id>` (lib/look.ts). */
@@ -176,7 +177,10 @@ export function refreshLaunchables() {
 export function refreshAccounts() {
   api
     .accounts()
-    .then((a) => (app.accounts = a))
+    .then((a) => {
+      app.accounts = a;
+      refreshUsageLabels();
+    })
     .catch(() => {});
 }
 
@@ -363,6 +367,7 @@ nav.setSaver((view, repo, state) => {
 let worktreeSig = '';
 function take(m: Model) {
   app.model = m;
+  refreshUsageLabels();
   askAdo(m);
   // A scope naming a repo, worktree or session that is gone lets it go.
   const pruned = pruneScope(m);
@@ -385,6 +390,16 @@ export function seeOpenSession() {
   if (app.model.agents.find((a) => a.id === s.Agent)?.unseen) markSeen(s);
 }
 
+/** Reword every window on screen (the live push and the rail's list) with
+ *  the shared formatter, as of now: the reset in local time and the countdown. */
+export function refreshUsageLabels() {
+  const windows = [
+    ...Object.values(app.model.accounts ?? {}).flatMap((u) => u.windows),
+    ...app.accounts.flatMap((r) => r.usage?.windows ?? []),
+  ];
+  void refreshLabels(windows, Date.now());
+}
+
 export async function boot() {
   try {
     take(await api.state());
@@ -395,5 +410,8 @@ export async function boot() {
   app.booted = true;
   refreshLaunchables();
   window.addEventListener('focus', seeOpenSession);
-  setInterval(() => (app.now = Date.now()), 15_000);
+  setInterval(() => {
+    app.now = Date.now();
+    refreshUsageLabels();
+  }, 15_000);
 }

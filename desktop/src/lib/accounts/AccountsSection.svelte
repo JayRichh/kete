@@ -12,6 +12,7 @@
   import { copySignIn, openAccounts, runLogin as startLogin, setAccountEnabled, setDefaultAccount } from './actions';
   import { openAddAccount } from './add.svelte';
   import UsageBar from './UsageBar.svelte';
+  import { labelFor } from './labels.svelte';
   import { bars, liveUsage, loginTitle, mergeRows, ownLoginSessionHarnesses, sessionsOn, shownAt, staleAt, starTitle, usageTitle, windowLabel } from './usage';
   import { withKey } from '../shortcuts';
 
@@ -194,6 +195,9 @@
               percent={bottom ? shownAt(bottom, app.now) : null}
               stale={!!bottom && staleAt(bottom, app.now)}
             />
+            {#if top && labelFor(top)?.resets}
+              <span class="truncate pl-[46px] font-mono text-[10px] text-faint" title={labelFor(top)?.hover}>{labelFor(top)?.resets}</span>
+            {/if}
           </div>
         {/if}
         {#if sessionsOpen === r.key && on.length}
