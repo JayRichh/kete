@@ -843,7 +843,13 @@ fn render_footer_usage(f: &mut Frame, app: &mut App, area: Rect, th: Theme) {
         ..area
     };
     // The readout is a button — a click opens the memory modal, as `⇧M` does.
-    let span = Span::styled(usage, Style::default().fg(th.dim));
+    let fg = match footer_account(app).map(|l| l.tone()) {
+        Some(nebula_core::usage::Tone::Watch) => th.accent,
+        Some(nebula_core::usage::Tone::Warn) => th.warn,
+        Some(nebula_core::usage::Tone::Hot) => th.err,
+        _ => th.dim,
+    };
+    let span = Span::styled(usage, Style::default().fg(fg));
     let span = if app.launcher.hover_crumb == Some(HitTarget::FooterUsage) {
         span.style(
             Style::default()

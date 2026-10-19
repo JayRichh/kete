@@ -1295,6 +1295,7 @@ mod tests {
                     percent: s,
                     resets_at: None,
                     read_at: 1,
+                    estimated: false,
                 },
                 UsageWindow {
                     kind: WindowKind::Weekly,
@@ -1302,6 +1303,7 @@ mod tests {
                     percent: w,
                     resets_at: None,
                     read_at: 1,
+                    estimated: false,
                 },
             ],
             source: UsageSource::Statusline,
@@ -1508,7 +1510,7 @@ mod tests {
             "work \u{25b0}\u{25b0}\u{25b1}\u{25b1} 50% \u{25b0}\u{25b1}\u{25b1}\u{25b1} 10%"
         );
         assert_eq!(
-            reading_tone(Some(&reading("w", 81.0, 0.0)), 0),
+            reading_tone(Some(&reading("w", 86.0, 0.0)), 0),
             usage::Tone::Warn
         );
         assert_eq!(reading_tone(None, 0), usage::Tone::Ok);

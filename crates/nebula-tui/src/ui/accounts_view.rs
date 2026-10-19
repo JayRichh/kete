@@ -15,12 +15,13 @@ const BAR: usize = 10;
 fn tone_fg(tone: Tone, th: Theme) -> Color {
     match tone {
         Tone::Ok => th.text,
+        Tone::Watch => th.accent,
         Tone::Warn => th.warn,
         Tone::Hot => th.err,
     }
 }
 
-/// `5h ▰▰▰▱▱▱▱▱▱▱ 31% in 2h 4m`, in the window's tone; dim, with the
+/// `5h ▰▰▰▱▱▱▱▱▱▱ 31% resets 9:50 pm in 2 h 4 m`, in the window's tone; dim, with the
 /// reading's age inline, once it is stale (`UsageWindow::stale_at`).
 fn bar_spans(caption: &str, w: Option<&UsageWindow>, now: i64, th: Theme) -> Vec<Span<'static>> {
     let p = w.and_then(|w| w.shown_at(now));
@@ -40,11 +41,14 @@ fn bar_spans(caption: &str, w: Option<&UsageWindow>, now: i64, th: Theme) -> Vec
             Style::default().fg(fg),
         ),
     ];
-    if let Some(at) = w.and_then(|w| w.resets_at).filter(|at| *at > now) {
-        out.push(Span::styled(
-            format!("  resets {}", usage::resets_in(at, now)),
-            Style::default().fg(th.dim),
-        ));
+    if let Some(w) = w {
+        let label = nebula_core::usage_window::format(w, now, nebula_core::usage_window::local);
+        if let Some(countdown) = &label.countdown {
+            out.push(Span::styled(
+                format!("  {} {countdown}", label.resets),
+                Style::default().fg(th.dim),
+            ));
+        }
     }
     if let Some(w) = w.filter(|_| stale) {
         let read = if w.read_at > 0 {
@@ -357,6 +361,18 @@ fn tab_lines(l: &mut Layout, view: &AccountsView, th: Theme) {
 fn draw_list(l: &mut Layout, view: &AccountsView, now: i64, th: Theme) {
     tab_lines(l, view, th);
     spread_lines(l, view, th);
+    for row in &view.rows {
+        let banner = row.usage.as_ref().and_then(|u| {
+            let w = u.window(usage::WindowKind::Session)?;
+            nebula_core::usage_window::format(w, now, nebula_core::usage_window::local).banner
+        });
+        if let Some(text) = banner {
+            l.push(Line::from(Span::styled(
+                format!(" {}: {text}", row.label()),
+                Style::default().fg(th.err),
+            )));
+        }
+    }
     l.buttons(list_buttons(view), th);
     l.push(Line::from(""));
     if view.rows.is_empty() {

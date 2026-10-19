@@ -2045,6 +2045,32 @@ fn draw_footer_bar(f: &mut Frame, app: &mut App, area: Rect) {
 /// and nebula's total memory footprint (TUI + daemon + every session's
 /// process subtree). None until the first metrics reply arrives.
 fn footer_usage(app: &App) -> Option<String> {
+    let account = footer_account(app).map(|l| format!("5h {}", l.compact));
+    let metrics = footer_metrics(app);
+    match (account, metrics) {
+        (Some(a), Some(m)) => Some(format!("{a}  │  {m}")),
+        (a, m) => a.or(m),
+    }
+}
+
+/// The fullest account's 5-hour window, worded by the shared formatter
+/// (`usage_window::format`): `87% · resets 9:50 pm` in the local zone.
+pub(crate) fn footer_account(app: &App) -> Option<nebula_core::usage_window::Label> {
+    let now = nebula_core::clock::now_secs() as i64;
+    app.launcher
+        .account_usage
+        .iter()
+        .filter_map(|u| nebula_core::usage_window::headline(&u.windows, now))
+        .filter(|w| w.shown_at(now).is_some())
+        .max_by(|a, b| {
+            a.percent_at(now)
+                .partial_cmp(&b.percent_at(now))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|w| nebula_core::usage_window::format(w, now, nebula_core::usage_window::local))
+}
+
+fn footer_metrics(app: &App) -> Option<String> {
     let m = app.jobs.last_metrics.as_ref()?;
     // Prewarm-pool spares are agent CLIs but not agents anyone opened;
     // they get their own count so the agent figure matches the sidebar.

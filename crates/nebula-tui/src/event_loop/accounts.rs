@@ -746,6 +746,7 @@ mod tests {
                     percent,
                     resets_at: None,
                     read_at,
+                    estimated: false,
                 },
                 UsageWindow {
                     kind: WindowKind::Weekly,
@@ -753,6 +754,7 @@ mod tests {
                     percent: 7.0,
                     resets_at: None,
                     read_at,
+                    estimated: false,
                 },
             ],
             source: UsageSource::Statusline,
@@ -897,7 +899,7 @@ mod tests {
             let mut out = Vec::new();
             press(&mut app, KeyCode::Char('U'), KeyModifiers::SHIFT, &mut out);
             on_account_usage(&mut app, vec![own_login(83.0)]);
-            let mut terminal = ratatui::Terminal::new(TestBackend::new(110, 30)).unwrap();
+            let mut terminal = ratatui::Terminal::new(TestBackend::new(150, 30)).unwrap();
             terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
             let text = buffer_text(&terminal);
             assert!(text.contains("Accounts"), "{text}");
