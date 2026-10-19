@@ -469,6 +469,7 @@ mod tests {
             started_at: 1,
             ended_at: (status != SubagentStatus::Running).then_some(2),
             status,
+            run: None,
         }
     }
 
@@ -568,6 +569,36 @@ mod tests {
     /// it folds into the `1 finished` count, the tree shows it under that
     /// fold, `x` asks the daemon to clear it, and the daemon's removal
     /// takes it off the card.
+    /// A card's subagent row names the model and effort it runs at, dim
+    /// after its task, when the daemon knows them.
+    #[test]
+    fn a_card_subagent_row_names_its_model_and_effort() {
+        with_default_config(|| {
+            let mut app = app();
+            let mut x = sub("a1", "x", SubagentStatus::Running);
+            x.run = nebula_core::SubagentRun::known("claude-haiku-4-5".into(), "low".into());
+            hse(&mut app, ServerEvent::SubagentChanged { sub: x });
+            let line = |width: usize| -> String {
+                let th = app.chrome.theme;
+                let lines = crate::ui::subagents_view::card_lines(
+                    &app,
+                    &AgentId("a1".into()),
+                    width,
+                    false,
+                    th,
+                );
+                lines[0].iter().map(|s| s.content.as_ref()).collect()
+            };
+            assert!(
+                line(60).starts_with("⑂ look into x  haiku-4-5 · low"),
+                "{}",
+                line(60)
+            );
+            // A narrow card keeps the name and drops them.
+            assert!(!line(34).contains("haiku"), "{}", line(34));
+        });
+    }
+
     #[test]
     fn a_card_lists_its_subagents_and_x_clears_the_finished_ones() {
         with_default_config(|| {

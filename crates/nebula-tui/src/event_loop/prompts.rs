@@ -101,7 +101,22 @@ pub(crate) fn open_prompt(app: &mut App, kind: PromptKind) {
                     .map_or("session", |a| a.name.as_str())
             )
             .into(),
-            "the agent's next turn: Enter sends it straight to its CLI".into(),
+            "the agent's next turn: Enter sends it straight to its CLI, ^N starts it as a new session"
+                .into(),
+            String::new(),
+        ),
+        PromptKind::AskAside { id } => (
+            format!(
+                "Ask aside · {}",
+                app.tree
+                    .agents
+                    .iter()
+                    .find(|a| &a.id == id)
+                    .map_or("session", |a| a.name.as_str())
+            )
+            .into(),
+            "a side question: a new session beside this one answers it, asked not to change files"
+                .into(),
             String::new(),
         ),
         PromptKind::PrComment { label, .. } => (

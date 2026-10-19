@@ -12,6 +12,10 @@ use ratatui::buffer::Buffer;
 /// The overlay's width; its height follows the rows.
 const WIDTH: u16 = 88;
 
+/// The fewest cells a card's subagent row keeps for the name before it
+/// shows the model and effort beside it.
+const CARD_NAME_MIN: usize = 12;
+
 /// The chip's glyph: a fork, for work split off the session.
 const FORK: &str = "⑂";
 
@@ -175,13 +179,26 @@ pub(crate) fn card_lines(
             .to_string();
             let lead = format!("{FORK} ");
             let room = width.saturating_sub(lead.chars().count() + tail.chars().count() + 1);
+            // The model and effort, dim after the name, while the name
+            // keeps a dozen cells of its own.
+            let run = crate::subagents::sub_run(s);
+            let run = if !run.is_empty() && room >= run.chars().count() + 2 + CARD_NAME_MIN {
+                format!("  {run}")
+            } else {
+                String::new()
+            };
+            let room = room.saturating_sub(run.chars().count());
             let label = truncate(&crate::subagents::sub_label(s), room);
             let pad = width.saturating_sub(
-                lead.chars().count() + label.chars().count() + tail.chars().count(),
+                lead.chars().count()
+                    + label.chars().count()
+                    + run.chars().count()
+                    + tail.chars().count(),
             );
             vec![
                 Span::styled(lead, Style::default().fg(fg(tone_color(tone, th)))),
                 Span::styled(label, Style::default().fg(fg(th.muted))),
+                Span::styled(run, Style::default().fg(th.dim)),
                 Span::raw(" ".repeat(pad)),
                 Span::styled(tail, Style::default().fg(fg(tone_color(tone, th)))),
             ]
@@ -264,7 +281,7 @@ fn row_spans(row: &Row, width: usize, now: i64, th: Theme) -> Vec<Span<'static>>
     } else {
         format!("  {}", n.word)
     };
-    let meta = if n.meta.is_empty() {
+    let mut meta = if n.meta.is_empty() {
         String::new()
     } else {
         format!("  {}", n.meta)
@@ -276,6 +293,20 @@ fn row_spans(row: &Row, width: usize, now: i64, th: Theme) -> Vec<Span<'static>>
         + hidden.chars().count()
         + tail.chars().count()
         + 2;
+    // A parent says what its nested sessions and subagents are doing, so a
+    // folded one still shows that one needs you; dropped when the name
+    // would have too little room left.
+    let tally = crate::subagents::rollup(n).label();
+    let fixed = if n.session
+        && row.has_kids()
+        && !tally.is_empty()
+        && fixed + tally.chars().count() + 3 + 12 <= width
+    {
+        meta.push_str(&format!(" · {tally}"));
+        fixed + tally.chars().count() + 3
+    } else {
+        fixed
+    };
     let label = truncate(&n.label, width.saturating_sub(fixed).max(8));
     let name_style = if n.session {
         Style::default().fg(th.text).add_modifier(Modifier::BOLD)

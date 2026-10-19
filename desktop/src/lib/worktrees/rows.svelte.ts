@@ -1,17 +1,18 @@
 // The window-side state behind the overview's worktree groups and the
 // Worktrees view: which groups are folded (saved under `desktop` in
 // config.json), each checkout's git state (read in the background,
-// cached, again on focus, as a session's turn ends there, and every so
-// often while a view shows it), and
+// cached, again on focus, as a session's turn ends there, as soon as its
+// git stamp moves, and every so often while a view shows it), and
 // the checkouts git is still cutting, drawn as placeholders until the
 // daemon lists them.
 
 import { untrack } from 'svelte';
 import { api } from '../api';
-import { app, toast } from '../store.svelte';
+import { app, sessionWorktree, toast } from '../store.svelte';
 import { worktreeApi, type WorktreeGit } from './api';
 import { pruneKeys, repoKey, setKey } from './groups';
 import { turnMarks, turnedWorktrees, type TurnMarks } from './turns';
+import { STAMP_MS, changedGit, dueRunning, keepStamps, movedStamps } from './watch';
 
 export const rows = $state({
   /** Folded groups: `repo:<id>`, `wt:<id>`. */
@@ -54,7 +55,8 @@ export function loadCollapsed(keys: unknown) {
 
 /** The least time between two reads of one checkout. */
 const MIN_GAP_MS = 4_000;
-/** How often the views read again while one is up. */
+/** How often the views read every checkout again while one is up: the
+ *  backstop behind the stamps (watch.ts). */
 const POLL_MS = 30_000;
 const readAt = new Map<string, number>();
 let reading = false;
@@ -64,38 +66,76 @@ const queued = new Set<string>();
 /** Read the checkouts' git state, skipping any read in the last few
  *  seconds unless `force`. One read at a time; a call during one waits
  *  for the next tick of the poll, or, forced, for that read to end. */
-export async function refreshGit(ids: string[], force = false) {
-  if (!ids.length) return;
+export async function refreshGit(ids: string[], force = false): Promise<string[]> {
+  if (!ids.length) return [];
   if (reading) {
     if (force) for (const id of ids) queued.add(id);
-    return;
+    return [];
   }
   const now = Date.now();
   const due = ids.filter((id) => force || now - (readAt.get(id) ?? 0) >= MIN_GAP_MS);
-  if (!due.length) return;
+  if (!due.length) return [];
   reading = true;
   for (const id of due) readAt.set(id, now);
+  /** Checkouts this read could not read: the backend left one out, or
+   *  the whole call failed. */
+  let failed: string[] = [];
   try {
     const got = await worktreeApi.git(due);
-    rows.git = { ...rows.git, ...got };
+    failed = due.filter((id) => !(id in got));
+    // Only what changed is written: an unchanged row keeps its object.
+    for (const [id, g] of Object.entries(changedGit(rows.git, got))) rows.git[id] = g;
   } catch {
     /* the next poll tries again */
+    failed = due;
   } finally {
     reading = false;
   }
   if (queued.size) {
     const next = [...queued];
     queued.clear();
-    await refreshGit(next, true);
+    failed = [...failed, ...(await refreshGit(next, true))];
   }
+  return failed;
 }
 
 let watchers = 0;
 let timer: ReturnType<typeof setInterval> | undefined;
+let stampTimer: ReturnType<typeof setInterval> | undefined;
+/** Each checkout's stamp as last taken. */
+let stamps: Record<string, string> = {};
+let stamping = false;
+
+/** Take the shown checkouts' stamps and read the ones that moved, and,
+ *  while the window has focus, any checkout a session is working in whose
+ *  slower beat is due. Stamps are file metadata alone, so they are taken
+ *  unfocused too: a commit made in another window shows behind it. */
+async function stampTick() {
+  if (stamping) return;
+  const shown = shownIds();
+  if (!shown.length) return;
+  stamping = true;
+  try {
+    const next = await worktreeApi.stamps(shown);
+    const moved = movedStamps(stamps, next, readAt);
+    const before = stamps;
+    stamps = next;
+    const due = document.hasFocus() ? dueRunning(app.model.agents, shown, readAt, Date.now()) : [];
+    const ids = [...new Set([...moved, ...due])];
+    // A moved checkout whose read failed keeps its old stamp, so the next
+    // tick sees it moved and reads it again.
+    if (ids.length) stamps = keepStamps(before, stamps, await refreshGit(ids, true));
+  } catch {
+    /* the next tick tries again */
+  } finally {
+    stamping = false;
+  }
+}
 /** Checkouts in repos the overview has open (a folded repo's are not
- *  read), and every checkout with a card on the board, folded or not: the
- *  board's Review and Ship lanes read the same git state (src-tauri keeps
- *  the last read). */
+ *  read), every checkout with a card on the board, folded or not (the
+ *  board's Review and Ship lanes read the same git state; src-tauri keeps
+ *  the last read), and the open session's checkout, whose changes its
+ *  Details rail counts. */
 export function shownIds(): string[] {
   const onBoard = new Set<string>();
   const byId = new Map(app.model.agents.map((a) => [a.id, a.worktree_id]));
@@ -103,6 +143,8 @@ export function shownIds(): string[] {
     const w = byId.get(id);
     if (w) onBoard.add(w);
   }
+  const open = sessionWorktree(app.session);
+  if (open) onBoard.add(open);
   return app.model.worktrees
     .filter((w) => onBoard.has(w.id) || !rows.collapsed.includes(repoKey(w.project_id)))
     .map((w) => w.id);
@@ -129,8 +171,10 @@ function watchTurns(): () => void {
 }
 
 /** Keep the git state fresh while a view that shows it is mounted: at
- *  once, on window focus, as a session's turn ends, and every half
- *  minute. Returns the stop. */
+ *  once, on window focus, as a session's turn ends, when a checkout's
+ *  stamp moves (a commit, checkout, reset or stage from anywhere), every
+ *  few seconds where a session is working, and every half minute.
+ *  Returns the stop. */
 export function watchGit(): () => void {
   watchers += 1;
   if (watchers === 1) {
@@ -138,6 +182,7 @@ export function watchGit(): () => void {
     timer = setInterval(() => {
       if (document.hasFocus()) refreshGit(shownIds());
     }, POLL_MS);
+    stampTimer = setInterval(stampTick, STAMP_MS);
     stopTurns = watchTurns();
   }
   // A turn may have ended while this view was unmounted; bypass the read gap.
@@ -147,6 +192,8 @@ export function watchGit(): () => void {
     if (watchers === 0) {
       window.removeEventListener('focus', onFocus);
       clearInterval(timer);
+      clearInterval(stampTimer);
+      stamps = {};
       stopTurns?.();
       stopTurns = undefined;
     }

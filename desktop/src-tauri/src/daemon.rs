@@ -1229,6 +1229,7 @@ mod tests {
             started_at: 1,
             ended_at: (status != SubagentStatus::Running).then_some(2),
             status,
+            run: None,
         }
     }
 
@@ -1248,7 +1249,10 @@ mod tests {
             subagents: vec![sub("child", "s1", SubagentStatus::Running)],
         });
         client.handle(ServerEvent::SubagentChanged {
-            sub: sub("child", "s1", SubagentStatus::Done),
+            sub: SubagentSummary {
+                run: nebula_core::SubagentRun::known("haiku".into(), "low".into()),
+                ..sub("child", "s1", SubagentStatus::Done)
+            },
         });
         client.handle(ServerEvent::SubagentChanged {
             sub: sub("lead", "s1", SubagentStatus::Running),
@@ -1263,6 +1267,10 @@ mod tests {
         assert_eq!(subs[0]["status"], "done");
         assert_eq!(subs[0]["ended_at"], 2);
         assert_eq!(subs[1]["status"], "running");
+        // The model and effort, when known; no `run` at all when not.
+        assert_eq!(subs[0]["run"]["model"], "haiku");
+        assert_eq!(subs[0]["run"]["effort"], "low");
+        assert!(subs[1].get("run").is_none());
 
         client.handle(ServerEvent::EntityRemoved {
             id: EntityId::Agent(AgentId("child".into())),

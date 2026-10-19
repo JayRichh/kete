@@ -4,8 +4,20 @@
 
 import type { Agent, Subagent } from '../api';
 import { toneOf, subagentTone, type Tone } from '../status';
+import { subagentRun } from '../subagents';
 
 export type Status = Tone;
+
+/** What a subagent row says beside its name: `closed` for one still open
+ *  when its session ended or restarted, its type unless the name already
+ *  is it, then the model and effort it runs at when known, the model
+ *  without its `claude-` prefix. The terminal app's rows say the same
+ *  (`nebula-tui/src/subagents.rs`, `sub_meta`). */
+export function subagentMeta(s: Subagent): string {
+  const closedWord = s.status === 'ended_unknown' ? 'closed' : '';
+  const kind = s.description ? s.kind : '';
+  return [closedWord, kind, subagentRun(s)].filter(Boolean).join(' \u00b7 ');
+}
 
 export type Node = {
   id: string;
@@ -191,4 +203,36 @@ export function sortRepos<T extends { name: string; forest: Node[] }>(rows: T[])
     .map((r) => ({ r, rank: forestRank(r.forest) }))
     .sort((a, b) => a.rank - b.rank || a.r.name.localeCompare(b.r.name))
     .map((x) => x.r);
+}
+
+/** A parent row's descendants by state, for its rollup and the session
+ *  rail's children: `working` the running ones, `needs` those waiting on
+ *  you or ended on an error, `done` the finished ones, read or not, and
+ *  those that stopped. The ended subagents a FINISHED GROUP folds all count
+ *  as done; the group row itself is not one of them. */
+export type Rollup = { working: number; needs: number; done: number };
+
+export function rollup(n: Node): Rollup {
+  const r: Rollup = { working: 0, needs: 0, done: 0 };
+  const walk = (d: Node) => {
+    if (d.kind === 'finished') r.done += d.children.length;
+    else {
+      if (d.status === 'running') r.working += 1;
+      else if (d.status === 'needs' || d.status === 'failed') r.needs += 1;
+      else if (d.status === 'done' || d.status === 'unread' || d.status === 'stopped') r.done += 1;
+      d.children.forEach(walk);
+    }
+  };
+  n.children.forEach(walk);
+  return r;
+}
+
+/** `2 working \u00b7 1 needs you \u00b7 3 done`, the empty counts left out; empty
+ *  when no descendant is in any of the three. */
+export function rollupLabel(r: Rollup): string {
+  const parts: string[] = [];
+  if (r.working) parts.push(`${r.working} working`);
+  if (r.needs) parts.push(`${r.needs} needs you`);
+  if (r.done) parts.push(`${r.done} done`);
+  return parts.join(' \u00b7 ');
 }

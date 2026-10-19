@@ -1892,6 +1892,21 @@ impl Default for Config {
 #[doc(hidden)]
 pub const RENAMED_KEYS: &[(&str, &str)] = &[("hide_terminal_glyphs", "hide_card_marks")];
 
+/// Whether a settings write without a path override panics. Always in this
+/// crate's own tests. With `test-support`, only inside a cargo test harness,
+/// which cargo builds under `target/<profile>/deps`. A workspace-wide
+/// `cargo test` unifies the feature into the `kete` binary the Windows
+/// flows drive (`target/<profile>/kete.exe`), and that binary must save
+/// into its own data dir like a release build.
+#[cfg(any(test, feature = "test-support"))]
+fn guard_settings_writes() -> bool {
+    cfg!(test)
+        || std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|dir| dir.ends_with("deps")))
+            .unwrap_or(true)
+}
+
 impl Config {
     pub fn load() -> Self {
         let cfg = load_layers(&settings_path(), &local_settings_path());
@@ -1914,7 +1929,7 @@ impl Config {
         // loud instead of leaving it to be noticed in a diff later.
         #[cfg(any(test, feature = "test-support"))]
         assert!(
-            CONFIG_PATH_OVERRIDE.with(|p| p.borrow().is_some()),
+            !guard_settings_writes() || CONFIG_PATH_OVERRIDE.with(|p| p.borrow().is_some()),
             "Config::save() in a test without a path override: wrap the \
              test body in config::with_config_path (or with_default_config)"
         );
@@ -1952,7 +1967,7 @@ impl Config {
     pub fn reset_to_defaults() -> std::io::Result<Self> {
         #[cfg(any(test, feature = "test-support"))]
         assert!(
-            CONFIG_PATH_OVERRIDE.with(|p| p.borrow().is_some()),
+            !guard_settings_writes() || CONFIG_PATH_OVERRIDE.with(|p| p.borrow().is_some()),
             "Config::reset_to_defaults() in a test without a path override: wrap \
              the test body in config::with_config_path (or with_default_config)"
         );
@@ -1989,7 +2004,7 @@ impl Config {
     pub fn update(change: impl FnOnce(&mut Config)) -> std::io::Result<Config> {
         #[cfg(any(test, feature = "test-support"))]
         assert!(
-            CONFIG_PATH_OVERRIDE.with(|p| p.borrow().is_some()),
+            !guard_settings_writes() || CONFIG_PATH_OVERRIDE.with(|p| p.borrow().is_some()),
             "Config::update() in a test without a path override: wrap the              test body in config::with_config_path, or call update_in"
         );
         Self::update_in(&settings_path(), &local_settings_path(), change)

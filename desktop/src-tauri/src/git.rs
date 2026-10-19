@@ -56,6 +56,12 @@ pub(crate) fn git_command(cwd: &Path, args: &[&str]) -> Command {
     let mut cmd = command("git", cwd);
     cmd.args(["-c", "core.quotepath=off"])
         .args(args)
+        // The window's reads must never take .git/index.lock: a status that
+        // refreshes the index would make an agent's own git add or commit
+        // fail with "index.lock: File exists" (the terminal app's rule, issue
+        // #15). Only the optional locks are skipped; a stage or commit the
+        // window runs still takes the ones it needs.
+        .env("GIT_OPTIONAL_LOCKS", "0")
         // No window to answer a credential prompt in: fail, don't hang.
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "never")
@@ -934,6 +940,94 @@ pub fn has_open_pr_onto(root: &Path, branch: &str) -> Option<bool> {
     Some(!list.is_empty())
 }
 
+/// The files a commit, checkout, reset, stage, fetch or pack touches, read
+/// off the checkout's own git dir and its repository's common dir.
+const OWN_STAMP_FILES: [&str; 3] = ["HEAD", "index", "logs/HEAD"];
+const COMMON_STAMP_FILES: [&str; 2] = ["packed-refs", "FETCH_HEAD"];
+
+/// The git dir and common dir of the checkout at `root`, without running
+/// git: `.git` is the git dir in a main checkout, and in a linked one a
+/// file naming it (`gitdir: <path>`), whose `commondir` names the shared one.
+pub fn git_dirs(root: &Path) -> Option<(PathBuf, PathBuf)> {
+    let dot = root.join(".git");
+    let meta = std::fs::metadata(&dot).ok()?;
+    let own = if meta.is_dir() {
+        dot
+    } else {
+        let text = std::fs::read_to_string(&dot).ok()?;
+        let named = text.trim().strip_prefix("gitdir:")?.trim();
+        let p = PathBuf::from(named);
+        if p.is_absolute() {
+            p
+        } else {
+            root.join(p)
+        }
+    };
+    let common = match std::fs::read_to_string(own.join("commondir")) {
+        Ok(text) => {
+            let p = PathBuf::from(text.trim());
+            if p.is_absolute() {
+                p
+            } else {
+                own.join(p)
+            }
+        }
+        Err(_) => own.clone(),
+    };
+    Some((own, common))
+}
+
+/// A cheap fingerprint of the checkout's git state: each stamp file's
+/// size and modified time, with no git process. It changes when a commit,
+/// checkout, reset, stage or fetch lands; an edit to a working-tree file
+/// leaves it as it was. None when `root` is not a checkout.
+pub fn git_stamp(root: &Path) -> Option<String> {
+    let (own, common) = git_dirs(root)?;
+    let part = |p: PathBuf| match std::fs::metadata(p) {
+        Ok(m) => {
+            let at = m
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_nanos());
+            format!("{}:{at}", m.len())
+        }
+        Err(_) => "-".to_string(),
+    };
+    let own_parts = OWN_STAMP_FILES.iter().map(|f| part(own.join(f)));
+    let common_parts = COMMON_STAMP_FILES.iter().map(|f| part(common.join(f)));
+    let remote_parts = remote_refs_of_branch(&own, &common).into_iter().map(part);
+    Some(
+        own_parts
+            .chain(common_parts)
+            .chain(remote_parts)
+            .collect::<Vec<_>>()
+            .join("|"),
+    )
+}
+
+/// The loose remote-tracking refs named like the checked-out branch
+/// (`refs/remotes/<remote>/<branch>` for each remote), so a push or a
+/// fetch that moves the usual upstream moves the stamp. A packed one is
+/// covered by `packed-refs`. Empty on a detached HEAD.
+fn remote_refs_of_branch(own: &Path, common: &Path) -> Vec<PathBuf> {
+    let Ok(head) = std::fs::read_to_string(own.join("HEAD")) else {
+        return Vec::new();
+    };
+    let Some(branch) = head.trim().strip_prefix("ref: refs/heads/") else {
+        return Vec::new();
+    };
+    let Ok(remotes) = std::fs::read_dir(common.join("refs").join("remotes")) else {
+        return Vec::new();
+    };
+    let mut refs: Vec<PathBuf> = remotes
+        .flatten()
+        .map(|remote| remote.path().join(branch))
+        .collect();
+    refs.sort();
+    refs
+}
+
 /// What deleting a checkout would throw away, for the delete confirm.
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
 pub struct CheckoutState {
@@ -957,6 +1051,84 @@ pub fn checkout_state(root: &Path) -> Result<CheckoutState, String> {
         git_text(root, &["rev-list", "--count", "HEAD", "--not", "--remotes"])
             .ok()
             .and_then(|n| n.parse().ok())
+    };
+    Ok(CheckoutState {
+        changed,
+        untracked,
+        unpushed,
+    })
+}
+
+/// How long a move's read of the checkout it leaves may take, all of its
+/// git together, before the move asks without it.
+pub const MOVE_READ_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Why a [`move_state_with`] git run gave no output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MoveReadError {
+    /// It ran past the read's deadline and was killed.
+    TimedOut,
+    Failed(String),
+}
+
+/// One git run for [`move_state_with`].
+pub type MoveGitRun<'a> = &'a dyn Fn(&Path, &[&str]) -> Result<Output, MoveReadError>;
+
+/// What stays behind when a session moves out of `root`, counted as the
+/// terminal app counts it (`nebula-tui` `delete_check::read_with`): every
+/// entry `git status -uall` lists, untracked files one by one, and the
+/// commits HEAD has that its upstream lacks, or with no upstream that no
+/// remote has. All of its git shares one `timeout`.
+pub fn move_state(root: &Path, timeout: Duration) -> Result<CheckoutState, MoveReadError> {
+    let deadline = std::time::Instant::now() + timeout;
+    let run = move |cwd: &Path, args: &[&str]| {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return Err(MoveReadError::TimedOut);
+        }
+        let mut cmd = git_command(cwd, args);
+        cmd.stdout(Stdio::piped());
+        output_within(cmd, left, "git").map_err(|why| {
+            if std::time::Instant::now() >= deadline {
+                MoveReadError::TimedOut
+            } else {
+                MoveReadError::Failed(why)
+            }
+        })
+    };
+    move_state_with(root, &run)
+}
+
+/// [`move_state`] through `run`.
+pub fn move_state_with(root: &Path, run: MoveGitRun<'_>) -> Result<CheckoutState, MoveReadError> {
+    let status = run(root, &["status", "--porcelain=v1", "-z", "-uall"])?;
+    if !status.status.success() {
+        return Err(MoveReadError::Failed(git_failure(&["status"], &status)));
+    }
+    let (changed, untracked) = count_status(&status.stdout);
+    let count = |args: &[&str]| -> Result<Option<u32>, MoveReadError> {
+        match run(root, args) {
+            Ok(out) if out.status.success() => {
+                Ok(String::from_utf8_lossy(&out.stdout).trim().parse().ok())
+            }
+            Ok(_) | Err(MoveReadError::Failed(_)) => Ok(None),
+            Err(MoveReadError::TimedOut) => Err(MoveReadError::TimedOut),
+        }
+    };
+    let unpushed = match count(&["rev-list", "--count", "@{upstream}..HEAD"])? {
+        Some(n) => Some(n),
+        None => {
+            let remotes = match run(root, &["remote"]) {
+                Ok(out) => String::from_utf8_lossy(&out.stdout).trim().to_string(),
+                Err(MoveReadError::TimedOut) => return Err(MoveReadError::TimedOut),
+                Err(MoveReadError::Failed(_)) => String::new(),
+            };
+            if remotes.is_empty() {
+                None
+            } else {
+                count(&["rev-list", "--count", "HEAD", "--not", "--remotes"])?
+            }
+        }
     };
     Ok(CheckoutState {
         changed,
@@ -1778,6 +1950,88 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_moved_remote_ref_of_the_branch_moves_the_stamp() {
+        let repo = Repo::new("stamp-remote");
+        repo.write("a.txt", b"a\n");
+        repo.commit("one");
+        let branch =
+            String::from_utf8(git(&repo.0, &["branch", "--show-current"]).unwrap()).unwrap();
+        let tracking = repo.0.join(".git/refs/remotes/origin").join(branch.trim());
+        std::fs::create_dir_all(tracking.parent().unwrap()).unwrap();
+        let head = String::from_utf8(git(&repo.0, &["rev-parse", "HEAD"]).unwrap()).unwrap();
+        std::fs::write(&tracking, &head).unwrap();
+        let before = git_stamp(&repo.0).unwrap();
+        std::fs::write(&tracking, format!("{}\n\n", head.trim())).unwrap();
+        assert_ne!(
+            git_stamp(&repo.0).unwrap(),
+            before,
+            "a push moved origin's ref"
+        );
+    }
+
+    #[test]
+    fn a_move_read_past_its_deadline_times_out() {
+        let repo = Repo::new("move-deadline");
+        repo.write(
+            "a.txt", b"a
+",
+        );
+        repo.commit("one");
+        assert_eq!(
+            move_state(&repo.0, Duration::ZERO),
+            Err(MoveReadError::TimedOut)
+        );
+        // In time, it reads: one untracked file in a new folder counts once.
+        repo.write(
+            "new/b.txt",
+            b"b
+",
+        );
+        assert_eq!(
+            move_state(&repo.0, MOVE_READ_TIMEOUT).unwrap(),
+            CheckoutState {
+                changed: 0,
+                untracked: 1,
+                unpushed: None,
+            }
+        );
+    }
+
+    #[test]
+    fn a_git_that_times_out_partway_is_a_timeout_not_a_clean_read() {
+        let ok = |stdout: &str| Output {
+            status: Command::new("git")
+                .arg("--version")
+                .output()
+                .unwrap()
+                .status,
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: Vec::new(),
+        };
+        let root = std::env::temp_dir();
+        let status_then_hang = |_: &Path, args: &[&str]| match args[0] {
+            "status" => Ok(ok("?? a.txt ")),
+            _ => Err(MoveReadError::TimedOut),
+        };
+        assert_eq!(
+            move_state_with(&root, &status_then_hang),
+            Err(MoveReadError::TimedOut)
+        );
+        let status_then_fail = |_: &Path, args: &[&str]| match args[0] {
+            "status" => Ok(ok(" M a ?? b ")),
+            _ => Err(MoveReadError::Failed("no git".into())),
+        };
+        assert_eq!(
+            move_state_with(&root, &status_then_fail),
+            Ok(CheckoutState {
+                changed: 1,
+                untracked: 1,
+                unpushed: None,
+            })
+        );
+    }
+
+    #[test]
     fn count_status_counts_tracked_and_untracked_once() {
         assert_eq!(
             count_status(b"R  new\0old\0 M a\0A  b\0?? c\0?? d/\0"),
@@ -1901,5 +2155,88 @@ u UU N... 100644 100644 100644 100644 a a a c.txt\0\
     fn checkout_state_of_a_missing_folder_is_an_error() {
         let gone = std::env::temp_dir().join("kete-git-test-no-such-checkout");
         assert!(checkout_state(&gone).is_err());
+    }
+
+    #[test]
+    fn a_main_checkout_stamp_moves_on_commit_and_stage_but_not_on_an_edit() {
+        let repo = Repo::new("stamp");
+        repo.write("a.txt", b"a\n");
+        repo.commit("one");
+        let (own, common) = git_dirs(&repo.0).unwrap();
+        assert_eq!(own, repo.0.join(".git"));
+        assert_eq!(common, own);
+        let first = git_stamp(&repo.0).unwrap();
+        assert_eq!(git_stamp(&repo.0).unwrap(), first, "nothing changed");
+        // A working-tree edit touches no git file.
+        repo.write("a.txt", b"edited\n");
+        assert_eq!(git_stamp(&repo.0).unwrap(), first);
+        repo.git(&["add", "a.txt"]);
+        let staged = git_stamp(&repo.0).unwrap();
+        assert_ne!(staged, first, "staging rewrites the index");
+        repo.git(&["commit", "-q", "-m", "two"]);
+        assert_ne!(
+            git_stamp(&repo.0).unwrap(),
+            staged,
+            "a commit appends to logs/HEAD"
+        );
+    }
+
+    #[test]
+    fn a_linked_checkout_reads_its_own_git_dir_and_the_shared_common_dir() {
+        let repo = Repo::new("stamp-main");
+        repo.write("a.txt", b"a\n");
+        repo.commit("one");
+        let linked = repo.0.with_file_name(format!(
+            "{}-linked",
+            repo.0.file_name().unwrap().to_string_lossy()
+        ));
+        let _ = std::fs::remove_dir_all(&linked);
+        repo.git(&[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "topic",
+            &linked.to_string_lossy(),
+        ]);
+        let (own, common) = git_dirs(&linked).unwrap();
+        assert!(
+            std::fs::canonicalize(&own)
+                .unwrap()
+                .starts_with(std::fs::canonicalize(repo.0.join(".git/worktrees")).unwrap()),
+            "a linked checkout has its own git dir under the common one"
+        );
+        assert_eq!(
+            std::fs::canonicalize(&common).unwrap(),
+            std::fs::canonicalize(repo.0.join(".git")).unwrap()
+        );
+        let before = git_stamp(&linked).unwrap();
+        let main_before = git_stamp(&repo.0).unwrap();
+        std::fs::write(linked.join("b.txt"), b"b\n").unwrap();
+        git_raw(&linked, &["add", "b.txt"]).unwrap();
+        git_raw(&linked, &["commit", "-q", "-m", "two"]).unwrap();
+        assert_ne!(git_stamp(&linked).unwrap(), before);
+        assert_eq!(
+            git_stamp(&repo.0).unwrap(),
+            main_before,
+            "the main checkout's own files are untouched"
+        );
+        let _ = std::fs::remove_dir_all(&linked);
+    }
+
+    #[test]
+    fn the_windows_git_takes_no_optional_locks() {
+        let cmd = git_command(Path::new("."), &["status"]);
+        let locks = cmd
+            .get_envs()
+            .find(|(k, _)| *k == "GIT_OPTIONAL_LOCKS")
+            .and_then(|(_, v)| v);
+        assert_eq!(locks.and_then(|v| v.to_str()), Some("0"));
+    }
+
+    #[test]
+    fn a_folder_that_is_no_checkout_has_no_stamp() {
+        let gone = std::env::temp_dir().join("kete-git-test-no-such-stamp");
+        assert_eq!(git_stamp(&gone), None);
     }
 }

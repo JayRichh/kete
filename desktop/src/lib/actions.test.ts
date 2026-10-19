@@ -15,6 +15,18 @@ vi.mock('./api', () => {
       boardScope: async (s: { repo?: string; worktree?: string }) => {
         calls.push(`scope ${s.repo}/${s.worktree}`);
       },
+      followUp: async (id: string, text: string) => {
+        calls.push(`follow-up ${id} ${text}`);
+      },
+      spawnFollowUp: async (id: string, text: string) => {
+        calls.push(`spawn ${id} ${text}`);
+        return 'a2';
+      },
+      askAside: async (id: string, question: string) => {
+        calls.push(`aside ${id} ${question}`);
+        return 'a3';
+      },
+      markSeen: async () => {},
       restartAgent: async (id: string) => {
         calls.push(`restart ${id}`);
         if (failRestart) throw 'gone';
@@ -24,7 +36,7 @@ vi.mock('./api', () => {
 });
 
 const { app } = await import('./store.svelte');
-const { ui } = await import('./ui/ui.svelte');
+const { ui, ALT_CHOICE } = await import('./ui/ui.svelte');
 const actions = await import('./actions');
 const { leafItems } = await import('./menus/model');
 
@@ -119,7 +131,7 @@ describe('menus from the registry', () => {
     const w = words(menu);
     // Its diff is its own row, after the reply (the registry's Go
     // section), not left to the checkout's rows.
-    expect(w.slice(0, 3)).toEqual(['Open', 'Follow-up prompt\u2026', 'Diff']);
+    expect(w.slice(0, 4)).toEqual(['Open', 'Follow-up prompt\u2026', 'Ask aside\u2026', 'Diff']);
     expect(w).toContain('Restart agent');
     expect(w).toContain('Rename\u2026');
     expect(w.indexOf('Archive')).toBeLessThan(w.indexOf('Delete\u2026'));
@@ -232,5 +244,48 @@ describe('menus from the registry', () => {
     expect(actions.runVerb({ kind: 'agent', id: 'a' }, 'unarchive')).toBe(true);
     await Promise.resolve();
     expect(calls).toEqual(['unarchive a']);
+  });
+});
+
+describe('follow-ups that run as sessions of their own', () => {
+  /** Fill the prompt that is up and send it, by its second button when `alt`. */
+  async function send(values: Record<string, string>, alt = false) {
+    for (let i = 0; i < 50 && !ui.dialog; i++) await Promise.resolve();
+    const d = ui.dialog;
+    if (d?.kind !== 'prompt') throw new Error('no prompt up');
+    d.resolve(alt ? { ...values, [ALT_CHOICE]: '1' } : values);
+    ui.dialog = null;
+  }
+
+  it('the follow-up box sends a turn, or starts it as a new session beside the card and opens that', async () => {
+    setAgents([agent('a', { alive: true })]);
+    let done = actions.followUp('a');
+    for (let i = 0; i < 50 && !ui.dialog; i++) await Promise.resolve();
+    expect(ui.dialog?.kind === 'prompt' && ui.dialog.alt?.label).toBe('Start as new session');
+    await send({ text: 'run the tests' });
+    await done;
+    expect(calls).toEqual(['follow-up a run the tests']);
+
+    calls.length = 0;
+    done = actions.followUp('a');
+    await send({ text: 'write the docs' }, true);
+    await done;
+    expect(calls).toEqual(['spawn a write the docs']);
+    expect(app.session).toEqual({ Agent: 'a2' });
+  });
+
+  it('Ask aside sends the question for a session beside this one and opens it', async () => {
+    setAgents([agent('a', { alive: true })]);
+    const done = actions.askAside('a');
+    await send({ question: 'why two refreshes?' });
+    await done;
+    expect(calls).toEqual(['aside a why two refreshes?']);
+    expect(app.session).toEqual({ Agent: 'a3' });
+  });
+
+  it('a session menu carries Ask aside after the follow-up', () => {
+    setAgents([agent('a', { alive: true })]);
+    const labels = leafItems(actions.menuFor({ kind: 'agent', id: 'a' })).map((e) => e.label);
+    expect(labels.indexOf('Ask aside\u2026')).toBe(labels.indexOf('Follow-up prompt\u2026') + 1);
   });
 });

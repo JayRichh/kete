@@ -48,6 +48,8 @@ fn prompt_value_or_cancel(app: &mut App, prompt: PromptDialog) -> Option<(Prompt
             PromptKind::IssueComment { .. } => (None, "comment"),
             // And an empty follow-up: the turn is simply not sent.
             PromptKind::FollowUp { .. } => (None, "follow-up"),
+            // An empty side question is not asked.
+            PromptKind::AskAside { .. } => (None, "question"),
             _ => (Some("Claude Cloud needs a task"), "Claude Cloud task"),
         };
         let error = if let Some(needs) = needs.filter(|_| value.is_empty()) {
@@ -259,6 +261,7 @@ fn dispatch_prompt(
                 open_follow_up(app, id, value);
             }
         }
+        PromptKind::AskAside { id } => ask_aside(app, id, value, out),
         PromptKind::RenameAgent { id } => optimistic::rename_agent(app, id, value, out),
         PromptKind::RenameTerminal { id } => optimistic::rename_terminal(app, id, value, out),
         PromptKind::CritterName { id } => crate::critters::rename(app, id, &value),
@@ -655,12 +658,15 @@ pub(crate) fn run_menu_action(app: &mut App, action: MenuAction, out: &mut Vec<C
         MenuAction::ClearOrchestrator => orchestrator::clear_orchestrator(app, out),
         MenuAction::SendCloudMessage(id) => open_prompt(app, PromptKind::CloudMessage { id }),
         MenuAction::DuplicateAgent(id) => launcher::duplicate_agent(app, id),
+        MenuAction::AskAside(id) => open_prompt(app, PromptKind::AskAside { id }),
         MenuAction::MoveAgentPicker(id) => launcher::open_move_picker(app, id),
         MenuAction::SwitchAccountPicker(id) => crate::account_switch::open_picker(app, id),
         MenuAction::SwitchAccount { id, profile } => {
             crate::account_switch::confirm(app, id, profile)
         }
-        MenuAction::MoveAgent { id, worktree } => launcher::move_agent(app, id, worktree, out),
+        MenuAction::MoveAgent { id, worktree } => {
+            super::move_check::start(app, id, worktree, false, out)
+        }
         MenuAction::Reorder(target, dir) => {
             crate::order::step(app, &target, dir, out);
         }

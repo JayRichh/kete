@@ -51,6 +51,8 @@ export interface Agent {
   sort_order: number;
   /** The session that started this one with `kete spawn`; null for a root. */
   parent: string | null;
+  /** The Claude Cloud session a `claude --cloud` row launched; absent or null for a local one. */
+  cloud_session_id?: string | null;
 }
 /** A Claude in-session subagent, hung off the session it runs inside. */
 export interface Subagent {
@@ -64,6 +66,14 @@ export interface Subagent {
   started_at: number;
   ended_at: number | null;
   status: 'running' | 'done' | 'failed' | 'ended_unknown';
+  /** The model and effort it runs at (protocol 64); absent when neither
+   *  is known, and from an older daemon. */
+  run?: SubagentRun | null;
+}
+/** What a subagent runs on; either may be empty. */
+export interface SubagentRun {
+  model: string;
+  effort: string;
 }
 export interface TerminalTab {
   id: string;
@@ -634,6 +644,10 @@ export const api = {
   renameTerminal: (terminal: string, name: string) => invoke<void>('rename_terminal', { terminal, name }),
   closeTerminal: (terminal: string) => invoke<void>('close_terminal', { terminal }),
   followUp: (agent: string, text: string) => invoke<void>('follow_up', { agent, text }),
+  /** `prompt` as a new session beside `agent`, nested under it; its id. */
+  spawnFollowUp: (agent: string, prompt: string) => invoke<string>('spawn_follow_up', { agent, prompt }),
+  /** A side question about `agent`, answered by a new session beside it; its id. */
+  askAside: (agent: string, question: string) => invoke<string>('ask_aside', { agent, question }),
   // Projects and worktrees
   suggestBranch: (project: string) => invoke<string>('suggest_branch', { project }),
   createWorktree: (project: string, branch: string, base: string | null) =>

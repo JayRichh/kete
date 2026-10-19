@@ -105,6 +105,7 @@ describe('the session menu (\u00a75.1)', () => {
       '# running',
       'Open',
       'Follow-up prompt\u2026',
+      'Ask aside\u2026',
       '---',
       'Diff',
       'Pull request >',

@@ -293,6 +293,7 @@ pub(crate) fn menu_action(app: &App, action: Action, t: &Target) -> Option<MenuA
                 }),
                 Action::Restart => local.then_some(MenuAction::RestartAgent(id)),
                 Action::DuplicateSession => Some(MenuAction::DuplicateAgent(id)),
+                Action::AskAside => local.then_some(MenuAction::AskAside(id)),
                 Action::MoveSession => local.then_some(MenuAction::MoveAgentPicker(id)),
                 Action::MoveToAccount => local.then_some(MenuAction::SwitchAccountPicker(id)),
                 Action::Rename => Some(MenuAction::RenameAgent(id)),

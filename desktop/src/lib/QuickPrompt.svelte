@@ -8,6 +8,7 @@
   import { scopedRepo, scopedWorktree } from './scope';
   import { sendToOrchestrator } from './orch.svelte';
   import { whileCutting } from './worktrees/rows.svelte';
+  import { recentCheckouts, type RecentCheckout } from './recent';
 
   // The quick prompt: pinned under the main column. Pick where and with
   // what, type the task, Enter starts it (Shift+Enter for a new line). P
@@ -53,6 +54,17 @@
   const isTerminal = $derived(harness === TERMINAL && !toOrch);
   const expanded = $derived((focused || !!prompt.trim()) && !toOrch);
   const usablePresets = $derived(presets.filter((p) => p.usable !== false));
+  /** The checkouts sessions last ran in, one click each. */
+  const recent = $derived(recentCheckouts(app.model));
+
+  /** A Recent pick: its repo and checkout, held like a repo picked by hand. */
+  function pickRecent(r: RecentCheckout) {
+    project = r.project;
+    picked = true;
+    // The worktree list follows the repo; set the checkout once it has.
+    queueMicrotask(() => (worktree = r.worktree));
+    box?.focus();
+  }
 
   function loadPresets() {
     api
@@ -286,58 +298,76 @@
   {#if expanded}
     <!-- Over the column, not in it: opening it must not shrink the split
          (a session terminal would refit and redraw on every focus). -->
-    <div
-      class="absolute right-0 bottom-full left-0 z-10 flex h-8 items-stretch border-t border-rule-strong bg-bg"
-      role="group"
-      aria-label="Launch options"
-    >
-      <span class="relative flex max-w-60 min-w-0 items-center border-r border-rule">
-        <span class={optLabel}>model</span>
-        <select class="{pick} font-mono text-[12px]" bind:value={model} disabled={isTerminal || !models.length} aria-label="Model">
-          {#each models as m (m)}<option value={m}>{m}{m === info?.choices?.model ? ' (set)' : ''}</option>{/each}
-        </select>
-        {@render chevron()}
-      </span>
-      <span class="relative flex max-w-52 min-w-0 items-center border-r border-rule">
-        <span class={optLabel}>effort</span>
-        <select class="{pick} font-mono text-[12px]" bind:value={effort} disabled={isTerminal || !efforts.length} aria-label="Effort">
-          {#if !efforts.length}<option value={effort}>n/a</option>{/if}
-          {#each efforts as x (x)}<option value={x}>{x}{x === info?.choices?.effort ? ' (set)' : ''}</option>{/each}
-        </select>
-        {@render chevron()}
-      </span>
-      <span class="relative flex max-w-60 min-w-0 items-center border-r border-rule">
-        <span class={optLabel}>profile</span>
-        <select
-          class={pick}
-          bind:value={profile}
-          disabled={isTerminal || !profiles.length}
-          aria-label="Profile"
-          title={profileOpts.find((o) => o.value === profile)?.title}
-        >
-          {#each profileOpts as o (o.value)}<option value={o.value} title={o.title}>{o.label}</option>{/each}
-        </select>
-        {@render chevron()}
-      </span>
-      <span class="relative flex max-w-52 min-w-0 items-center border-r border-rule">
-        <span class={optLabel}>preset</span>
-        <select class={pick} bind:value={preset} onchange={pickPreset} disabled={isTerminal || !usablePresets.length} aria-label="Agent preset">
-          <option value="">{usablePresets.length ? 'none' : 'no presets'}</option>
-          {#each usablePresets as p (p.name)}<option value={p.name}>{p.name}</option>{/each}
-        </select>
-        {@render chevron()}
-      </span>
-      <label class="flex items-center gap-2 border-r border-rule px-3 text-[12px] text-ink">
-        <input
-          type="checkbox"
-          class="size-3.5 accent-[var(--color-ink)]"
-          checked={worktree === NEW_WT}
-          onchange={(e) => (worktree = (e.currentTarget as HTMLInputElement).checked ? NEW_WT : (worktrees[0]?.id ?? ''))}
-        />
-        new worktree
-      </label>
-      <span class="flex-1"></span>
-      <span class="flex items-center pr-3 font-mono text-[11px] text-muted">Enter start &middot; Shift+Enter new line</span>
+    <div class="absolute right-0 bottom-full left-0 z-10 flex flex-col">
+      {#if recent.length && !toOrch}
+        <div class="flex h-8 items-center gap-1 overflow-x-auto border-t border-rule-strong bg-bg px-3" role="group" aria-label="Recent checkouts">
+          <span class="pr-1 font-mono text-[11px] text-muted">recent</span>
+          {#each recent as r (r.worktree)}
+            <button
+              type="button"
+              class="h-6 flex-none border border-rule px-2 font-mono text-[12px] whitespace-nowrap hover:bg-surface {r.worktree === worktree
+                ? 'text-ink'
+                : 'text-muted'}"
+              aria-pressed={r.worktree === worktree}
+              title="Start in {r.label}"
+              onclick={() => pickRecent(r)}>{r.label}</button
+            >
+          {/each}
+        </div>
+      {/if}
+      <div
+        class="flex h-8 items-stretch border-t border-rule-strong bg-bg"
+        role="group"
+        aria-label="Launch options"
+      >
+        <span class="relative flex max-w-60 min-w-0 items-center border-r border-rule">
+          <span class={optLabel}>model</span>
+          <select class="{pick} font-mono text-[12px]" bind:value={model} disabled={isTerminal || !models.length} aria-label="Model">
+            {#each models as m (m)}<option value={m}>{m}{m === info?.choices?.model ? ' (set)' : ''}</option>{/each}
+          </select>
+          {@render chevron()}
+        </span>
+        <span class="relative flex max-w-52 min-w-0 items-center border-r border-rule">
+          <span class={optLabel}>effort</span>
+          <select class="{pick} font-mono text-[12px]" bind:value={effort} disabled={isTerminal || !efforts.length} aria-label="Effort">
+            {#if !efforts.length}<option value={effort}>n/a</option>{/if}
+            {#each efforts as x (x)}<option value={x}>{x}{x === info?.choices?.effort ? ' (set)' : ''}</option>{/each}
+          </select>
+          {@render chevron()}
+        </span>
+        <span class="relative flex max-w-60 min-w-0 items-center border-r border-rule">
+          <span class={optLabel}>profile</span>
+          <select
+            class={pick}
+            bind:value={profile}
+            disabled={isTerminal || !profiles.length}
+            aria-label="Profile"
+            title={profileOpts.find((o) => o.value === profile)?.title}
+          >
+            {#each profileOpts as o (o.value)}<option value={o.value} title={o.title}>{o.label}</option>{/each}
+          </select>
+          {@render chevron()}
+        </span>
+        <span class="relative flex max-w-52 min-w-0 items-center border-r border-rule">
+          <span class={optLabel}>preset</span>
+          <select class={pick} bind:value={preset} onchange={pickPreset} disabled={isTerminal || !usablePresets.length} aria-label="Agent preset">
+            <option value="">{usablePresets.length ? 'none' : 'no presets'}</option>
+            {#each usablePresets as p (p.name)}<option value={p.name}>{p.name}</option>{/each}
+          </select>
+          {@render chevron()}
+        </span>
+        <label class="flex items-center gap-2 border-r border-rule px-3 text-[12px] text-ink">
+          <input
+            type="checkbox"
+            class="size-3.5 accent-[var(--color-ink)]"
+            checked={worktree === NEW_WT}
+            onchange={(e) => (worktree = (e.currentTarget as HTMLInputElement).checked ? NEW_WT : (worktrees[0]?.id ?? ''))}
+          />
+          new worktree
+        </label>
+        <span class="flex-1"></span>
+        <span class="flex items-center pr-3 font-mono text-[11px] text-muted">Enter start &middot; Shift+Enter new line</span>
+      </div>
     </div>
   {/if}
   <div class="flex min-h-11 items-stretch">

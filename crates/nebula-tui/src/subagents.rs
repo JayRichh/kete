@@ -245,14 +245,7 @@ pub fn build_forest(agents: &[&Agent], subs: &Subagents, hide_done: bool) -> Vec
             depth,
             tone: sub_tone(s),
             label: sub_label(s),
-            // The type, unless the label already is it (no task seen).
-            meta: if s.kind.is_empty() {
-                "subagent".into()
-            } else if s.description.is_empty() {
-                String::new()
-            } else {
-                s.kind.clone()
-            },
+            meta: sub_meta(s),
             when: s.ended_at.unwrap_or(s.started_at),
             opens: opens.clone(),
             session: false,
@@ -330,6 +323,38 @@ pub fn sub_label(s: &SubagentSummary) -> String {
     }
 }
 
+/// What a subagent row says it is beside its name: its type (`subagent`
+/// when the CLI named none, nothing when the name already is the type),
+/// then the model and effort it runs at when known, the model without its
+/// `claude-` prefix. The desktop's rows say the same (`overview/tree.ts`,
+/// `subagentMeta`).
+pub(crate) fn sub_meta(s: &SubagentSummary) -> String {
+    let kind = if s.kind.is_empty() {
+        "subagent"
+    } else if s.description.is_empty() {
+        ""
+    } else {
+        s.kind.as_str()
+    };
+    let run = sub_run(s);
+    [kind, run.as_str()]
+        .into_iter()
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+/// The model (without its `claude-` prefix) and effort a subagent runs at,
+/// `haiku-4-5 · low`; empty when neither is known.
+pub(crate) fn sub_run(s: &SubagentSummary) -> String {
+    let model = s.model().strip_prefix("claude-").unwrap_or(s.model());
+    [model, s.effort()]
+        .into_iter()
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
 /// One drawn row of the tree.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Row {
@@ -375,6 +400,58 @@ pub fn flatten(forest: &[Node], open: &HashSet<String>, closed: &HashSet<String>
         walk(r, open, closed, &mut out);
     }
     out
+}
+
+/// A parent row's descendants by state, the desktop's `rollup`: `working`
+/// the running ones, `needs` those waiting on you or ended on an error,
+/// `done` the finished ones, read or not, and those that stopped. The
+/// ended subagents a FINISHED GROUP folds all count as done; the group row
+/// itself is not one of them.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Rollup {
+    pub working: usize,
+    pub needs: usize,
+    pub done: usize,
+}
+
+impl Rollup {
+    /// `2 working · 1 needs you · 3 done`, the empty counts left out; empty
+    /// when no descendant is in any of the three (`rollupLabel`).
+    pub fn label(self) -> String {
+        let parts: Vec<String> = [
+            (self.working, "working"),
+            (self.needs, "needs you"),
+            (self.done, "done"),
+        ]
+        .into_iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, word)| format!("{n} {word}"))
+        .collect();
+        parts.join(" · ")
+    }
+}
+
+pub fn rollup(n: &Node) -> Rollup {
+    fn walk(d: &Node, r: &mut Rollup) {
+        if d.key.starts_with("f:") {
+            r.done += d.children.len();
+            return;
+        }
+        match d.tone {
+            Tone::Running => r.working += 1,
+            Tone::Needs | Tone::Failed => r.needs += 1,
+            Tone::Done | Tone::Unread | Tone::Stopped => r.done += 1,
+            Tone::Idle => {}
+        }
+        for c in &d.children {
+            walk(c, r);
+        }
+    }
+    let mut r = Rollup::default();
+    for c in &n.children {
+        walk(c, &mut r);
+    }
+    r
 }
 
 /// Every node, depth first — the desktop's `walkAll`.
@@ -505,6 +582,7 @@ pub(crate) mod tests {
             started_at: at,
             ended_at: (status != SubagentStatus::Running).then_some(at + 1),
             status,
+            run: None,
         }
     }
 
@@ -541,6 +619,53 @@ pub(crate) mod tests {
         assert!(ids.contains(&"e3") && ids.contains(&"live"), "{ids:?}");
     }
 
+    /// The desktop's rollup: working, needs you, done, across every
+    /// descendant, the quiet ones left out.
+    #[test]
+    fn a_parent_rolls_up_its_descendants_as_working_needs_you_and_done() {
+        let p = agent("p", None, AgentStatus::Finished, 0);
+        let busy = agent("busy", Some("p"), AgentStatus::Running, 1);
+        let asks = agent("asks", Some("p"), AgentStatus::NeedsFeedback, 2);
+        let read = agent("read", Some("p"), AgentStatus::Finished, 3);
+        let mut unread = agent("unread", Some("busy"), AgentStatus::Finished, 4);
+        unread.unseen = true;
+        let idle = agent("idle", Some("p"), AgentStatus::Fresh, 5);
+        let mut book = Subagents::default();
+        book.upsert(sub("busy", "s1", SubagentStatus::Running, 1));
+        book.upsert(sub("read", "s2", SubagentStatus::Done, 2));
+        let forest = build_forest(&[&p, &busy, &asks, &read, &unread, &idle], &book, false);
+        let r = rollup(&forest[0]);
+        assert_eq!(
+            r,
+            Rollup {
+                working: 2,
+                needs: 1,
+                done: 3
+            }
+        );
+        assert_eq!(r.label(), "2 working · 1 needs you · 3 done");
+        let by = |key: &str| {
+            walk_all(&forest)
+                .into_iter()
+                .find(|n| n.key == key)
+                .unwrap()
+        };
+        assert_eq!(rollup(by("a:read")).label(), "1 done");
+        assert_eq!(rollup(by("a:idle")).label(), "");
+
+        // Folded, the FINISHED GROUP's subagents count as done and the
+        // group row itself does not.
+        book.upsert(sub("read", "s3", SubagentStatus::EndedUnknown, 3));
+        for hide_done in [false, true] {
+            let forest = build_forest(&[&p, &read], &book, hide_done);
+            let read = walk_all(&forest)
+                .into_iter()
+                .find(|n| n.key == "a:read")
+                .unwrap();
+            assert_eq!(rollup(read).label(), "2 done", "hide_done {hide_done}");
+        }
+    }
+
     #[test]
     fn sessions_nest_under_their_parent_and_subagents_under_their_session() {
         let root = agent("root", None, AgentStatus::Running, 0);
@@ -570,6 +695,19 @@ pub(crate) mod tests {
         assert_eq!(s1.tone, Tone::Running);
         assert_eq!(s1.label, "task s1");
         assert_eq!(s1.meta, "Explore");
+    }
+
+    /// A subagent's type, then the model and effort it runs at when known,
+    /// the model without its `claude-` prefix.
+    #[test]
+    fn a_subagent_row_names_its_model_and_effort_when_known() {
+        let mut s = sub("a", "x", SubagentStatus::Running, 1);
+        assert_eq!(sub_meta(&s), "Explore");
+        s.run = nebula_core::SubagentRun::known("claude-haiku-4-5".into(), "low".into());
+        assert_eq!(sub_meta(&s), "Explore · haiku-4-5 · low");
+        s.kind.clear();
+        s.run = nebula_core::SubagentRun::known(String::new(), "high".into());
+        assert_eq!(sub_meta(&s), "subagent · high");
     }
 
     #[test]

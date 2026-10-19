@@ -110,6 +110,7 @@ export type ActionId =
   | "copy_pr_url"
   | "archive_done"
   | "wake_schedule"
+  | "ask_aside"
   | "cycle_theme"
   | "home_board"
   | "home_overview"
@@ -1614,6 +1615,19 @@ export const ACTIONS: readonly ActionRow[] = [
     desktop: [],
   },
   {
+    id: "ask_aside",
+    label: "Ask aside",
+    hint: "Ask a side question about the session: a new session beside it, in the same checkout and nested under it, is asked to answer without changing files while this one keeps working",
+    group: "SESSIONS",
+    word: "ask aside",
+    destructive: false,
+    appliesTo: ["session"],
+    worksIn: ["grid", "board", "pane"],
+    surface: "both",
+    tui: [],
+    desktop: [],
+  },
+  {
     id: "cycle_theme",
     label: "Cycle theme",
     hint: "Step the window's theme through system, light and dark",
@@ -1860,6 +1874,7 @@ export const DESK_KEYS: readonly DeskKey[] = [
 export const MENU_LABELS: readonly { id: ActionId; on: AppliesTo | null; label: string }[] = [
   { id: "activate", on: null, label: "Open" },
   { id: "follow_up", on: null, label: "Follow-up prompt\u2026" },
+  { id: "ask_aside", on: null, label: "Ask aside\u2026" },
   { id: "restart", on: null, label: "Restart agent" },
   { id: "duplicate_session", on: null, label: "Duplicate" },
   { id: "move_session", on: null, label: "Move to\u2026" },
@@ -1913,7 +1928,7 @@ export const MENU_LABELS: readonly { id: ActionId; on: AppliesTo | null; label: 
 
 /** Each kind's menu, in order: a right-click's rows in both apps. */
 export const MENUS: Readonly<Partial<Record<AppliesTo, readonly ActionId[]>>> = {
-  session: ["activate", "follow_up", "git_diff", "open_pull_request", "create_pull_request", "merge_pull_request", "comment_pull_request", "open_issue", "open_in_vscode", "open_in_visual_studio", "reveal_in_explorer", "open_in_browser", "dock_editor", "copy_path", "copy_branch", "copy_pr_url", "mark_seen", "restart", "duplicate_session", "rename", "pin_orchestrator", "move_session", "move_to_account", "reorder_up", "reorder_down", "unarchive", "archive", "delete"],
+  session: ["activate", "follow_up", "ask_aside", "git_diff", "open_pull_request", "create_pull_request", "merge_pull_request", "comment_pull_request", "open_issue", "open_in_vscode", "open_in_visual_studio", "reveal_in_explorer", "open_in_browser", "dock_editor", "copy_path", "copy_branch", "copy_pr_url", "mark_seen", "restart", "duplicate_session", "rename", "pin_orchestrator", "move_session", "move_to_account", "reorder_up", "reorder_down", "unarchive", "archive", "delete"],
   terminal: ["activate", "copy_path", "rename", "delete"],
   worktree: ["new", "quick_prompt", "new_terminal", "toggle_run", "git_diff", "open_pull_request", "create_pull_request", "merge_pull_request", "comment_pull_request", "focus_scope", "open_repo", "open_worktree", "open_in_vscode", "open_in_visual_studio", "reveal_in_explorer", "open_in_browser", "dock_editor", "copy_path", "copy_branch", "copy_pr_url", "mark_seen", "switch_branch", "reorder_up", "reorder_down", "archive_done", "delete_all", "delete_worktree"],
   repo: ["quick_prompt", "new_worktree", "toggle_run", "focus_scope", "open_repo", "pull_requests", "issues", "azure_devops", "refresh_pull_requests", "open_worktree", "open_in_vscode", "open_in_visual_studio", "reveal_in_explorer", "open_in_browser", "dock_editor", "copy_path", "mark_seen", "switch_branch", "rename", "reorder_up", "reorder_down", "archive_done", "sweep_worktrees", "remove_project"],
@@ -1945,6 +1960,7 @@ export const MENU_SECTION_ORDER: readonly MenuSection[] = ["act", "go", "open", 
 export const MENU_SECTIONS: readonly { id: ActionId; on: AppliesTo | null; section: MenuSection }[] = [
   { id: "activate", on: null, section: "act" },
   { id: "follow_up", on: null, section: "act" },
+  { id: "ask_aside", on: null, section: "act" },
   { id: "new", on: null, section: "act" },
   { id: "quick_prompt", on: null, section: "act" },
   { id: "new_terminal", on: null, section: "act" },
@@ -2035,6 +2051,7 @@ export const TIPS: readonly { id: string; text: string }[] = [
 
 /** The What's new page, newest release first. */
 export const WHATS_NEW: readonly { version: string; title: string; items: readonly string[] }[] = [
+  { version: "0.56", title: "Sessions from sessions", items: ["Start a follow-up as its own session, or Ask aside: both nest under the session they came from.", "Parent rows count their nested sessions and subagents: working, needs you, done.", "Subagent rows show the model and effort they run at, when Claude reports them.", "Moving a session says which uncommitted files and unpushed commits stay behind.", "The quick prompt offers recent checkouts; the desktop's git state and Details rail keep up within seconds."] },
   { version: "0.54", title: "Your tools, your menus, your day", items: ["Open files and checkouts in installed VS Code or Visual Studio, or dock an editor beside Kete.", "Right-click for contextual actions and searchable submenus; browse Files and drag paths onto sessions.", "Choose Workshop, One Dark, One Light or VS Code themes, with your own fonts and sizes.", "Whakaoho schedules optional account wake-ups beside usage windows; cards show limits and sign-in needs.", "Discover optional critters in Settings or the palette; pet, feed, name and collect visitors."] },
   { version: "0.52", title: "Learn in place", items: ["A one-line tip the first time you meet the ? menu, the scope chip, the Review and Ship lanes, drag, or the review. Settings, General, Show tips turns them off.", "Every empty lane and list says what goes there and the one thing to do.", "The footer and the verb bar show the selection's top verbs and ? more. The desktop's Help (F1) groups keys by task.", "A session's changes are counted per turn, so two sessions in one worktree no longer mix."] },
   { version: "0.51", title: "Which session made a change", items: ["The review switches between This session and All in this worktree.", "A worktree remembers the branch it was cut from; the review and the lanes use it.", "Large pastes on Windows arrive in seconds, with pasting... N KB meanwhile.", "Export and import settings, delete merged worktrees, and vote on ADO PRs from the apps."] },

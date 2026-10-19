@@ -653,3 +653,102 @@ flow(
     await d.waitFor('the zoom back to 1', async () => (await d.wd.exec('return innerWidth;')) > 600);
   },
 );
+
+flow('git work done outside a turn reaches the overview within seconds, and the session rail counts the changed files', { script: 'stop;echo' }, async (d) => {
+  const repo = d.makeRepo('watch-proj');
+  await d.addRepo(repo);
+  const id = await d.launch('watch the checkout');
+  await d.waitForLane(id, 'done');
+  const agent = (await d.agents()).find((a) => a.id === id);
+  const [wt] = d.linkedWorktrees(repo);
+  const band = (text) =>
+    d.wd.exec(`return document.querySelector('[data-worktree="' + arguments[0] + '"]')?.innerText.includes(arguments[1]) ?? false;`, agent.worktree_id, text);
+  await d.waitFor('the checkout clean on the overview', () => band('clean'));
+  // Staged from outside Kete, with no session turn to prompt a read: the
+  // index stamp moves, well inside the half-minute poll.
+  fs.writeFileSync(path.join(wt, 'one.txt'), 'one\n');
+  fs.writeFileSync(path.join(wt, 'two.txt'), 'two\n');
+  git(wt, 'add', 'one.txt', 'two.txt');
+  await d.waitFor('2 changed on the overview', () => band('2 changed'), 8_000);
+  // The open session's Details rail counts them too.
+  await d.click('button[aria-label="Full pane"]');
+  await d.waitFor(
+    'the rail counting 2 changed files',
+    () => d.wd.exec(`return document.querySelector('aside[aria-label="Session details"] [data-rail="changed"]')?.innerText ?? null;`).then((t) => t === '2 changed files'),
+    8_000,
+  );
+  git(wt, 'commit', '-q', '-m', 'from outside');
+  await d.waitFor('the rail back to no changes', () =>
+    d.wd.exec(`return document.querySelector('aside[aria-label="Session details"] [data-rail="changed"]')?.innerText ?? null;`).then((t) => t === 'No changes'),
+    8_000,
+  );
+});
+
+flow('moving a session out of a checkout with uncommitted work says what stays behind; Cancel keeps it there', { script: 'stop;echo' }, async (d) => {
+  const repo = d.makeRepo('move-proj');
+  await d.addRepo(repo);
+  await toBoard(d);
+  const id = await d.launch('tidy the docs');
+  await d.waitForLane(id, 'done');
+  const [wt] = d.linkedWorktrees(repo);
+  assert.ok(wt && fs.existsSync(wt), 'the session has a worktree of its own');
+  const home = (await d.agents()).find((a) => a.id === id).worktree_id;
+  fs.writeFileSync(path.join(wt, 'notes.txt'), 'left behind\n');
+  // Move to..., from the palette, on the session the window followed into.
+  // Its terminal has the focus and keeps Ctrl+K; Ctrl+Shift+P opens the
+  // palette from anywhere.
+  await d.press('p', Key.Control, Key.Shift);
+  await d.type('[aria-label="Command palette"] input', 'Move to');
+  await d.click('[role="listbox"] [role="option"]', 'Session agent-1Move to…');
+  await d.click('[role="dialog"] [role="option"] button', 'move-proj / main');
+  await d.waitForText('1 changed file stays in');
+  await d.waitForText('anyway?');
+  await d.click('[role="dialog"] button', 'Cancel');
+  await d.waitForGone('1 changed file stays in');
+  assert.equal((await d.agents()).find((a) => a.id === id).worktree_id, home, 'still where it was');
+});
+
+// 0.56: a follow-up started as a session of its own. From the session's
+// Follow-up box, Start as new session spawns a sibling in the same
+// checkout (the daemon's SpawnSiblingAgent), the window opens it, and the
+// overview nests it under the session it came from.
+flow('Start as new session from the follow-up box nests the new session under its parent', { script: 'stop;echo' }, async (d) => {
+  const repo = d.makeRepo('aside-proj');
+  await d.addRepo(repo);
+  const parent = await d.launch('build the feature');
+  await d.el('.xterm-helper-textarea');
+  await d.click('button[aria-label="Follow-up prompt"]');
+  await d.type('[role="dialog"] textarea', 'write the docs for it');
+  await d.click('[role="dialog"] button', 'Start as new session');
+  const child = await d.waitFor('the follow-up session, nested under its parent', async () =>
+    (await d.agents()).find((a) => a.parent === parent),
+  );
+  assert.equal(child.worktree_id, (await d.agents()).find((a) => a.id === parent).worktree_id, 'in the same checkout');
+  // The window follows it into its own session.
+  await d.waitForText(child.name);
+  await d.click('[aria-label="Home view"] button', 'Overview');
+  await d.el(`[role="treeitem"][aria-level="2"][data-target="agent:${child.id}"]`);
+  await d.el(`[role="treeitem"][aria-level="1"][data-target="agent:${parent}"]`);
+});
+
+flow("the overview's session tree names a subagent's model and effort", { script: 'subagent-open:Explore:haiku:low:Map the hooks;stop;echo' }, async (d) => {
+  const repo = d.makeRepo('tree-proj');
+  await d.addRepo(repo);
+  const id = await d.launch('map the hooks');
+  await d.waitForAgent('step stop');
+  await d.click('[aria-label="Home view"] button', 'Overview');
+  // The overview on its own, not beside the session the launch opened: a
+  // tree narrower than 760px drops its meta column, model and effort with it.
+  await d.click('nav[aria-label="Where you are"] ol button', 'Overview');
+  await d.waitFor('the overview at full width', async () =>
+    (await d.wd.exec("return document.querySelector('[role=tree]')?.getBoundingClientRect().width ?? 0;")) > 760,
+  );
+  // The subagent nests under its session, its task as the name. It stays
+  // running, so no finished fold hides it.
+  await d.waitForText('Map the hooks');
+  await d.waitForText('Explore \u00b7 haiku \u00b7 low');
+  const subs = (await d.invoke('get_state')).subagents;
+  assert.equal(subs.length, 1);
+  assert.equal(subs[0].parent_agent, id);
+  assert.deepEqual(subs[0].run, { model: 'haiku', effort: 'low' });
+});

@@ -74,11 +74,24 @@ fn task_prompt_hint(kind: &crate::app::PromptKind, width: u16) -> &'static str {
     }
     // The FOLLOW-UP MODAL sends a turn to a session already running: no
     // picker, and Enter sends rather than launching anything.
+    // ^N starts the turn as a session of its own beside the card's.
     if matches!(kind, crate::app::PromptKind::FollowUp { .. }) {
-        return if width >= 55 {
-            " Enter: send · Shift+Enter/^J: newline · Esc: cancel "
+        return if width >= 72 {
+            " Enter: send · ^N: new session · Shift+Enter/^J: newline · Esc: cancel "
+        } else if width >= 54 {
+            " Enter send · ^N new session · ^J newline · Esc cancel "
         } else if width >= 40 {
-            " Enter send · ^J newline · Esc cancel "
+            " Enter send · ^N new · Esc cancel "
+        } else {
+            " Esc · ^N · Enter "
+        };
+    }
+    // ASK ASIDE asks rather than sends: a new session takes the question.
+    if matches!(kind, crate::app::PromptKind::AskAside { .. }) {
+        return if width >= 54 {
+            " Enter: ask · Shift+Enter/^J: newline · Esc: cancel "
+        } else if width >= 40 {
+            " Enter ask · ^J newline · Esc cancel "
         } else {
             " Esc · ^J · Enter "
         };
@@ -414,7 +427,10 @@ fn multiline_prompt_rect(frame: Rect, prompt: &PromptDialog) -> Rect {
     let quick = matches!(prompt.kind, crate::app::PromptKind::QuickPrompt(_));
     if quick {
         launcher_view::box_rect(frame)
-    } else if matches!(prompt.kind, crate::app::PromptKind::FollowUp { .. }) {
+    } else if matches!(
+        prompt.kind,
+        crate::app::PromptKind::FollowUp { .. } | crate::app::PromptKind::AskAside { .. }
+    ) {
         // Smaller than the task boxes: a follow-up is a sentence to a
         // session that is already running, and a box this size leaves the
         // grid it floats over readable around it — which card is being

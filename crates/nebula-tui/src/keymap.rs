@@ -1110,6 +1110,7 @@ mod tests {
                             | Action::CopyPrUrl
                             | Action::ArchiveDone
                             | Action::WakeSchedule
+                            | Action::AskAside
                     ),
                     "{} ships with no chord",
                     spec.id

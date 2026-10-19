@@ -4,7 +4,7 @@
   import { LANE_EMPTY, emptyCopy } from './learn';
   import { verbKeys } from './verbs';
   import { LANES, lanes, toneOf, subagentTone, harnessLabel, lastPrompt, age, placeOf, type Lane } from './status';
-  import { cardSubagents, isEnded, movedAt, subagentWord } from './subagents';
+  import { cardSubagents, isEnded, movedAt, subagentRun, subagentWord } from './subagents';
   import { clearFinishedSubagents, foldingFinished } from './subagent-actions';
   import SubagentBar from './SubagentBar.svelte';
   import Status from './Status.svelte';
@@ -349,9 +349,11 @@
               <!-- Its subagents, under it: running first, finished folded into a count. -->
               <ul class="m-0 flex list-none flex-col gap-1 border-0 border-b border-rule pt-0 pr-4 pb-2 pl-6" aria-label="{a.name} subagents">
                 {#each subs.shown as s (s.id)}
-                  <li class="flex min-w-0 items-center gap-2 text-[12px]" title="{s.kind || 'subagent'}: {s.description || 'no task seen'}">
+                  {@const run = subagentRun(s)}
+                  <li class="flex min-w-0 items-center gap-2 text-[12px]" title="{[s.kind || 'subagent', run].filter(Boolean).join(' \u00b7 ')}: {s.description || 'no task seen'}">
                     <Status tone={subagentTone(s)} word={false} />
                     <span class="min-w-0 truncate {isEnded(s) ? 'text-faint' : 'text-muted'}">{s.description || s.kind || 'subagent'}</span>
+                    {#if run}<span class="min-w-0 flex-none truncate text-[11px] text-faint">{run}</span>{/if}
                     <span class="ml-auto flex-none font-mono text-[11px] text-muted">{subagentWord(s)} {age(movedAt(s), app.now)}</span>
                   </li>
                 {/each}

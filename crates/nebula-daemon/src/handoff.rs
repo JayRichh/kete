@@ -520,6 +520,7 @@ mod tests {
                     started_at: 5,
                     ended_at: None,
                     status: nebula_core::SubagentStatus::Running,
+                    run: nebula_core::SubagentRun::known("haiku".into(), "low".into()),
                 }],
                 pending: vec![],
                 ..SubagentCarry::default()
@@ -538,6 +539,11 @@ mod tests {
         assert!(pty.bracketed_paste);
         assert!(pty.cloud_scan && pty.question_scan && back.sessions[0].launching);
         assert_eq!(back.subagents.rows[0].id, "agent-1");
+        assert_eq!(
+            back.subagents.rows[0].model(),
+            "haiku",
+            "the run comes across"
+        );
         assert_eq!(
             back.subagents.rows[0].status,
             nebula_core::SubagentStatus::Running

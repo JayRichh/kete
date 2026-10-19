@@ -461,7 +461,9 @@ fn handle_global_action(
         | Action::OpenInVisualStudio
         | Action::DockEditor
         | Action::RevealInExplorer
-        | Action::OpenWithDefault => super::verbs::run_on_selection(app, action, out),
+        | Action::OpenWithDefault
+        // 0.56: a side question about the selected session.
+        | Action::AskAside => super::verbs::run_on_selection(app, action, out),
         // Wake up now: on the account the accounts overlay has picked, else
         // the overlay opens on its Wake view to pick one.
         Action::WakeAccount => accounts::wake_account_verb(app),

@@ -1142,9 +1142,210 @@ pub(crate) fn open_preset_picker_for_pr(app: &mut App) {
     open_preset_picker(app, QuickReturn::fresh(launch));
 }
 
+// ---- recent checkouts ----
+
+/// How many checkouts the box's recent keys reach (`Alt+1` to `Alt+5`).
+pub const RECENT_KEPT: usize = 5;
+
+/// A checkout a session last ran in, for the box's recent keys.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecentCheckout {
+    pub worktree: WorktreeId,
+    /// `project ▸ branch`.
+    pub label: String,
+    /// The newest status change of a session there, epoch ms.
+    pub at: i64,
+}
+
+/// Per checkout, the newest `status_changed_at` of its sessions (archived
+/// ones count: they were started there), newest first, at most
+/// [`RECENT_KEPT`]. Checkouts and projects gone from the tree drop out.
+/// The desktop's quick prompt offers the same list (`desktop/src/lib/recent.ts`).
+pub fn recent_checkouts(tree: &crate::app::Tree) -> Vec<RecentCheckout> {
+    let mut newest: std::collections::HashMap<&WorktreeId, i64> = Default::default();
+    for a in &tree.agents {
+        let at = newest.entry(&a.worktree_id).or_insert(a.status_changed_at);
+        *at = (*at).max(a.status_changed_at);
+    }
+    let mut out: Vec<RecentCheckout> = newest
+        .into_iter()
+        .filter_map(|(id, at)| {
+            let w = tree.worktrees.iter().find(|w| &w.id == id)?;
+            let p = tree.projects.iter().find(|p| p.id == w.project_id)?;
+            Some(RecentCheckout {
+                worktree: w.id.clone(),
+                label: format!("{} ▸ {}", p.name, w.branch),
+                at,
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| b.at.cmp(&a.at).then_with(|| a.label.cmp(&b.label)));
+    out.truncate(RECENT_KEPT);
+    out
+}
+
+/// The recent checkouts the box can be aimed at: [`recent_checkouts`] less
+/// the stand-ins git is still cutting.
+fn usable_recent(app: &App) -> Vec<RecentCheckout> {
+    recent_checkouts(&app.tree)
+        .into_iter()
+        .filter(|r| !app.is_placeholder_worktree(&r.worktree))
+        .collect()
+}
+
+/// `Alt+<n>` in the box: aim it at the `n`th recent checkout (1-based),
+/// the text kept. False when there is no such checkout, or the box is a
+/// PR SESSION's, which runs in the pull request's own checkout.
+pub(crate) fn pick_recent(app: &mut App, back: QuickReturn, n: usize) -> bool {
+    if back.launch.pr.is_some() {
+        return false;
+    }
+    let Some(r) = n
+        .checked_sub(1)
+        .and_then(|i| usable_recent(app).into_iter().nth(i))
+    else {
+        return false;
+    };
+    let launch = QuickLaunch {
+        target: QuickTarget::Worktree(r.worktree),
+        ..back.launch
+    };
+    reopen(app, launch, &back.text);
+    true
+}
+
+/// `^R` in the box: the recent checkouts as a menu, each row with its
+/// `Alt+<n>`. A pick aims the box there, as the worktree picker's do.
+pub(crate) fn open_recent_picker(app: &mut App, back: QuickReturn) {
+    use crate::app::{ContextMenu, MenuAction, MenuItem};
+    if back.launch.pr.is_some() {
+        app.chrome.flash =
+            Some("quick prompt: a PR session runs in the pull request's own checkout".into());
+        return;
+    }
+    let recent = usable_recent(app);
+    if recent.is_empty() {
+        app.chrome.flash = Some("quick prompt: no session has run anywhere yet".into());
+        return;
+    }
+    let items: Vec<MenuItem> = recent
+        .into_iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let aimed = back.launch.target == QuickTarget::Worktree(r.worktree.clone());
+            let mut item = MenuItem::new(
+                format!("{}{}", r.label, if aimed { " ✓" } else { "" }),
+                MenuAction::PickLaunchWorktree {
+                    target: QuickTarget::Worktree(r.worktree),
+                    back: Box::new(back.clone()),
+                },
+            );
+            item.key = Some(format!("Alt+{}", i + 1));
+            item
+        })
+        .collect();
+    app.modals.overlay = Some(Overlay::Menu(ContextMenu {
+        title: Some("Recent".into()),
+        items,
+        at: None,
+        hover: 0,
+        area: ratatui::layout::Rect::default(),
+        scroll: 0,
+        parent: None,
+        filter: None,
+    }));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod recent {
+        use super::super::*;
+        use crate::app::Tree;
+        use nebula_core::{AgentStatus, Project, Worktree};
+
+        fn tree(worktrees: &[(&str, &str)], agents: &[(&str, &str, i64, bool)]) -> Tree {
+            Tree {
+                projects: vec![Project {
+                    id: ProjectId("p".into()),
+                    name: "repo".into(),
+                    repo_path: "/tmp/repo".into(),
+                    sort_order: 0,
+                }],
+                worktrees: worktrees
+                    .iter()
+                    .map(|(id, project)| Worktree {
+                        id: WorktreeId((*id).into()),
+                        project_id: ProjectId((*project).into()),
+                        path: format!("/tmp/{id}").into(),
+                        branch: (*id).into(),
+                        is_main: false,
+                        sort_order: 0,
+                    })
+                    .collect(),
+                agents: agents
+                    .iter()
+                    .map(|(id, wt, at, archived)| {
+                        let mut a =
+                            crate::subagents::tests::agent(id, None, AgentStatus::Finished, 0);
+                        a.worktree_id = WorktreeId((*wt).into());
+                        a.status_changed_at = *at;
+                        a.archived = *archived;
+                        a
+                    })
+                    .collect(),
+                ..Tree::default()
+            }
+        }
+
+        fn ids(t: &Tree) -> Vec<String> {
+            recent_checkouts(t)
+                .into_iter()
+                .map(|r| r.worktree.0)
+                .collect()
+        }
+
+        #[test]
+        fn checkouts_come_newest_session_first_archived_ones_included() {
+            let t = tree(
+                &[("a", "p"), ("b", "p"), ("c", "p")],
+                &[
+                    ("1", "a", 10, false),
+                    ("2", "b", 30, true),
+                    ("3", "a", 20, false),
+                ],
+            );
+            let got = recent_checkouts(&t);
+            assert_eq!(
+                got.iter()
+                    .map(|r| (r.worktree.0.as_str(), r.at, r.label.as_str()))
+                    .collect::<Vec<_>>(),
+                vec![("b", 30, "repo ▸ b"), ("a", 20, "repo ▸ a")]
+            );
+        }
+
+        #[test]
+        fn gone_checkouts_drop_out_and_five_at_most_are_kept() {
+            let t = tree(
+                &[("a", "p"), ("x", "gone")],
+                &[
+                    ("1", "a", 1, false),
+                    ("2", "x", 5, false),
+                    ("3", "missing", 9, false),
+                ],
+            );
+            assert_eq!(ids(&t), vec!["a"]);
+            let names = ["a", "b", "c", "d", "e", "f"];
+            let wts: Vec<_> = names.iter().map(|n| (*n, "p")).collect();
+            let agents: Vec<_> = names
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (*n, *n, i as i64, false))
+                .collect();
+            assert_eq!(ids(&tree(&wts, &agents)), vec!["f", "e", "d", "c", "b"]);
+        }
+    }
 
     fn worktree() -> QuickTarget {
         QuickTarget::Worktree(WorktreeId::from("wt-1".to_string()))

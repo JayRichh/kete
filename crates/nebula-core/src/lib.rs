@@ -7,6 +7,7 @@ pub mod crashlog;
 pub mod editors;
 pub mod entities;
 pub mod env;
+pub mod follow_up;
 pub mod harness;
 pub mod host;
 pub mod ids;

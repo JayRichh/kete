@@ -234,6 +234,18 @@ fn asks_user(tool_name: Option<&str>) -> bool {
 }
 
 impl HookEvent {
+    /// The subagent the event came from, when a subagent sent it.
+    pub fn subagent_id(&self) -> Option<&str> {
+        match self {
+            HookEvent::PermissionRequest { subagent_id }
+            | HookEvent::PreToolUse { subagent_id, .. }
+            | HookEvent::PostToolUse { subagent_id, .. }
+            | HookEvent::SubagentStart { subagent_id }
+            | HookEvent::SubagentStop { subagent_id, .. } => subagent_id.as_deref(),
+            _ => None,
+        }
+    }
+
     /// Events that (re)establish which Claude session id owns this agent.
     pub fn captures_session(&self) -> bool {
         matches!(

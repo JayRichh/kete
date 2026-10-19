@@ -1,6 +1,8 @@
 //! Session management from the window: rename, archive and unarchive,
 //! delete, restart, move to another checkout, a follow-up turn, and the
-//! terminal verbs (rename, close). Each is one daemon request answered by
+//! terminal verbs (rename, close), and the follow-ups that start a session
+//! of their own (Start as new session, Ask aside). Each is one daemon
+//! request answered by
 //! `Ack`, the same ones the TUI's card menu sends; the window confirms
 //! the destructive ones before it calls here.
 
@@ -157,6 +159,84 @@ pub fn turn_bytes(text: &str) -> Vec<u8> {
     } else {
         text.as_bytes().to_vec()
     }
+}
+
+/// Start `prompt` as a session of its own beside `agent`: the daemon's
+/// `SpawnSiblingAgent`, as `kete spawn` sends it from inside a session. The
+/// new session runs in the same checkout on the same harness, model,
+/// effort and account, and nests under `agent`. Returns its id, for the
+/// window to open.
+pub async fn spawn_follow_up_in(client: &Client, agent: String, prompt: String) -> Res<String> {
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        return Err("The follow-up is empty.".into());
+    }
+    if prompt.len() > nebula_core::MAX_CLOUD_PROMPT_BYTES {
+        return Err(format!(
+            "The follow-up is too long (max {} KiB).",
+            nebula_core::MAX_CLOUD_PROMPT_BYTES / 1024
+        ));
+    }
+    let model = client.snapshot();
+    let Some(a) = model.agents.iter().find(|a| a.id.0 == agent) else {
+        return Err("That session is gone.".into());
+    };
+    if a.archived {
+        return Err(format!(
+            "{} is archived: unarchive it to start a session from it.",
+            a.name
+        ));
+    }
+    let starting_prompt = prompt.to_string();
+    match ack(client, |req_id| ClientRequest::SpawnSiblingAgent {
+        req_id,
+        id: AgentId(agent),
+        kind: None,
+        starting_prompt,
+        worktree: None,
+        base: None,
+        profile: None,
+    })
+    .await?
+    {
+        Some(EntityId::Agent(id)) => Ok(id.0),
+        _ => Err("The daemon started no session.".into()),
+    }
+}
+
+/// ASK ASIDE: `question` about `agent`, answered by a session of its own
+/// beside it (`nebula_core::follow_up::aside_prompt`).
+pub async fn ask_aside_in(client: &Client, agent: String, question: String) -> Res<String> {
+    if question.trim().is_empty() {
+        return Err("The question is empty.".into());
+    }
+    let name = client
+        .snapshot()
+        .agents
+        .iter()
+        .find(|a| a.id.0 == agent)
+        .map(|a| a.name.clone())
+        .ok_or_else(|| "That session is gone.".to_string())?;
+    let prompt = nebula_core::follow_up::aside_prompt(&name, &question);
+    spawn_follow_up_in(client, agent, prompt).await
+}
+
+#[tauri::command]
+pub async fn spawn_follow_up(
+    client: State<'_, Arc<Client>>,
+    agent: String,
+    prompt: String,
+) -> Res<String> {
+    spawn_follow_up_in(&client, agent, prompt).await
+}
+
+#[tauri::command]
+pub async fn ask_aside(
+    client: State<'_, Arc<Client>>,
+    agent: String,
+    question: String,
+) -> Res<String> {
+    ask_aside_in(&client, agent, question).await
 }
 
 #[tauri::command]
@@ -456,5 +536,77 @@ mod tests {
             rx.try_recv().is_err(),
             "nothing sent for a refused follow-up"
         );
+    }
+
+    #[tokio::test]
+    async fn a_follow_up_session_is_spawned_beside_the_session_and_its_id_returned() {
+        let (client, mut rx) = Client::connected_for_test();
+        let mut archived = agent("old", "w1", false);
+        archived.archived = true;
+        client.set_model(|m| m.agents = vec![agent("a1", "w1", true), archived]);
+        let created = |_: &ClientRequest| Ok(Some(EntityId::Agent(AgentId("a2".into()))));
+        let (r, seen) = run(
+            &client,
+            &mut rx,
+            spawn_follow_up_in(&client, "a1".into(), "  write the tests \n".into()),
+            created,
+        )
+        .await;
+        assert_eq!(r.unwrap(), "a2");
+        assert!(matches!(
+            &seen[0],
+            ClientRequest::SpawnSiblingAgent {
+                id,
+                kind: None,
+                starting_prompt,
+                worktree: None,
+                base: None,
+                profile: None,
+                ..
+            } if id.0 == "a1" && starting_prompt == "write the tests"
+        ));
+
+        let (r, seen) = run(
+            &client,
+            &mut rx,
+            ask_aside_in(&client, "a1".into(), "why two refreshes?".into()),
+            created,
+        )
+        .await;
+        assert_eq!(r.unwrap(), "a2");
+        let ClientRequest::SpawnSiblingAgent {
+            starting_prompt, ..
+        } = &seen[0]
+        else {
+            panic!("not a spawn: {:?}", seen[0]);
+        };
+        assert_eq!(
+            starting_prompt,
+            &nebula_core::follow_up::aside_prompt("a1", "why two refreshes?")
+        );
+
+        for (id, text, why) in [
+            ("a1", "   ", "empty"),
+            ("old", "go", "archived"),
+            ("gone", "go", "gone"),
+        ] {
+            let (r, seen) = run(
+                &client,
+                &mut rx,
+                spawn_follow_up_in(&client, id.into(), text.into()),
+                created,
+            )
+            .await;
+            assert!(r.is_err(), "{why}");
+            assert!(seen.is_empty(), "{why}");
+        }
+        let (r, _) = run(
+            &client,
+            &mut rx,
+            spawn_follow_up_in(&client, "a1".into(), "go".into()),
+            |_| Err("agent is archived".into()),
+        )
+        .await;
+        assert_eq!(r.unwrap_err(), "agent is archived");
     }
 }

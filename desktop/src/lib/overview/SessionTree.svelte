@@ -8,7 +8,7 @@
   import RunButton from './RunButton.svelte';
   import ContextBar from '../accounts/ContextBar.svelte';
   import StopBadge from '../StopBadge.svelte';
-  import { flatten, type Node } from './tree';
+  import { flatten, rollup, rollupLabel, subagentMeta, type Node } from './tree';
   // A row's right-click menu comes from its data-target (menus/router.ts).
   import OrchBadge from '../orchestrator/OrchBadge.svelte';
   import { openOrchestrator } from '../orch.svelte';
@@ -62,14 +62,10 @@
   function meta(n: Node): string {
     if (n.agent?.archived) return ['archived', harnessLabel(n.agent)].join(' \u00b7 ');
     if (n.agent) return [harnessLabel(n.agent), n.agent.profile].filter(Boolean).join(' \u00b7 ');
-    // Indent and the lighter name already say "subagent"; the type is the
-    // news, unless the name already is the type. `closed`: still open when
-    // its session ended or restarted.
-    if (n.sub) {
-      const closedWord = n.sub.status === 'ended_unknown' ? 'closed' : '';
-      const kind = n.sub.description ? n.sub.kind : '';
-      return [closedWord, kind].filter(Boolean).join(' \u00B7 ');
-    }
+    // Indent and the lighter name already say "subagent"; the type (unless
+    // the name already is it), model and effort are the news. `closed`:
+    // still open when its session ended or restarted.
+    if (n.sub) return subagentMeta(n.sub);
     if (n.kind === 'finished') return 'subagents, folded';
     return '';
   }
@@ -193,6 +189,14 @@
             >from {#if from.role === 'orchestrator'}<span aria-hidden="true">&#9670;</span> Orchestrator{:else}{from.name}{/if}</button
           >
         {/if}
+        {#if hasKids && n.kind === 'session'}
+          <!-- What its nested sessions and subagents are doing, so a folded
+               parent still says one of them needs you. -->
+          {@const tally = rollupLabel(rollup(n))}
+          {#if tally}
+            <span class="ml-2 min-w-0 flex-none truncate font-mono text-[11px] text-muted @max-[760px]:hidden" data-rollup title="Under {n.label}: {tally}">{tally}</span>
+          {/if}
+        {/if}
         {#if hidden && n.kind !== 'finished'}
           <button
             class="ml-2 flex-none border-0 bg-transparent p-0 font-mono text-[12px] text-muted hover:text-ink hover:underline hover:underline-offset-4"
@@ -213,7 +217,7 @@
       </span>
 
       <span class="flex min-w-0 items-center gap-2 pl-3 text-[13px] text-muted @max-[760px]:hidden"
-        ><span class="min-w-0 truncate">{meta(n)}</span></span
+        ><span class="min-w-0 truncate" title={meta(n)}>{meta(n)}</span></span
       >
       <span class="truncate pl-3 text-[13px] text-muted @max-[760px]:hidden">
         {prompt ?? ''}

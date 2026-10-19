@@ -97,10 +97,16 @@ where
 
     // Single writer task; everything else sends frames through this channel
     // so PTY forwards and RPC replies never interleave mid-frame.
+    // Each frame is cut to what the peer said it decodes at Hello
+    // (`ServerEvent::for_peer`).
     let (out_tx, mut out_rx) = mpsc::channel::<ServerEvent>(256);
+    let mut client = ClientConnection::new(daemon, out_tx);
+    client.peer_pid = peer;
+    let said = client.writer_protocol.clone();
     let writer_task = tokio::spawn(async move {
         let mut w = BufWriter::new(write_half);
         while let Some(ev) = out_rx.recv().await {
+            let ev = ev.for_peer(said.load(std::sync::atomic::Ordering::Relaxed));
             if write_frame(&mut w, &ev).await.is_err() {
                 break;
             }
@@ -108,8 +114,6 @@ where
         let _ = w.shutdown().await;
     });
 
-    let mut client = ClientConnection::new(daemon, out_tx);
-    client.peer_pid = peer;
     let result: Result<()> = async {
         while let Some(req) = read_frame::<ClientRequest, _>(&mut reader).await? {
             if !client.handle_request(req).await? {
@@ -135,6 +139,8 @@ struct ClientConnection {
     /// The protocol the client said at Hello: what it can decode
     /// (`ServerEvent::decodable_by`). 0 until then.
     peer_protocol: u32,
+    /// `peer_protocol`, for the writer task to cut each frame to.
+    writer_protocol: Arc<std::sync::atomic::AtomicU32>,
     /// The client process's pid, when the OS said.
     peer_pid: Option<u32>,
 }
@@ -148,6 +154,7 @@ impl ClientConnection {
             subscription: None,
             handshaken: false,
             peer_protocol: 0,
+            writer_protocol: Arc::default(),
             peer_pid: None,
         }
     }
@@ -968,6 +975,8 @@ impl ClientConnection {
     async fn handle_hello(&mut self, protocol_version: u32) -> bool {
         self.handshaken = nebula_core::protocol_compatible_with(protocol_version);
         self.peer_protocol = protocol_version;
+        self.writer_protocol
+            .store(protocol_version, std::sync::atomic::Ordering::Relaxed);
         let reply = if self.handshaken {
             ServerEvent::HelloOk {
                 protocol_version: PROTOCOL_VERSION,
