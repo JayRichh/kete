@@ -56,6 +56,12 @@ pub(crate) fn git_command(cwd: &Path, args: &[&str]) -> Command {
     let mut cmd = command("git", cwd);
     cmd.args(["-c", "core.quotepath=off"])
         .args(args)
+        // The window's reads must never take .git/index.lock: a status that
+        // refreshes the index would make an agent's own git add or commit
+        // fail with "index.lock: File exists" (the terminal app's rule, issue
+        // #15). Only the optional locks are skipped; a stage or commit the
+        // window runs still takes the ones it needs.
+        .env("GIT_OPTIONAL_LOCKS", "0")
         // No window to answer a credential prompt in: fail, don't hang.
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "never")
@@ -2216,6 +2222,16 @@ u UU N... 100644 100644 100644 100644 a a a c.txt\0\
             "the main checkout's own files are untouched"
         );
         let _ = std::fs::remove_dir_all(&linked);
+    }
+
+    #[test]
+    fn the_windows_git_takes_no_optional_locks() {
+        let cmd = git_command(Path::new("."), &["status"]);
+        let locks = cmd
+            .get_envs()
+            .find(|(k, _)| *k == "GIT_OPTIONAL_LOCKS")
+            .and_then(|(_, v)| v);
+        assert_eq!(locks.and_then(|v| v.to_str()), Some("0"));
     }
 
     #[test]
