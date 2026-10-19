@@ -453,6 +453,7 @@ mod tests {
                     percent: 92.0,
                     resets_at: None,
                     read_at: 1,
+                    estimated: false,
                 }],
                 source: UsageSource::Statusline,
                 at: 0,

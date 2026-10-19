@@ -10,6 +10,8 @@
   import TeammateStrip from './TeammateStrip.svelte';
   import Status from './Status.svelte';
   import StopBadge from './StopBadge.svelte';
+  import UsageMeter from './accounts/UsageMeter.svelte';
+  import { accountKey, sessionHarness } from './accounts/usage';
   import { retract } from './motion';
   import Empty from './Empty.svelte';
   import type { Agent, DropTarget } from './api';
@@ -334,6 +336,7 @@
               </span>
               <Status tone={lane.id === 'pr' ? 'pr' : lane.id === 'done' && pr?.state === 'merged' ? 'merged' : toneOf(a)} />
               <span class="truncate text-[13px] text-muted">{harnessLabel(a)}{a.profile ? ` \u00B7 ${a.profile}` : ''}</span>
+              <UsageMeter window={app.model.accounts?.[accountKey(a.profile, sessionHarness(a))]?.windows.find((x) => x.kind === 'session')} short caption="" />
               <span class="truncate font-mono text-[12px] text-muted">{where.project} / {where.branch}</span>
               {#if stop || commits || pr}
                 <span class="flex min-w-0 flex-wrap items-center gap-1.5">

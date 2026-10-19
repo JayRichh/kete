@@ -17,6 +17,9 @@
   import Sidebar from './lib/shell/Sidebar.svelte';
   import { loadSidebar } from './lib/shell/rail-state.svelte';
   import Breadcrumb from './lib/shell/Breadcrumb.svelte';
+  import UsageMeter from './lib/accounts/UsageMeter.svelte';
+  import UsageBanner from './lib/accounts/UsageBanner.svelte';
+  import { headline } from './lib/accounts/usage';
   import ScopeChip from './lib/shell/ScopeChip.svelte';
   import ShipSheet from './lib/ship/ShipSheet.svelte';
   import AttentionStrip from './lib/overview/AttentionStrip.svelte';
@@ -120,6 +123,7 @@
   });
 
   const view = $derived(nav.current.view);
+  const usageHead = $derived(headline(app.model.accounts, app.now));
 
   // A narrow window (900px and under): the rail goes to icons, and a split
   // shows one side at a time, the session or diff pane unless the list is
@@ -313,6 +317,7 @@
           onclick={() => (listShown = !listShown)}>{listShown ? 'Pane' : 'List'}</button
         >
       {/if}
+      <UsageMeter window={usageHead?.window} />
       <ScopeChip compact={narrow} />
       {#if !narrow}<AttentionStrip tight={split} />{/if}
       {#if app.home === 'overview' && !adoView && view !== 'settings' && view !== 'worktrees' && view !== 'accounts' && view !== 'whakaoho' && !orchView}
@@ -378,6 +383,7 @@
         }}><Icon name="plus" size={12} /><span class="hidden @min-[1000px]:inline">New session</span></button
       >
     </header>
+    <UsageBanner window={usageHead?.window} />
 
     <div class="relative flex min-h-0 flex-1" bind:this={body}>
       {#if view === 'tasks' && nav.current.repo}

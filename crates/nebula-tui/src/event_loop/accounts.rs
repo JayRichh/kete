@@ -746,6 +746,7 @@ mod tests {
                     percent,
                     resets_at: None,
                     read_at,
+                    estimated: false,
                 },
                 UsageWindow {
                     kind: WindowKind::Weekly,
@@ -753,6 +754,7 @@ mod tests {
                     percent: 7.0,
                     resets_at: None,
                     read_at,
+                    estimated: false,
                 },
             ],
             source: UsageSource::Statusline,

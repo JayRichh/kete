@@ -2041,10 +2041,51 @@ fn draw_footer_bar(f: &mut Frame, app: &mut App, area: Rect) {
     footer::draw_footer_bar(f, app, area);
 }
 
+const READOUT_FULL_COLS: u16 = 150;
+const READOUT_PCT_COLS: u16 = 130;
+
 /// The footer's right-edge readout: live sessions, their process count,
 /// and nebula's total memory footprint (TUI + daemon + every session's
 /// process subtree). None until the first metrics reply arrives.
-fn footer_usage(app: &App) -> Option<String> {
+///
+/// The account's readout gives way before the key hints do: whole
+/// (`5h 87% · resets 9:50 pm`) from [`READOUT_FULL_COLS`] columns, the
+/// percent alone from [`READOUT_PCT_COLS`], and left off below that.
+fn footer_usage(app: &App, cols: u16) -> Option<String> {
+    let account = footer_account(app)
+        .filter(|_| cols >= READOUT_PCT_COLS)
+        .map(|l| {
+            if cols >= READOUT_FULL_COLS {
+                format!("5h {}", l.compact)
+            } else {
+                format!("5h {}", nebula_core::usage::pct_text(l.percent))
+            }
+        });
+    let metrics = footer_metrics(app);
+    match (account, metrics) {
+        (Some(a), Some(m)) => Some(format!("{a}  │  {m}")),
+        (a, m) => a.or(m),
+    }
+}
+
+/// The fullest account's 5-hour window, worded by the shared formatter
+/// (`usage_window::format`): `87% · resets 9:50 pm` in the local zone.
+pub(crate) fn footer_account(app: &App) -> Option<nebula_core::usage_window::Label> {
+    let now = nebula_core::clock::now_secs() as i64;
+    app.launcher
+        .account_usage
+        .iter()
+        .filter_map(|u| nebula_core::usage_window::headline(&u.windows, now))
+        .filter(|w| w.shown_at(now).is_some())
+        .max_by(|a, b| {
+            a.percent_at(now)
+                .partial_cmp(&b.percent_at(now))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|w| nebula_core::usage_window::format(w, now, nebula_core::usage_window::local))
+}
+
+fn footer_metrics(app: &App) -> Option<String> {
     let m = app.jobs.last_metrics.as_ref()?;
     // Prewarm-pool spares are agent CLIs but not agents anyone opened;
     // they get their own count so the agent figure matches the sidebar.

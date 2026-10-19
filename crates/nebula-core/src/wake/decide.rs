@@ -216,7 +216,11 @@ pub fn decide(input: Inputs<'_>) -> Decision {
     if for_slot(Outcome::Failed) >= MAX_FAILURES {
         return Decision::Skip(Skip::GaveUp { slot: slot_min });
     }
-    if let Some(window) = state.session.as_ref().filter(|w| !w.expired_at(now)) {
+    if let Some(window) = state
+        .session
+        .as_ref()
+        .filter(|w| !w.estimated && !w.expired_at(now))
+    {
         return Decision::Skip(Skip::LiveWindow {
             resets_at: window.resets_at.filter(|&at| at > 0),
         });
@@ -353,6 +357,7 @@ mod tests {
             percent: 12.0,
             resets_at: Some(resets_at),
             read_at: resets_at - 3600,
+            estimated: false,
         }
     }
 

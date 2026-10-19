@@ -8,6 +8,8 @@ import type { AccountState } from './account';
 import type { Row } from './layout';
 import type { AccountUsage, UsageWindow } from '../api';
 import type { MenuEntry, MenuHeading, MenuItem } from '../ui/ui.svelte';
+import { setLabels } from '../accounts/labels.svelte';
+import type { UsageLabel } from '../api';
 
 const isItem = (e: MenuEntry): e is MenuItem => typeof e === 'object' && 'label' in e;
 const rows = (es: MenuEntry[]): MenuItem[] => es.filter(isItem);
@@ -401,6 +403,21 @@ describe('accountBanner', () => {
   });
 });
 
+const words = (clock: string, countdown: string): UsageLabel => ({
+  percent: 100,
+  step: 3,
+  clock,
+  countdown,
+  start: null,
+  iso: null,
+  estimated: false,
+  compact: '',
+  long: '',
+  resets: `resets ${clock}`,
+  hover: '',
+  banner: null,
+});
+
 describe('usageWords', () => {
   // Epoch seconds 1e9, as the windows count them.
   const NOW = 1_000_000_000_000;
@@ -419,13 +436,17 @@ describe('usageWords', () => {
   });
 
   it('says when a full window resets, and how far the 5-hour one is', () => {
-    const u = usage(win('session', 100, 3 * 3600 + 12 * 60), win('weekly', 40, 3 * 86400));
-    expect(usageWords(u, NOW)).toEqual({ limitedResets: 'in 3h 12m', sessionPercent: 100 });
+    const full = win('session', 100, 3 * 3600 + 12 * 60);
+    const u = usage(full, win('weekly', 40, 3 * 86400));
+    setLabels([[full, words('9:50 pm', 'in 3 h 12 m')]]);
+    expect(usageWords(u, NOW)).toEqual({ limitedResets: '9:50 pm \u00b7 in 3 h 12 m', sessionPercent: 100 });
   });
 
   it('waits for the last of the full windows', () => {
-    const u = usage(win('session', 100, 3600), win('weekly', 100, 2 * 86400 + 4 * 3600));
-    expect(usageWords(u, NOW).limitedResets).toBe('in 2d 4h');
+    const last = win('weekly', 100, 2 * 86400 + 4 * 3600);
+    const u = usage(win('session', 100, 3600), last);
+    setLabels([[last, words('Wed 2:10 am', 'in 2 d 4 h')]]);
+    expect(usageWords(u, NOW).limitedResets).toBe('Wed 2:10 am \u00b7 in 2 d 4 h');
   });
 
   it('is not limited below 100, nor once the reset has passed, nor with no reset to name', () => {

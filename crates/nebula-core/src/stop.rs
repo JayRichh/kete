@@ -127,7 +127,7 @@ pub fn reason_label(reason: &str) -> &'static str {
 
 impl StopNote {
     /// The note's words for a card or a pane header: `resumes 3:45pm`
-    /// (Claude's own clock text), `resumes in 2h 5m` (the account's reset,
+    /// (Claude's own clock text), `resumes in 2 h 5 m` (the account's reset,
     /// when the screen said nothing), or the reason's words.
     pub fn label(&self, now_secs: i64) -> String {
         if self.reason == RATE_LIMIT && self.waiting {
@@ -191,7 +191,7 @@ mod tests {
         };
         assert_eq!(n.label(now), "waiting on limit");
         n.resets_at = Some(now + 2 * 3600 + 5 * 60);
-        assert_eq!(n.label(now), "resumes in 2h 5m");
+        assert_eq!(n.label(now), "resumes in 2 h 5 m");
         n.resumes = Some("3:45pm".into());
         assert_eq!(n.label(now), "resumes 3:45pm", "the screen's words win");
         assert_eq!(n.tone(), StopTone::Waiting);

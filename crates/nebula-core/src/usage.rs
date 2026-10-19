@@ -103,6 +103,10 @@ pub struct UsageWindow {
     /// reset time either.
     #[serde(default)]
     pub read_at: i64,
+    /// `resets_at` was worked out from when the percent last dropped, not
+    /// reported by the source. Appended field: older senders omit it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub estimated: bool,
 }
 
 impl UsageWindow {
@@ -113,6 +117,7 @@ impl UsageWindow {
             percent: percent.max(0.0),
             resets_at,
             read_at: 0,
+            estimated: false,
         }
     }
 
@@ -273,7 +278,28 @@ impl AccountUsage {
                 .iter_mut()
                 .find(|old| old.kind == w.kind && old.label == w.label)
             {
-                Some(old) => *old = w,
+                Some(old) => {
+                    let mut w = w;
+                    if w.resets_at.is_none() {
+                        let read = w.read_at.max(1);
+                        // The window rolled over when a reset time we were
+                        // given has passed, or the percent fell by more
+                        // than reading noise: it began at this reading.
+                        let passed =
+                            !old.estimated && old.resets_at.is_some_and(|at| at > 0 && at <= read);
+                        if passed || old.percent - w.percent >= ROLLOVER_DROP {
+                            w.resets_at = Some(read + w.kind.nominal_secs());
+                            w.estimated = true;
+                        } else if let Some(at) = old.resets_at.filter(|at| *at > read) {
+                            // Still running: keep the reset we know, as
+                            // reported or as estimated. A passed estimate
+                            // is dropped, not carried.
+                            w.resets_at = Some(at);
+                            w.estimated = old.estimated;
+                        }
+                    }
+                    *old = w;
+                }
                 None => self.windows.push(w),
             }
         }
@@ -323,15 +349,22 @@ pub fn default_login_harness(key: &str) -> Option<&str> {
     key.strip_prefix('@')
 }
 
-/// How alarming a percent is: the bars go ember at 80, red at 95.
+/// How alarming a percent is: steps at 70, 85 and 95.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tone {
     Ok,
+    /// 70 and over: worth a glance.
+    Watch,
     Warn,
     Hot,
 }
 
-pub const WARN_AT: f32 = 80.0;
+/// How far a percent must fall between two readings, with no reset time
+/// to say so, before the window counts as rolled over (not reading noise).
+pub const ROLLOVER_DROP: f32 = 20.0;
+
+pub const WATCH_AT: f32 = 70.0;
+pub const WARN_AT: f32 = 85.0;
 pub const HOT_AT: f32 = 95.0;
 
 pub fn tone(percent: f32) -> Tone {
@@ -339,6 +372,8 @@ pub fn tone(percent: f32) -> Tone {
         Tone::Hot
     } else if percent >= WARN_AT {
         Tone::Warn
+    } else if percent >= WATCH_AT {
+        Tone::Watch
     } else {
         Tone::Ok
     }
@@ -366,20 +401,9 @@ pub fn block_bar(percent: Option<f32>, width: usize) -> String {
     )
 }
 
-/// `in 3h 12m`, `in 2d 4h`, `now` — the time left until `resets_at`.
+/// `in 3 h 12 m`, `in 2 d 4 h`, `now` — the time left until `resets_at`.
 pub fn resets_in(resets_at: i64, now_secs: i64) -> String {
-    let left = resets_at - now_secs;
-    if left <= 0 {
-        return "now".into();
-    }
-    let (d, h, m) = (left / 86_400, (left % 86_400) / 3600, (left % 3600) / 60);
-    if d > 0 {
-        format!("in {d}d {h}h")
-    } else if h > 0 {
-        format!("in {h}h {m}m")
-    } else {
-        format!("in {}m", m.max(1))
-    }
+    crate::usage_window::countdown(resets_at - now_secs)
 }
 
 // ---------------------------------------------------------------------
@@ -944,6 +968,7 @@ pub fn window_from_legacy(name: &str, percent: f32, resets_at: Option<i64>) -> U
         percent,
         resets_at,
         read_at: 0,
+        estimated: false,
     }
 }
 
@@ -1359,8 +1384,10 @@ mod tests {
 
     #[test]
     fn bars_tones_and_text() {
-        assert_eq!(tone(79.9), Tone::Ok);
-        assert_eq!(tone(80.0), Tone::Warn);
+        assert_eq!(tone(69.9), Tone::Ok);
+        assert_eq!(tone(70.0), Tone::Watch);
+        assert_eq!(tone(84.9), Tone::Watch);
+        assert_eq!(tone(85.0), Tone::Warn);
         assert_eq!(tone(95.0), Tone::Hot);
         assert_eq!(block_bar(Some(50.0), 4), "\u{25b0}\u{25b0}\u{25b1}\u{25b1}");
         assert_eq!(
@@ -1372,8 +1399,8 @@ mod tests {
         assert_eq!(block_bar(None, 2), "\u{254c}\u{254c}");
         assert_eq!(pct_text(None), "\u{2014}");
         assert_eq!(pct_text(Some(21.4)), "21%");
-        assert_eq!(resets_in(100 + 3 * 3600 + 12 * 60, 100), "in 3h 12m");
-        assert_eq!(resets_in(100 + 2 * 86_400 + 4 * 3600, 100), "in 2d 4h");
+        assert_eq!(resets_in(100 + 3 * 3600 + 12 * 60, 100), "in 3 h 12 m");
+        assert_eq!(resets_in(100 + 2 * 86_400 + 4 * 3600, 100), "in 2 d 4 h");
         assert_eq!(resets_in(5, 10), "now");
         assert_eq!(account_key(None, "claude"), "@claude");
         assert_eq!(account_key(Some("work"), "claude"), "work");
@@ -1384,6 +1411,7 @@ mod tests {
             windows: vec![UsageWindow {
                 label: Some("chat".into()),
                 read_at: 1,
+                estimated: false,
                 ..UsageWindow::new(WindowKind::Monthly, 10.0, None)
             }],
             source: UsageSource::CopilotApi,

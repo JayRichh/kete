@@ -108,6 +108,26 @@ export interface UsageWindow {
   resets_at: number | null;
   /** Epoch seconds it was read; 0 = unknown. */
   read_at: number;
+  /** The reset was worked out from when the percent dropped, not reported. */
+  estimated?: boolean;
+}
+/** A window worded by the shared Rust formatter (`usage_window::format`). */
+export interface UsageLabel {
+  percent: number | null;
+  /** 0 below 70, 1 from 70, 2 from 85, 3 from 95. */
+  step: 0 | 1 | 2 | 3;
+  clock: string | null;
+  countdown: string | null;
+  start: string | null;
+  iso: string | null;
+  estimated: boolean;
+  /** `87% - resets 9:50 pm`. */
+  compact: string;
+  long: string;
+  /** `resets 9:50 pm`, or empty. */
+  resets: string;
+  hover: string;
+  banner: string | null;
 }
 export type UsageSource = 'statusline' | 'transcript' | 'rollout' | 'copilot_api' | 'copilot_events' | 'screen';
 /** An account's latest plan usage, keyed by profile name or `@<harness>`. */
@@ -683,6 +703,7 @@ export const api = {
   profileSetDefault: (name: string) => invoke<ProfileRow[]>('profile_set_default', { name }),
   accounts: () => invoke<AccountRow[]>('accounts_list'),
   /** Ask the daemon for fresh plan usage now (a window coming to the front). */
+  usageLabels: (windows: UsageWindow[], nowSecs: number) => invoke<UsageLabel[]>('usage_labels', { windows, nowSecs }),
   nudgeAccountUsage: () => invoke<void>('accounts_usage_nudge'),
   /** Whakaoho: every Claude account's wake-up schedule, next run, usual
    *  hours, suggestion, each anchor's preview and last decisions

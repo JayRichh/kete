@@ -173,7 +173,11 @@ fn state_of(account: &Account, activity: Option<&AccountActivity>) -> decide::Ac
 
 fn session_reset(key: &str) -> Option<i64> {
     usage::read_account(key)
-        .and_then(|r| r.window(WindowKind::Session).and_then(|w| w.resets_at))
+        .and_then(|r| {
+            r.window(WindowKind::Session)
+                .filter(|w| !w.estimated)
+                .and_then(|w| w.resets_at)
+        })
         .filter(|&at| at > 0)
 }
 

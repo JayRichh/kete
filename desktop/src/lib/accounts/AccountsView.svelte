@@ -14,6 +14,7 @@
   import { ownMenu } from '../menus/router';
   import { useForItems } from '../menus/account';
   import UsageBar from './UsageBar.svelte';
+  import { labelFor } from './labels.svelte';
   import ProfileEditor from './ProfileEditor.svelte';
   import {
     bars,
@@ -21,7 +22,6 @@
     loginTitle,
     mergeRows,
     ownLoginSessionHarnesses,
-    resetsIn,
     sessionsOn,
     shownAt,
     staleAt,
@@ -178,8 +178,8 @@
   }
 
   function resetLine(w: UsageWindow | null): string {
-    if (!w || !w.resets_at || w.resets_at * 1000 <= app.now) return '';
-    return `resets ${resetsIn(w.resets_at, app.now)}`;
+    const l = labelFor(w);
+    return l && l.resets ? `${l.resets} ${l.countdown ?? ''}`.trimEnd() : '';
   }
 
   function stateWord(r: AccountRow): { text: string; tone: string } {
@@ -346,7 +346,7 @@
                   <div class="min-w-0 flex-1">
                     <UsageBar label={windowLabel(w, i as 0 | 1)} percent={w ? shownAt(w, app.now) : null} stale={!!w && staleAt(w, app.now)} />
                   </div>
-                  <span class="w-[92px] flex-none truncate font-mono text-[10px] text-faint">{resetLine(w)}</span>
+                  <span class="w-[190px] flex-none truncate font-mono text-[10px] text-faint" title={labelFor(w)?.hover || undefined}>{resetLine(w)}</span>
                 </div>
               {/each}
               {#if r.harness === 'claude' && !r.problem}

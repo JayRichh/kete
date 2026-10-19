@@ -1021,6 +1021,7 @@ mod list_tests {
                         percent: 50.0,
                         resets_at: None,
                         read_at: 1,
+                        estimated: false,
                     },
                     UsageWindow {
                         kind: WindowKind::Weekly,
@@ -1028,6 +1029,7 @@ mod list_tests {
                         percent: 10.0,
                         resets_at: None,
                         read_at: 1,
+                        estimated: false,
                     },
                 ],
                 source: UsageSource::Statusline,

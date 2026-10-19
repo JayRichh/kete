@@ -45,6 +45,7 @@ pub(crate) struct WakeSession {
 fn session_reset(reading: Option<&AccountUsage>) -> Option<i64> {
     reading
         .and_then(|u| u.window(WindowKind::Session))
+        .filter(|w| !w.estimated)
         .and_then(|w| w.resets_at)
         .filter(|&at| at > 0)
 }

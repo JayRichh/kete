@@ -2574,6 +2574,7 @@ fn draw_card(
                 let pad = width - label_w - harness.chars().count();
                 let fg = match nebula_core::usage::tone(tone) {
                     nebula_core::usage::Tone::Ok => quiet_or(dim),
+                    nebula_core::usage::Tone::Watch => quiet_or(th.accent),
                     nebula_core::usage::Tone::Warn => quiet_or(th.warn),
                     nebula_core::usage::Tone::Hot => quiet_or(th.err),
                 };
@@ -3552,6 +3553,7 @@ fn pane_facts(app: &App, row: &LauncherRow, is_main: bool, now_ms: i64) -> PaneF
         let label = crate::accounts_overlay::context_label(c)?;
         let fg = match nebula_core::usage::tone(c.percent?) {
             nebula_core::usage::Tone::Ok => th.muted,
+            nebula_core::usage::Tone::Watch => th.accent,
             nebula_core::usage::Tone::Warn => th.warn,
             nebula_core::usage::Tone::Hot => th.err,
         };
@@ -4236,6 +4238,7 @@ impl Details {
                 self.profile.as_ref().unwrap_or(&self.model),
                 match self.profile_tone {
                     nebula_core::usage::Tone::Ok => th.text,
+                    nebula_core::usage::Tone::Watch => th.accent,
                     nebula_core::usage::Tone::Warn => th.warn,
                     nebula_core::usage::Tone::Hot => th.err,
                 },
