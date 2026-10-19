@@ -280,13 +280,16 @@ fn row_spans(row: &Row, width: usize, now: i64, th: Theme) -> Vec<Span<'static>>
     // folded one still shows that one needs you; dropped when the name
     // would have too little room left.
     let tally = crate::subagents::rollup(n).label();
-    let fixed =
-        if n.session && row.has_kids() && !tally.is_empty() && fixed + tally.chars().count() + 3 + 12 <= width {
-            meta.push_str(&format!(" · {tally}"));
-            fixed + tally.chars().count() + 3
-        } else {
-            fixed
-        };
+    let fixed = if n.session
+        && row.has_kids()
+        && !tally.is_empty()
+        && fixed + tally.chars().count() + 3 + 12 <= width
+    {
+        meta.push_str(&format!(" · {tally}"));
+        fixed + tally.chars().count() + 3
+    } else {
+        fixed
+    };
     let label = truncate(&n.label, width.saturating_sub(fixed).max(8));
     let name_style = if n.session {
         Style::default().fg(th.text).add_modifier(Modifier::BOLD)
