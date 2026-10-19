@@ -915,6 +915,7 @@ fn main() {
             pr_poll::refresh_prs,
             branches::worktree_settings,
             branches::checkout_state,
+            branches::move_check,
             branches::worktree_git,
             branches::git_stamps,
             board::board_scope,

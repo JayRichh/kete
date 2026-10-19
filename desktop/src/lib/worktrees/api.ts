@@ -12,6 +12,14 @@ export interface CheckoutState {
   unpushed: number | null;
 }
 
+/** What a move's confirm says stays behind (src-tauri branches.rs
+ *  `MoveCheck`): null state when git could not say, `timed_out` when it
+ *  took too long. */
+export interface MoveCheck {
+  state: CheckoutState | null;
+  timed_out: boolean;
+}
+
 /** One branch the root checkout could switch to. */
 export interface Branch {
   /** `feature-x`, or `origin/feature-x` for a remote branch. */
@@ -65,6 +73,8 @@ export const worktreeApi = {
   /** Read fresh from config.json at delete time. */
   settings: () => invoke<{ delete_empty_worktree: boolean }>('worktree_settings'),
   checkoutState: (worktree: string) => invoke<CheckoutState>('checkout_state', { worktree }),
+  /** The checkout a session is leaving, read within 3 seconds (src-tauri `move_check`). */
+  moveCheck: (worktree: string) => invoke<MoveCheck>('move_check', { worktree }),
   /** Each named checkout's git state; one that can't be read is left out. */
   git: (worktrees: string[]) => invoke<Record<string, WorktreeGit>>('worktree_git', { worktrees }),
   /** A metadata-only fingerprint per checkout (src-tauri git.rs `git_stamp`). */

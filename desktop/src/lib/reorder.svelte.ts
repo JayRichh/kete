@@ -4,7 +4,7 @@
 
 import { api, type Agent, type DropTarget, type DropVerb, type ReorderScope, type Worktree } from './api';
 import { worktreeApi } from './worktrees/api';
-import { moveReport } from './move';
+import { moveQuestion, oneAtATime } from './move';
 import { app, toast } from './store.svelte';
 import { ask } from './ui/ui.svelte';
 import { agentIds, boardIds, placeId, projectIds, rootFirst, stepId, treeSiblings, worktreeIds, type Place } from './order';
@@ -130,16 +130,18 @@ export function agentDropOk(d: Dragged | null, target: string): d is Extract<Dra
  *  puts anyway (a drag), so a clean checkout still gets that one. */
 export async function confirmMove(agent: Agent, to: Worktree, asked?: string): Promise<boolean> {
   const from = app.model.worktrees.find((x) => x.id === agent.worktree_id);
-  const state = from ? await worktreeApi.checkoutState(from.id).catch(() => null) : null;
-  const report = from ? moveReport(state, from.branch) : null;
-  if (!report && !asked) return true;
-  const r = await ask.confirm({
-    title: 'Move session',
-    message: report ? `${report} Move "${agent.name}" to ${to.branch} anyway?` : asked!,
-    confirm: 'Move',
+  // One read and one question per session at a time: a second Move press
+  // while the first is reading or asking does nothing.
+  const answer = await moveAsks(agent.id, async () => {
+    const check = from ? await worktreeApi.moveCheck(from.id).catch(() => null) : null;
+    const message = moveQuestion(check, from?.branch ?? '', agent.name, to.branch, asked);
+    if (!message) return true;
+    const r = await ask.confirm({ title: 'Move session', message, confirm: 'Move' });
+    return r.ok;
   });
-  return r.ok;
+  return answer ?? false;
 }
+const moveAsks = oneAtATime<boolean>();
 
 /** A session dropped on a checkout (a worktree's header, a repo in the
  *  rail: its root): asks, then moves it there. */

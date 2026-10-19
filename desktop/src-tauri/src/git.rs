@@ -1024,6 +1024,84 @@ pub fn checkout_state(root: &Path) -> Result<CheckoutState, String> {
     })
 }
 
+/// How long a move's read of the checkout it leaves may take, all of its
+/// git together, before the move asks without it.
+pub const MOVE_READ_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Why a [`move_state_with`] git run gave no output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MoveReadError {
+    /// It ran past the read's deadline and was killed.
+    TimedOut,
+    Failed(String),
+}
+
+/// One git run for [`move_state_with`].
+pub type MoveGitRun<'a> = &'a dyn Fn(&Path, &[&str]) -> Result<Output, MoveReadError>;
+
+/// What stays behind when a session moves out of `root`, counted as the
+/// terminal app counts it (`nebula-tui` `delete_check::read_with`): every
+/// entry `git status -uall` lists, untracked files one by one, and the
+/// commits HEAD has that its upstream lacks, or with no upstream that no
+/// remote has. All of its git shares one `timeout`.
+pub fn move_state(root: &Path, timeout: Duration) -> Result<CheckoutState, MoveReadError> {
+    let deadline = std::time::Instant::now() + timeout;
+    let run = move |cwd: &Path, args: &[&str]| {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return Err(MoveReadError::TimedOut);
+        }
+        let mut cmd = git_command(cwd, args);
+        cmd.stdout(Stdio::piped());
+        output_within(cmd, left, "git").map_err(|why| {
+            if std::time::Instant::now() >= deadline {
+                MoveReadError::TimedOut
+            } else {
+                MoveReadError::Failed(why)
+            }
+        })
+    };
+    move_state_with(root, &run)
+}
+
+/// [`move_state`] through `run`.
+pub fn move_state_with(root: &Path, run: MoveGitRun<'_>) -> Result<CheckoutState, MoveReadError> {
+    let status = run(root, &["status", "--porcelain=v1", "-z", "-uall"])?;
+    if !status.status.success() {
+        return Err(MoveReadError::Failed(git_failure(&["status"], &status)));
+    }
+    let (changed, untracked) = count_status(&status.stdout);
+    let count = |args: &[&str]| -> Result<Option<u32>, MoveReadError> {
+        match run(root, args) {
+            Ok(out) if out.status.success() => {
+                Ok(String::from_utf8_lossy(&out.stdout).trim().parse().ok())
+            }
+            Ok(_) | Err(MoveReadError::Failed(_)) => Ok(None),
+            Err(MoveReadError::TimedOut) => Err(MoveReadError::TimedOut),
+        }
+    };
+    let unpushed = match count(&["rev-list", "--count", "@{upstream}..HEAD"])? {
+        Some(n) => Some(n),
+        None => {
+            let remotes = match run(root, &["remote"]) {
+                Ok(out) => String::from_utf8_lossy(&out.stdout).trim().to_string(),
+                Err(MoveReadError::TimedOut) => return Err(MoveReadError::TimedOut),
+                Err(MoveReadError::Failed(_)) => String::new(),
+            };
+            if remotes.is_empty() {
+                None
+            } else {
+                count(&["rev-list", "--count", "HEAD", "--not", "--remotes"])?
+            }
+        }
+    };
+    Ok(CheckoutState {
+        changed,
+        untracked,
+        unpushed,
+    })
+}
+
 /// A checkout as the overview's worktree rows show it: its uncommitted
 /// work, where it stands against its upstream, and when HEAD last moved.
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
@@ -1834,6 +1912,68 @@ pub(crate) mod tests {
         assert_eq!((pr.number, pr.state.as_str(), pr.draft), (3, "open", true));
         assert!(pick_pr(json, "other").is_none());
         assert!(pick_pr(b"[]", "topic").is_none());
+    }
+
+    #[test]
+    fn a_move_read_past_its_deadline_times_out() {
+        let repo = Repo::new("move-deadline");
+        repo.write(
+            "a.txt", b"a
+",
+        );
+        repo.commit("one");
+        assert_eq!(
+            move_state(&repo.0, Duration::ZERO),
+            Err(MoveReadError::TimedOut)
+        );
+        // In time, it reads: one untracked file in a new folder counts once.
+        repo.write(
+            "new/b.txt",
+            b"b
+",
+        );
+        assert_eq!(
+            move_state(&repo.0, MOVE_READ_TIMEOUT).unwrap(),
+            CheckoutState {
+                changed: 0,
+                untracked: 1,
+                unpushed: None,
+            }
+        );
+    }
+
+    #[test]
+    fn a_git_that_times_out_partway_is_a_timeout_not_a_clean_read() {
+        let ok = |stdout: &str| Output {
+            status: Command::new("git")
+                .arg("--version")
+                .output()
+                .unwrap()
+                .status,
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: Vec::new(),
+        };
+        let root = std::env::temp_dir();
+        let status_then_hang = |_: &Path, args: &[&str]| match args[0] {
+            "status" => Ok(ok("?? a.txt ")),
+            _ => Err(MoveReadError::TimedOut),
+        };
+        assert_eq!(
+            move_state_with(&root, &status_then_hang),
+            Err(MoveReadError::TimedOut)
+        );
+        let status_then_fail = |_: &Path, args: &[&str]| match args[0] {
+            "status" => Ok(ok(" M a ?? b ")),
+            _ => Err(MoveReadError::Failed("no git".into())),
+        };
+        assert_eq!(
+            move_state_with(&root, &status_then_fail),
+            Ok(CheckoutState {
+                changed: 1,
+                untracked: 1,
+                unpushed: None,
+            })
+        );
     }
 
     #[test]

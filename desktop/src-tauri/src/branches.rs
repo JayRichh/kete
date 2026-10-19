@@ -87,6 +87,41 @@ pub async fn git_stamps(
     .map_err(|e| e.to_string())
 }
 
+/// What a move's confirm says stays behind: the checkout's state, or None
+/// when git could not say (the move goes ahead without a report), and
+/// whether the read ran out of time (the move asks anyway).
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub struct MoveCheck {
+    pub state: Option<git::CheckoutState>,
+    pub timed_out: bool,
+}
+
+/// The checkout a session is leaving, read within
+/// [`git::MOVE_READ_TIMEOUT`] (`move_state`).
+#[tauri::command]
+pub async fn move_check(client: State<'_, Arc<Client>>, worktree: String) -> Res<MoveCheck> {
+    let root = worktree_path(&client, &worktree)?;
+    let read = tauri::async_runtime::spawn_blocking(move || {
+        git::move_state(&root, git::MOVE_READ_TIMEOUT)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(match read {
+        Ok(state) => MoveCheck {
+            state: Some(state),
+            timed_out: false,
+        },
+        Err(git::MoveReadError::TimedOut) => MoveCheck {
+            state: None,
+            timed_out: true,
+        },
+        Err(git::MoveReadError::Failed(_)) => MoveCheck {
+            state: None,
+            timed_out: false,
+        },
+    })
+}
+
 /// How many checkouts one [`worktree_git`] call reads at once.
 const GIT_READERS: usize = 4;
 
