@@ -353,6 +353,7 @@ mod tests {
             percent: 12.0,
             resets_at: Some(resets_at),
             read_at: resets_at - 3600,
+            estimated: false,
         }
     }
 

@@ -30,6 +30,7 @@ pub mod shell;
 pub mod stop;
 pub mod tracked_settings;
 pub mod usage;
+pub mod usage_window;
 pub mod wake;
 
 pub use entities::*;

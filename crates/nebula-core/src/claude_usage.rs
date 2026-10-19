@@ -82,13 +82,14 @@ pub fn windows(body: &Value, now_secs: i64) -> Vec<UsageWindow> {
                 .and_then(Value::as_str)
                 .and_then(epoch_secs),
             read_at: now_secs,
+            estimated: false,
         })
     })
     .collect()
 }
 
 /// Epoch seconds of an RFC 3339 time (`2026-10-19T10:09:59.89+00:00`).
-fn epoch_secs(text: &str) -> Option<i64> {
+pub fn epoch_secs(text: &str) -> Option<i64> {
     let (date, rest) = text.split_once('T')?;
     let mut d = date.split('-').map(|n| n.parse::<i64>().ok());
     let (y, m, day) = (d.next()??, d.next()??, d.next()??);

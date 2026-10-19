@@ -45,8 +45,18 @@ pub fn run_statusline() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `ctx 34% · 5h 21% · wk 3%`, each part only when the JSON has it.
+/// `ctx 34% · 5h 21% · resets 9:50 pm · wk 3%`, each part only when the JSON has it.
 pub fn compact_line(json: &Value) -> String {
+    compact_line_at(
+        json,
+        nebula_core::clock::now_secs() as i64,
+        nebula_core::usage_window::local,
+    )
+}
+
+/// [`compact_line`] as of `now` in the zone `tz`: a window that reports its
+/// reset says it in local time, `5h 87% · resets 9:50 pm`.
+pub fn compact_line_at(json: &Value, now: i64, tz: impl Fn(i64) -> i32 + Copy) -> String {
     let r = nebula_core::usage::claude_statusline(json);
     let mut parts = Vec::new();
     if let Some(p) = r.context_percent {
@@ -59,10 +69,13 @@ pub fn compact_line(json: &Value) -> String {
             }
             kind => kind.short().to_string(),
         };
-        parts.push(format!(
-            "{name} {}",
-            nebula_core::usage::pct_text(Some(w.percent))
-        ));
+        // A statusLine reading is as of this call.
+        let mut w = w.clone();
+        if w.read_at <= 0 {
+            w.read_at = now;
+        }
+        let label = nebula_core::usage_window::format(&w, now, tz);
+        parts.push(format!("{name} {}", label.compact));
     }
     parts.join(" \u{b7} ")
 }
@@ -300,6 +313,15 @@ mod tests {
         }));
         assert_eq!(line, "ctx 34% \u{b7} 5h 21% \u{b7} wk 3%");
         assert_eq!(compact_line(&json!({})), "");
+        // A reset time shows in the local zone (NZDT, +13): 08:50 UTC is 9:50 pm.
+        let now = nebula_core::claude_usage::epoch_secs("2026-10-19T07:38:00Z").unwrap();
+        let reset = nebula_core::claude_usage::epoch_secs("2026-10-19T08:50:00Z").unwrap();
+        let line = compact_line_at(
+            &json!({"rate_limits": {"five_hour": {"used_percentage": 87, "resets_at": reset}}}),
+            now,
+            |_| 13 * 3600,
+        );
+        assert_eq!(line, "5h 87% · resets 9:50 pm");
         assert_eq!(
             compact_line(&json!({"context_window": {"used_percentage": 8}})),
             "ctx 8%",

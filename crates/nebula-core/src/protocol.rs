@@ -1399,6 +1399,7 @@ mod tests {
                     percent: 21.5,
                     resets_at: Some(1_791_891_379),
                     read_at: 0,
+                    estimated: false,
                 }],
                 source: UsageSource::Statusline,
                 at: 9,
