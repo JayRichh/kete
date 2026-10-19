@@ -694,10 +694,12 @@ flow('moving a session out of a checkout with uncommitted work says what stays b
   assert.ok(wt && fs.existsSync(wt), 'the session has a worktree of its own');
   const home = (await d.agents()).find((a) => a.id === id).worktree_id;
   fs.writeFileSync(path.join(wt, 'notes.txt'), 'left behind\n');
-  // Move session, from the palette, on the session the window followed into.
-  await d.press('k', Key.Control);
-  await d.type('[aria-label="Command palette"] input', 'Move session');
-  await d.click('[role="listbox"] [role="option"]', 'Move session');
+  // Move to..., from the palette, on the session the window followed into.
+  // Its terminal has the focus and keeps Ctrl+K; Ctrl+Shift+P opens the
+  // palette from anywhere.
+  await d.press('p', Key.Control, Key.Shift);
+  await d.type('[aria-label="Command palette"] input', 'Move to');
+  await d.click('[role="listbox"] [role="option"]', 'Session agent-1Move to…');
   await d.click('[role="dialog"] [role="option"] button', 'move-proj / main');
   await d.waitForText('1 changed file stays in');
   await d.waitForText('anyway?');
