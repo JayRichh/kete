@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent } from '../api';
 import type { WorktreeGit } from './api';
-import { RUNNING_MS, changedGit, dueRunning, movedStamps, sameGit, stampTouchedAt } from './watch';
+import { RUNNING_MS, changedGit, dueRunning, movedStamps, sameGit, stampTouchedAt, keepStamps } from './watch';
 
 const g = (over: Partial<WorktreeGit> = {}): WorktreeGit => ({
   changed: 0,
@@ -64,5 +64,15 @@ describe('changedGit', () => {
     expect(sameGit(have.w1, g())).toBe(true);
     expect(sameGit(have.w1, g({ upstream: null }))).toBe(false);
     expect(sameGit(undefined, g())).toBe(false);
+  });
+});
+
+describe('keepStamps', () => {
+  it('puts a failed read back to its old stamp, or drops one it never had, so the next tick reads it again', () => {
+    const before = { w1: 'a', w2: 'b' };
+    const next = { w1: 'a2', w2: 'b2', w3: 'c' };
+    expect(keepStamps(before, next, [])).toBe(next);
+    expect(keepStamps(before, next, ['w1', 'w3'])).toEqual({ w1: 'a', w2: 'b2' });
+    expect(next).toEqual({ w1: 'a2', w2: 'b2', w3: 'c' });
   });
 });

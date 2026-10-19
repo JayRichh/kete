@@ -990,7 +990,36 @@ pub fn git_stamp(root: &Path) -> Option<String> {
     };
     let own_parts = OWN_STAMP_FILES.iter().map(|f| part(own.join(f)));
     let common_parts = COMMON_STAMP_FILES.iter().map(|f| part(common.join(f)));
-    Some(own_parts.chain(common_parts).collect::<Vec<_>>().join("|"))
+    let remote_parts = remote_refs_of_branch(&own, &common).into_iter().map(part);
+    Some(
+        own_parts
+            .chain(common_parts)
+            .chain(remote_parts)
+            .collect::<Vec<_>>()
+            .join("|"),
+    )
+}
+
+/// The loose remote-tracking refs named like the checked-out branch
+/// (`refs/remotes/<remote>/<branch>` for each remote), so a push or a
+/// fetch that moves the usual upstream moves the stamp. A packed one is
+/// covered by `packed-refs`. Empty on a detached HEAD.
+fn remote_refs_of_branch(own: &Path, common: &Path) -> Vec<PathBuf> {
+    let Ok(head) = std::fs::read_to_string(own.join("HEAD")) else {
+        return Vec::new();
+    };
+    let Some(branch) = head.trim().strip_prefix("ref: refs/heads/") else {
+        return Vec::new();
+    };
+    let Ok(remotes) = std::fs::read_dir(common.join("refs").join("remotes")) else {
+        return Vec::new();
+    };
+    let mut refs: Vec<PathBuf> = remotes
+        .flatten()
+        .map(|remote| remote.path().join(branch))
+        .collect();
+    refs.sort();
+    refs
 }
 
 /// What deleting a checkout would throw away, for the delete confirm.
@@ -1912,6 +1941,26 @@ pub(crate) mod tests {
         assert_eq!((pr.number, pr.state.as_str(), pr.draft), (3, "open", true));
         assert!(pick_pr(json, "other").is_none());
         assert!(pick_pr(b"[]", "topic").is_none());
+    }
+
+    #[test]
+    fn a_moved_remote_ref_of_the_branch_moves_the_stamp() {
+        let repo = Repo::new("stamp-remote");
+        repo.write("a.txt", b"a\n");
+        repo.commit("one");
+        let branch =
+            String::from_utf8(git(&repo.0, &["branch", "--show-current"]).unwrap()).unwrap();
+        let tracking = repo.0.join(".git/refs/remotes/origin").join(branch.trim());
+        std::fs::create_dir_all(tracking.parent().unwrap()).unwrap();
+        let head = String::from_utf8(git(&repo.0, &["rev-parse", "HEAD"]).unwrap()).unwrap();
+        std::fs::write(&tracking, &head).unwrap();
+        let before = git_stamp(&repo.0).unwrap();
+        std::fs::write(&tracking, format!("{}\n\n", head.trim())).unwrap();
+        assert_ne!(
+            git_stamp(&repo.0).unwrap(),
+            before,
+            "a push moved origin's ref"
+        );
     }
 
     #[test]

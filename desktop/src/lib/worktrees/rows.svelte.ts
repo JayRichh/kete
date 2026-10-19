@@ -12,7 +12,7 @@ import { app, sessionWorktree, toast } from '../store.svelte';
 import { worktreeApi, type WorktreeGit } from './api';
 import { pruneKeys, repoKey, setKey } from './groups';
 import { turnMarks, turnedWorktrees, type TurnMarks } from './turns';
-import { STAMP_MS, changedGit, dueRunning, movedStamps } from './watch';
+import { STAMP_MS, changedGit, dueRunning, keepStamps, movedStamps } from './watch';
 
 export const rows = $state({
   /** Folded groups: `repo:<id>`, `wt:<id>`. */
@@ -66,31 +66,37 @@ const queued = new Set<string>();
 /** Read the checkouts' git state, skipping any read in the last few
  *  seconds unless `force`. One read at a time; a call during one waits
  *  for the next tick of the poll, or, forced, for that read to end. */
-export async function refreshGit(ids: string[], force = false) {
-  if (!ids.length) return;
+export async function refreshGit(ids: string[], force = false): Promise<string[]> {
+  if (!ids.length) return [];
   if (reading) {
     if (force) for (const id of ids) queued.add(id);
-    return;
+    return [];
   }
   const now = Date.now();
   const due = ids.filter((id) => force || now - (readAt.get(id) ?? 0) >= MIN_GAP_MS);
-  if (!due.length) return;
+  if (!due.length) return [];
   reading = true;
   for (const id of due) readAt.set(id, now);
+  /** Checkouts this read could not read: the backend left one out, or
+   *  the whole call failed. */
+  let failed: string[] = [];
   try {
     const got = await worktreeApi.git(due);
+    failed = due.filter((id) => !(id in got));
     // Only what changed is written: an unchanged row keeps its object.
     for (const [id, g] of Object.entries(changedGit(rows.git, got))) rows.git[id] = g;
   } catch {
     /* the next poll tries again */
+    failed = due;
   } finally {
     reading = false;
   }
   if (queued.size) {
     const next = [...queued];
     queued.clear();
-    await refreshGit(next, true);
+    failed = [...failed, ...(await refreshGit(next, true))];
   }
+  return failed;
 }
 
 let watchers = 0;
@@ -112,10 +118,13 @@ async function stampTick() {
   try {
     const next = await worktreeApi.stamps(shown);
     const moved = movedStamps(stamps, next, readAt);
+    const before = stamps;
     stamps = next;
     const due = document.hasFocus() ? dueRunning(app.model.agents, shown, readAt, Date.now()) : [];
     const ids = [...new Set([...moved, ...due])];
-    if (ids.length) await refreshGit(ids, true);
+    // A moved checkout whose read failed keeps its old stamp, so the next
+    // tick sees it moved and reads it again.
+    if (ids.length) stamps = keepStamps(before, stamps, await refreshGit(ids, true));
   } catch {
     /* the next tick tries again */
   } finally {

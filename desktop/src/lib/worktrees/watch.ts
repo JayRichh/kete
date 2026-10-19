@@ -1,6 +1,7 @@
 // What the git watcher reads again. Every couple of seconds the window
 // takes a stamp per shown checkout (src-tauri git.rs `git_stamp`: file
-// metadata of HEAD, the index, the reflog and the packed refs, no git
+// metadata of HEAD, the index, the reflog, the packed refs and the
+// remote-tracking refs named like the branch, no git
 // process) and reads only the checkouts whose stamp moved. An edit in the
 // working tree moves no stamp, so a checkout with a running session is
 // read again on a slower beat of its own. Pure, so the rules are tested
@@ -34,6 +35,19 @@ export function movedStamps(last: Record<string, string>, next: Record<string, s
   return Object.keys(next).filter((id) =>
     id in last ? last[id] !== next[id] : stampTouchedAt(next[id]) >= (readAt.get(id) ?? 0),
   );
+}
+
+/** `next` with each of `failed` put back to its stamp in `before` (or
+ *  dropped when it had none), so a checkout whose read failed after its
+ *  stamp moved is seen to move again on the next tick and read again. */
+export function keepStamps(before: Record<string, string>, next: Record<string, string>, failed: string[]): Record<string, string> {
+  if (!failed.length) return next;
+  const out = { ...next };
+  for (const id of failed) {
+    if (id in before) out[id] = before[id];
+    else delete out[id];
+  }
+  return out;
 }
 
 /** Shown checkouts with a running session in them, last read at least
