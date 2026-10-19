@@ -179,6 +179,10 @@ mod tests {
             "0.46.0",
             include_str!("../../nebula-core/fixtures/config-0.46.0.json"),
         ),
+        (
+            "0.55.0",
+            include_str!("../../nebula-core/fixtures/config-0.55.0.json"),
+        ),
     ];
 
     fn read_json_file(path: &Path) -> serde_json::Value {
