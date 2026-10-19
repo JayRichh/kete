@@ -4,7 +4,7 @@
 
 The `kete` CLI. Every command carries its own help: `kete <command> --help` is the full page,
 flags and examples included, and `-h` is the one-screen reminder. `kete --version` (short `-V`)
-prints the version of the binary you're running (`kete 0.54.0`), the same version the TUI's
+prints the version of the binary you're running (`kete 0.56.0`), the same version the TUI's
 FOOTER carries at its left edge (with `⇡ vX.Y.Z` beside it once a newer release is published), and
 what to check after `kete upgrade`. This page is the same surface in one place. Commands marked *(agents run this)* are the ones a coding agent invokes on
 your behalf, see [How it works](how-it-works.md).

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.56.0
+
+Sessions you start from a session, what each subagent runs on, and git state that keeps up.
+
+- **Follow-up as its own session.** In the follow-up box, Start as new session (`Ctrl+Shift+Enter` in the desktop, `Ctrl+N` in the terminal app) starts what you typed as a new session in the same checkout. It nests under the session it came from, and the app opens it.
+- **Ask aside.** A session's menu has Ask aside: a side question goes to a new session beside it, framed so it answers without changing files. The question gets its own session, nested under the one it is about, and the main session's turn is left alone.
+- **Nested counts.** A session with nested sessions or subagents says how many are working, need you or are done. Finished subagents folded into their `N finished` row count as done.
+- **Subagent model and effort.** Subagent rows on the overview, the board and the terminal app's tree and cards show the model and effort a subagent runs at, when Claude reports them (`Explore · haiku · low`). This needs protocol 64: restart the daemon after upgrading.
+- **Git state within seconds (desktop).** The desktop notices a commit, checkout, reset, stage or fetch in any shown checkout within 2 seconds, without running git to find out. It re-reads a checkout with a working session every 6 seconds. A row whose git state did not change keeps its state.
+- **Session details (desktop).** The session view's Details rail shows where the session runs (its checkout, or its Claude Cloud page), context use, changed files in its checkout, model and effort, and how the sessions and subagents it started stand.
+- **Moving a session says what stays behind.** Before a session moves to another checkout, both apps count the uncommitted files and unpushed commits that stay in the old one, and ask first. A clean checkout moves as before.
+- **Recent checkouts on the quick prompt.** The quick prompt offers the five checkouts sessions last ran in. Click one in the desktop. In the terminal app, `^R` lists them and `Alt+1` to `Alt+5` aim the launch.
+
 ## 0.54.0
 
 Editors, menus, appearance, Files, wake-up scheduling, usage limits and critters ship together in this release.

@@ -117,6 +117,17 @@ pub struct Release {
 /// reading in the app.
 pub const WHATS_NEW: &[Release] = &[
     Release {
+        version: "0.56",
+        title: "Sessions from sessions",
+        items: &[
+            "Start a follow-up as its own session, or Ask aside: both nest under the session they came from.",
+            "Parent rows count their nested sessions and subagents: working, needs you, done.",
+            "Subagent rows show the model and effort they run at, when Claude reports them.",
+            "Moving a session says which uncommitted files and unpushed commits stay behind.",
+            "The quick prompt offers recent checkouts; the desktop's git state and Details rail keep up within seconds.",
+        ],
+    },
+    Release {
         version: "0.54",
         title: "Your tools, your menus, your day",
         items: &[
