@@ -234,13 +234,19 @@ pub fn a_048_data_dir_upgrades_in_place() {
     let tests_agent = TESTS_AGENT;
 
     // What's new, once: this is an upgrade (the database was there).
-    tui.wait_for_text("What's new in 0.49 to 0.52");
+    let releases = nebula_config::learn::WHATS_NEW;
+    let whats_new = format!(
+        "What's new in {} to {}",
+        releases[releases.len() - 1].version,
+        releases[0].version
+    );
+    tui.wait_for_text(&whats_new);
     // The checkout that tracks Kete's hooks file, named with the command.
     tui.wait_for_text(
         "git rm --cached .claude/settings.local.json in alpha feat/login, then commit: git tracks Kete's hooks file",
     );
     tui.send(ESC);
-    tui.wait_for_gone("What's new in 0.49 to 0.52");
+    tui.wait_for_gone(&whats_new);
     let current = nebula_config::learn::current_version();
     tui.wait_for("whats_new_seen written", |_| {
         config(&tui)["whats_new_seen"] == serde_json::json!(current)
