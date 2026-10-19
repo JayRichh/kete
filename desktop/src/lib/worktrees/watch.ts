@@ -14,11 +14,26 @@ export const STAMP_MS = 2_000;
 /** The least time between two reads of a checkout a session is working in. */
 export const RUNNING_MS = 6_000;
 
-/** Checkouts whose stamp differs from the last one taken. A checkout seen
- *  for the first time counts as moved; one left out of `next` (gone, or
- *  not a checkout) does not. */
-export function movedStamps(last: Record<string, string>, next: Record<string, string>): string[] {
-  return Object.keys(next).filter((id) => last[id] !== next[id]);
+/** The newest modification time a stamp names, epoch ms: each part is
+ *  `<len>:<mtime ns>`, or `-` for a file that is not there. */
+export function stampTouchedAt(stamp: string): number {
+  let newest = 0;
+  for (const part of stamp.split('|')) {
+    const ns = Number(part.split(':')[1]);
+    if (Number.isFinite(ns)) newest = Math.max(newest, ns / 1e6);
+  }
+  return newest;
+}
+
+/** Checkouts to read again: a stamp that differs from the last one taken,
+ *  and a checkout stamped for the first time whose files changed since its
+ *  last read began (`readAt`, epoch ms), so a stage that lands while a
+ *  read runs, before the first stamp, is not lost. One left out of `next`
+ *  (gone, or not a checkout) is not read. */
+export function movedStamps(last: Record<string, string>, next: Record<string, string>, readAt: Map<string, number> = new Map()): string[] {
+  return Object.keys(next).filter((id) =>
+    id in last ? last[id] !== next[id] : stampTouchedAt(next[id]) >= (readAt.get(id) ?? 0),
+  );
 }
 
 /** Shown checkouts with a running session in them, last read at least

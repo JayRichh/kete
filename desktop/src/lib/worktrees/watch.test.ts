@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent } from '../api';
 import type { WorktreeGit } from './api';
-import { RUNNING_MS, changedGit, dueRunning, movedStamps, sameGit } from './watch';
+import { RUNNING_MS, changedGit, dueRunning, movedStamps, sameGit, stampTouchedAt } from './watch';
 
 const g = (over: Partial<WorktreeGit> = {}): WorktreeGit => ({
   changed: 0,
@@ -21,8 +21,27 @@ const agent = (id: string, worktree_id: string, status: Agent['status'], archive
 describe('movedStamps', () => {
   it('names new and changed stamps and ignores the ones that held still or left', () => {
     const last = { w1: 'a', w2: 'b', gone: 'c' };
-    expect(movedStamps(last, { w1: 'a', w2: 'B', w3: 'x' })).toEqual(['w2', 'w3']);
+    expect(movedStamps(last, { w1: 'a', w2: 'B', w3: '1:0' })).toEqual(['w2', 'w3']);
     expect(movedStamps(last, {})).toEqual([]);
+  });
+});
+
+describe('a checkout stamped for the first time', () => {
+  // 5 000 ms and 9 000 ms after the epoch, in the stamp's nanoseconds.
+  const stamp = (ms: number) => `41:${ms * 1e6}|137:${(ms - 500) * 1e6}|-`;
+
+  it('reads its newest file time off the stamp, missing files ignored', () => {
+    expect(stampTouchedAt(stamp(9_000))).toBe(9_000);
+    expect(stampTouchedAt('-|-')).toBe(0);
+  });
+
+  it('is read again when a file changed after its last read began', () => {
+    // Staged while the read that began at 8 000 ran: that read may have missed it.
+    expect(movedStamps({}, { w1: stamp(9_000) }, new Map([['w1', 8_000]]))).toEqual(['w1']);
+    // Untouched since the read: nothing to do.
+    expect(movedStamps({}, { w1: stamp(5_000) }, new Map([['w1', 8_000]]))).toEqual([]);
+    // Never read: read.
+    expect(movedStamps({}, { w1: stamp(5_000) })).toEqual(['w1']);
   });
 });
 

@@ -111,31 +111,13 @@ async function stampTick() {
   stamping = true;
   try {
     const next = await worktreeApi.stamps(shown);
-    const moved = movedStamps(stamps, next);
-    // With no baseline (its read failed) the first look only records:
-    // watchGit has just read them all.
-    const first = !Object.keys(stamps).length;
+    const moved = movedStamps(stamps, next, readAt);
     stamps = next;
     const due = document.hasFocus() ? dueRunning(app.model.agents, shown, readAt, Date.now()) : [];
-    const ids = [...new Set([...(first ? [] : moved), ...due])];
+    const ids = [...new Set([...moved, ...due])];
     if (ids.length) await refreshGit(ids, true);
   } catch {
     /* the next tick tries again */
-  } finally {
-    stamping = false;
-  }
-}
-/** The stamps to compare the first tick against, taken as a view starts
- *  watching and before its first read: a commit or stage between the
- *  mount and that tick still moves a stamp. */
-async function takeBaseline() {
-  const shown = shownIds();
-  if (stamping || !shown.length) return;
-  stamping = true;
-  try {
-    stamps = await worktreeApi.stamps(shown);
-  } catch {
-    /* the first tick records instead */
   } finally {
     stamping = false;
   }
@@ -193,11 +175,9 @@ export function watchGit(): () => void {
     }, POLL_MS);
     stampTimer = setInterval(stampTick, STAMP_MS);
     stopTurns = watchTurns();
-    // A turn may have ended while no view watched; bypass the read gap.
-    void takeBaseline().then(() => refreshGit(shownIds(), true));
-  } else {
-    refreshGit(shownIds(), true);
   }
+  // A turn may have ended while this view was unmounted; bypass the read gap.
+  refreshGit(shownIds(), true);
   return () => {
     watchers -= 1;
     if (watchers === 0) {
