@@ -133,19 +133,11 @@ pub fn format(w: &UsageWindow, now: i64, tz: impl Fn(i64) -> i32) -> Label {
     }
 }
 
-/// The window the header, title and status line lead with: the account's
-/// session (5-hour) window, else the fullest of the rest.
-pub fn headline(windows: &[UsageWindow], now: i64) -> Option<&UsageWindow> {
-    windows
-        .iter()
-        .find(|w| w.kind == WindowKind::Session)
-        .or_else(|| {
-            windows.iter().max_by(|a, b| {
-                a.percent_at(now)
-                    .partial_cmp(&b.percent_at(now))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-        })
+/// The window the footer, title and header lead with: the account's
+/// session (5-hour) window and no other, so the `5h` they label it with
+/// is true. The desktop's `headline` (usage.ts) picks the same window.
+pub fn headline(windows: &[UsageWindow], _now: i64) -> Option<&UsageWindow> {
+    windows.iter().find(|w| w.kind == WindowKind::Session)
 }
 
 const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -380,5 +372,54 @@ mod tests {
         // A later higher reading keeps the estimate.
         a.merge(acct(9.0, 6000));
         assert_eq!(a.windows[0].resets_at, Some(5000 + 5 * 3600));
+        // Past the estimate it is dropped, not carried: the fresh reading
+        // shows as read, not as an expired 0.
+        let after = 5000 + 5 * 3600 + 60;
+        a.merge(acct(11.0, after));
+        let w = &a.windows[0];
+        assert!(!w.estimated && w.resets_at.is_none());
+        assert_eq!(w.percent_at(after + 1), 11.0);
+        assert_eq!(w.shown_at(after + 1), Some(11.0));
+    }
+
+    #[test]
+    fn merge_keeps_a_real_reset_through_a_small_dip_and_a_reset_less_reading() {
+        use crate::usage::{AccountUsage, UsageSource};
+        let acct = |percent: f32, resets_at: Option<i64>, read_at: i64| AccountUsage {
+            account: "a".into(),
+            harness: "claude".into(),
+            windows: vec![UsageWindow {
+                read_at,
+                ..window(WindowKind::Session, percent, resets_at)
+            }],
+            source: UsageSource::Statusline,
+            at: 0,
+            plan: None,
+        };
+        // A status line says 91, resets at 20000; a screen notice says 90.
+        let mut a = acct(91.0, Some(20_000), 1000);
+        a.merge(acct(90.0, None, 1100));
+        let w = &a.windows[0];
+        assert_eq!(
+            (w.percent, w.resets_at, w.estimated),
+            (90.0, Some(20_000), false)
+        );
+        // A real drop with no reset to say so is a rollover, estimated.
+        a.merge(acct(10.0, None, 1200));
+        assert!(a.windows[0].estimated);
+        // Once the reported reset has passed, a reset-less reading rolls over.
+        let mut b = acct(60.0, Some(2000), 1000);
+        b.merge(acct(58.0, None, 2500));
+        assert!(b.windows[0].estimated);
+        assert_eq!(b.windows[0].resets_at, Some(2500 + 5 * 3600));
+    }
+
+    #[test]
+    fn headline_is_the_session_window_only() {
+        let monthly = window(WindowKind::Monthly, 90.0, Some(9_999_999));
+        let session = window(WindowKind::Session, 10.0, None);
+        assert!(headline(std::slice::from_ref(&monthly), 1).is_none());
+        let both = [monthly, session];
+        assert_eq!(headline(&both, 1).unwrap().kind, WindowKind::Session);
     }
 }

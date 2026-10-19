@@ -210,6 +210,8 @@ impl Daemon {
                 .windows
                 .iter()
                 .filter(|w| w.kind != usage::WindowKind::Monthly)
+                // A guessed reset never drives a stop note.
+                .filter(|w| !w.estimated)
                 .filter_map(|w| Some((w.percent, w.resets_at.filter(|at| *at > now)?)))
                 .max_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)))
                 .map(|(_, at)| at)

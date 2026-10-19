@@ -105,7 +105,7 @@ pub struct UsageWindow {
     pub read_at: i64,
     /// `resets_at` was worked out from when the percent last dropped, not
     /// reported by the source. Appended field: older senders omit it.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub estimated: bool,
 }
 
@@ -280,15 +280,23 @@ impl AccountUsage {
             {
                 Some(old) => {
                     let mut w = w;
-                    // A source that gives no reset time: when the percent
-                    // falls, the window has rolled over, so it started
-                    // when this reading was taken.
-                    if w.resets_at.is_none() && w.percent < old.percent {
-                        w.resets_at = Some(w.read_at.max(1) + w.kind.nominal_secs());
-                        w.estimated = true;
-                    } else if w.resets_at.is_none() && old.estimated {
-                        w.resets_at = old.resets_at;
-                        w.estimated = true;
+                    if w.resets_at.is_none() {
+                        let read = w.read_at.max(1);
+                        // The window rolled over when a reset time we were
+                        // given has passed, or the percent fell by more
+                        // than reading noise: it began at this reading.
+                        let passed =
+                            !old.estimated && old.resets_at.is_some_and(|at| at > 0 && at <= read);
+                        if passed || old.percent - w.percent >= ROLLOVER_DROP {
+                            w.resets_at = Some(read + w.kind.nominal_secs());
+                            w.estimated = true;
+                        } else if let Some(at) = old.resets_at.filter(|at| *at > read) {
+                            // Still running: keep the reset we know, as
+                            // reported or as estimated. A passed estimate
+                            // is dropped, not carried.
+                            w.resets_at = Some(at);
+                            w.estimated = old.estimated;
+                        }
                     }
                     *old = w;
                 }
@@ -350,6 +358,10 @@ pub enum Tone {
     Warn,
     Hot,
 }
+
+/// How far a percent must fall between two readings, with no reset time
+/// to say so, before the window counts as rolled over (not reading noise).
+pub const ROLLOVER_DROP: f32 = 20.0;
 
 pub const WATCH_AT: f32 = 70.0;
 pub const WARN_AT: f32 = 85.0;

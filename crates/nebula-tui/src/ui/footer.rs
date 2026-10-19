@@ -64,7 +64,7 @@ pub(super) fn draw_footer_bar(f: &mut Frame, app: &mut App, area: Rect) {
     // breadcrumb first: the header's lit tab and the pane's header already
     // say the project, the checkout and the card, and the buttons are
     // what the footer is for there.
-    let room = usize::from(area.width).saturating_sub(footer_usage_width(app));
+    let room = usize::from(area.width).saturating_sub(footer_usage_width(app, area.width));
     let bar_w: usize = key_bar.as_ref().map_or(0, |bar| {
         bar.iter()
             .map(|h| h.key.chars().count() + sep.chars().count() + h.does.chars().count() + 2)
@@ -664,8 +664,8 @@ fn footer_left_context(app: &App, th: Theme, crumbs: bool) -> Vec<Span<'static>>
 const PLATE_ROOM: usize = 20;
 
 /// The columns the usage readout at the bar's right end takes.
-fn footer_usage_width(app: &App) -> usize {
-    footer_usage(app).map_or(0, |s| s.chars().count() + 2)
+fn footer_usage_width(app: &App, cols: u16) -> usize {
+    footer_usage(app, cols).map_or(0, |s| s.chars().count() + 2)
 }
 
 /// The footer's spans, each tagged with the KEY BAR entry it belongs to,
@@ -724,7 +724,7 @@ fn render_footer_left(
     actions: &[Option<Action>],
     th: Theme,
 ) {
-    let usage = footer_usage(app);
+    let usage = footer_usage(app, area.width);
     let right_w = usage
         .as_ref()
         .map(|s| s.chars().count() as u16 + 2)
@@ -833,7 +833,7 @@ fn prepend_version_plate(app: &App, spans: &mut FooterSpans, width: u16, th: The
 }
 
 fn render_footer_usage(f: &mut Frame, app: &mut App, area: Rect, th: Theme) {
-    let Some(usage) = footer_usage(app) else {
+    let Some(usage) = footer_usage(app, area.width) else {
         return;
     };
     let right_w = (usage.chars().count() as u16 + 2).min(area.width);

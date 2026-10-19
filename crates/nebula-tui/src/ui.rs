@@ -2041,11 +2041,26 @@ fn draw_footer_bar(f: &mut Frame, app: &mut App, area: Rect) {
     footer::draw_footer_bar(f, app, area);
 }
 
+const READOUT_FULL_COLS: u16 = 150;
+const READOUT_PCT_COLS: u16 = 130;
+
 /// The footer's right-edge readout: live sessions, their process count,
 /// and nebula's total memory footprint (TUI + daemon + every session's
 /// process subtree). None until the first metrics reply arrives.
-fn footer_usage(app: &App) -> Option<String> {
-    let account = footer_account(app).map(|l| format!("5h {}", l.compact));
+///
+/// The account's readout gives way before the key hints do: whole
+/// (`5h 87% · resets 9:50 pm`) from [`READOUT_FULL_COLS`] columns, the
+/// percent alone from [`READOUT_PCT_COLS`], and left off below that.
+fn footer_usage(app: &App, cols: u16) -> Option<String> {
+    let account = footer_account(app)
+        .filter(|_| cols >= READOUT_PCT_COLS)
+        .map(|l| {
+            if cols >= READOUT_FULL_COLS {
+                format!("5h {}", l.compact)
+            } else {
+                format!("5h {}", nebula_core::usage::pct_text(l.percent))
+            }
+        });
     let metrics = footer_metrics(app);
     match (account, metrics) {
         (Some(a), Some(m)) => Some(format!("{a}  │  {m}")),

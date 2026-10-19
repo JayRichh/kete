@@ -10,7 +10,7 @@ use std::path::PathBuf;
 ///
 /// Bump on every protocol change. Additive changes keep
 /// [`MIN_COMPATIBLE_PROTOCOL`] where it is; breaking changes bump both.
-pub const PROTOCOL_VERSION: u32 = 64;
+pub const PROTOCOL_VERSION: u32 = 65;
 
 /// Oldest IPC protocol this build can safely talk to.
 ///
@@ -89,6 +89,16 @@ impl ServerEvent {
                 _ => {}
             }
         }
+        if peer_version < USAGE_ESTIMATE_PROTOCOL {
+            if let ServerEvent::AccountUsage { accounts } = &mut self {
+                for w in accounts.iter_mut().flat_map(|a| a.windows.iter_mut()) {
+                    if w.estimated {
+                        w.resets_at = None;
+                    }
+                    w.estimated = false;
+                }
+            }
+        }
         self
     }
 }
@@ -156,6 +166,13 @@ pub const SUBAGENT_CLEANUP_PROTOCOL: u32 = 63;
 /// so every row an older peer gets is the shape it knows. 63 is 0.55.0's
 /// subagent cleanup (`SUBAGENT_CLEANUP_PROTOCOL`).
 pub const SUBAGENT_MODEL_PROTOCOL: u32 = 64;
+
+/// The first protocol whose peers read [`UsageWindow::estimated`]. The
+/// field is left off a window that is not estimated, and the daemon
+/// blanks an estimated window for an older peer (`ServerEvent::for_peer`):
+/// the guess is dropped, so the frame is the shape it knows and it never
+/// takes a guess for a reported reset.
+pub const USAGE_ESTIMATE_PROTOCOL: u32 = 65;
 
 /// Max IPC frame size (length prefix sanity bound).
 pub const MAX_FRAME_LEN: u32 = 4 * 1024 * 1024;
@@ -1896,6 +1913,90 @@ mod tests {
         };
         assert_eq!(parent, AgentId("p".into()));
         assert_eq!(ids, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    /// A usage window as protocol 64 and earlier knew it.
+    mod v64 {
+        use super::*;
+        #[allow(dead_code)]
+        #[derive(Debug, Deserialize)]
+        pub struct UsageWindow {
+            pub kind: crate::usage::WindowKind,
+            pub label: Option<String>,
+            pub percent: f32,
+            pub resets_at: Option<i64>,
+            pub read_at: i64,
+        }
+        #[allow(dead_code)]
+        #[derive(Debug, Deserialize)]
+        pub struct AccountUsage {
+            pub account: String,
+            pub harness: String,
+            pub windows: Vec<UsageWindow>,
+            pub source: crate::usage::UsageSource,
+            pub at: i64,
+            pub plan: Option<String>,
+        }
+        #[derive(Debug, Deserialize)]
+        pub enum ServerEvent {
+            #[allow(dead_code)]
+            Snapshot(()),
+            #[allow(dead_code)]
+            AccountUsage { accounts: Vec<AccountUsage> },
+        }
+    }
+
+    /// 65 appends `estimated` to a usage window: a window that is not
+    /// estimated is the 64 frame byte for byte, and an estimated one goes
+    /// to an older peer with the guess dropped.
+    #[test]
+    fn protocol_65_usage_estimate_is_invisible_to_64_peers() {
+        use crate::usage::{AccountUsage, UsageSource, UsageWindow, WindowKind};
+        assert_eq!(MIN_COMPATIBLE_PROTOCOL, 53, "65 is additive");
+        let ev = |estimated: bool| ServerEvent::AccountUsage {
+            accounts: vec![AccountUsage {
+                account: "work".into(),
+                harness: "claude".into(),
+                windows: vec![UsageWindow {
+                    kind: WindowKind::Session,
+                    label: None,
+                    percent: 5.0,
+                    resets_at: Some(1_791_891_379),
+                    read_at: 7,
+                    estimated,
+                }],
+                source: UsageSource::Statusline,
+                at: 9,
+                plan: None,
+            }],
+        };
+        let wire = |e: &ServerEvent| rmp_serde::to_vec(e).unwrap();
+        let first = |bytes: &[u8]| -> v64::UsageWindow {
+            let v64::ServerEvent::AccountUsage { mut accounts } =
+                rmp_serde::from_slice(bytes).unwrap()
+            else {
+                panic!("not AccountUsage");
+            };
+            accounts.remove(0).windows.remove(0)
+        };
+        // Not estimated: the 64 frame, read by a 64 decoder as it is.
+        let w = first(&wire(&ev(false).for_peer(64)));
+        assert_eq!((w.resets_at, w.read_at), (Some(1_791_891_379), 7));
+        assert!(
+            wire(&ev(false)).len() < wire(&ev(true)).len(),
+            "false is left off"
+        );
+        // Estimated: the longer frame is refused as is, readable after for_peer.
+        assert!(rmp_serde::from_slice::<v64::ServerEvent>(&wire(&ev(true))).is_err());
+        let w = first(&wire(&ev(true).for_peer(64)));
+        assert_eq!(w.resets_at, None, "a guess is not sent as a reset");
+        // A 65 peer keeps it and reads it back.
+        let ServerEvent::AccountUsage { accounts } =
+            rmp_serde::from_slice(&wire(&ev(true).for_peer(65))).unwrap()
+        else {
+            panic!("not AccountUsage");
+        };
+        assert!(accounts[0].windows[0].estimated);
     }
 
     /// A subagent row as protocol 63 and earlier knew it.
