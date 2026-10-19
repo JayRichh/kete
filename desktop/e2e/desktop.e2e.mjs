@@ -735,6 +735,12 @@ flow("the overview's session tree names a subagent's model and effort", { script
   const id = await d.launch('map the hooks');
   await d.waitForAgent('step stop');
   await d.click('[aria-label="Home view"] button', 'Overview');
+  // The overview on its own, not beside the session the launch opened: a
+  // tree narrower than 760px drops its meta column, model and effort with it.
+  await d.click('nav[aria-label="Where you are"] ol button', 'Overview');
+  await d.waitFor('the overview at full width', async () =>
+    (await d.wd.exec("return document.querySelector('[role=tree]')?.getBoundingClientRect().width ?? 0;")) > 760,
+  );
   // The subagent nests under its session, its task as the name. It stays
   // running, so no finished fold hides it.
   await d.waitForText('Map the hooks');
