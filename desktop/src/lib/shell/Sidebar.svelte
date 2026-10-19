@@ -4,6 +4,7 @@
   // What is inside (the repos, accounts, settings) is Rail.svelte's.
   import Rail from './Rail.svelte';
   import SidebarRail from './SidebarRail.svelte';
+  import WacupPanel from './WacupPanel.svelte';
   import { PEEK_DELAY_MS, RAIL_WIDTH, SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN, dragWidth, keyWidth } from './sidebar';
   import { setSidebarCollapsed, setSidebarWidth, sidebar } from './rail-state.svelte';
   import { withKey } from '../shortcuts';
@@ -86,7 +87,7 @@
       </div>
     {/if}
   {:else}
-    <div class="flex h-full min-h-0 flex-col [&>aside]:min-h-0 [&>aside]:flex-1"><Rail /></div>
+    <div class="flex h-full min-h-0 flex-col [&>aside]:min-h-0 [&>aside]:flex-1"><Rail /><WacupPanel /></div>
     <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
     <div
       class="absolute inset-y-0 -right-[3px] z-20 w-[7px] cursor-col-resize hover:bg-rule-strong focus-visible:bg-rule-strong {dragging ? 'bg-rule-strong' : ''}"

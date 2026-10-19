@@ -807,6 +807,10 @@ flow('the sidebar drags to a width, folds to a rail, peeks on hover and restores
   // The default is 24 px wider than the 220 it was.
   assert.deepEqual(await box(), { w: 244, state: 'open', mainLeft: 244 });
 
+  // The WACUP panel sits at the bottom of the sidebar on Windows, saying
+  // so whether or not WACUP is running here.
+  await d.el('[data-sidebar] [data-wacup]');
+
   // Drag the handle 100 px right.
   await d.wd.pointer([
     { type: 'pointerMove', duration: 0, origin: { [ELEMENT]: await d.wd.find('[data-sidebar-resizer]') }, x: 0, y: 0 },

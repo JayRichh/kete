@@ -28,12 +28,20 @@ anyhow = "1"
 base64 = "0.22"
 async-trait = "0.1"
 
+[features]
+# The WACUP now-playing panel's Windows side (wacup.rs). On by default;
+# `--no-default-features` builds the window without it.
+default = ["wacup"]
+wacup = []
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_Diagnostics_Debug", "Win32_UI_WindowsAndMessaging"] }
 # The done / needs-you toast and its click (alerts.rs): WinRT, on the same
 # `windows` crate Tauri already builds, so no new crate in the tree. The
 # installed font list (fonts.rs) reads DirectWrite through it as well.
-windows = { version = "0.62", features = ["Data_Xml_Dom", "Foundation", "UI_Notifications", "Win32_Graphics_DirectWrite"] }
+# The WACUP panel (wacup.rs) sends Winamp window messages, reads the process
+# name and the App Paths registry key, all through the same crate.
+windows = { version = "0.62", features = ["Data_Xml_Dom", "Foundation", "UI_Notifications", "Win32_Graphics_DirectWrite", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
 # WebView2's own menu and browser keys off, the clipboard read granted
 # (quiet.rs): the version Tauri already builds (`cargo tree -i webview2-com`).
 webview2-com = "0.39.1"

@@ -4,6 +4,7 @@
 
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import type { WacupControl, WacupState } from './shell/wacup';
 import type { WakeNowResult, WakeOverview, WakeSchedule } from './wake/types';
 
 export type AgentStatus =
@@ -743,6 +744,9 @@ export const api = {
    *  null put it back to its default. Answers every binding now. */
   desktopKeySet: (id: string, chords: string[] | null) => invoke<Record<string, string[]>>('desktop_key_set', { id, chords }),
   desktopSetCollapsed: (keys: string[]) => invoke<void>('desktop_set_collapsed', { keys }),
+  wacupState: () => invoke<WacupState>('wacup_state'),
+  wacupTransport: (what: WacupControl) => invoke<void>('wacup_transport', { what }),
+  wacupLaunch: () => invoke<void>('wacup_launch'),
   desktopSetSidebar: (width: number, collapsed: boolean) => invoke<void>('desktop_set_sidebar', { width, collapsed }),
   /** First-use tips and What's new: the shared seen-state (src-tauri learn.rs). */
   learnState: () => invoke<LearnState>('learn_state'),
