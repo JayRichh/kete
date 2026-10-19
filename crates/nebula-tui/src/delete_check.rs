@@ -52,37 +52,104 @@ const UNCOMMITTED_REFUSAL: &str = "has uncommitted changes";
 /// Names a line spells out before it says `+N more`.
 const NAMED: usize = 3;
 
+/// Why a [`read_with`] git run gave no output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunError {
+    /// It ran past the read's deadline and was killed.
+    TimedOut,
+    Failed(String),
+}
+
+/// One git run for [`read_with`]: `git -C <path> <args>`.
+pub type GitRun<'a> = &'a dyn Fn(&Path, &[&str]) -> Result<std::process::Output, RunError>;
+
 /// Read `path`: blocking git, so off the loop wherever there is one.
 pub fn read(path: &Path) -> Result<Findings, String> {
-    if !path.is_dir() {
-        return Err(format!("no folder at {}", path.display()));
-    }
-    let changes = crate::git_diff::changed_files(path)?.len();
-    Ok(Findings {
-        changes,
-        unpushed: unpushed(path),
+    let run = |p: &Path, args: &[&str]| crate::git_diff::run_git(p, args).map_err(RunError::Failed);
+    read_with(path, &run).map_err(|e| match e {
+        RunError::TimedOut => "git took too long".to_string(),
+        RunError::Failed(why) => why,
     })
 }
 
-fn count(path: &Path, args: &[&str]) -> Option<usize> {
-    let out = crate::git_diff::run_git(path, args).ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+/// [`read`] with every git call bounded by one shared `timeout`: the
+/// MOVE CHECK's read, which a hung git must not hold open.
+pub fn read_within(path: &Path, timeout: std::time::Duration) -> Result<Findings, RunError> {
+    let deadline = std::time::Instant::now() + timeout;
+    let run = move |p: &Path, args: &[&str]| {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return Err(RunError::TimedOut);
+        }
+        let mut cmd = crate::git_diff::git_command(p);
+        cmd.args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        kete_ado::git::output_within(cmd, left, "git").map_err(|why| {
+            if std::time::Instant::now() >= deadline {
+                RunError::TimedOut
+            } else {
+                RunError::Failed(why)
+            }
+        })
+    };
+    read_with(path, &run)
 }
 
-fn unpushed(path: &Path) -> Option<usize> {
-    if let Some(n) = count(path, &["rev-list", "--count", "@{upstream}..HEAD"]) {
-        return Some(n);
+/// [`read`] through `run`: the changes `git status -uall` lists (each
+/// untracked file its own), and the commits HEAD has that its upstream
+/// lacks, or with no upstream that no remote has.
+pub fn read_with(path: &Path, run: GitRun<'_>) -> Result<Findings, RunError> {
+    if !path.is_dir() {
+        return Err(RunError::Failed(format!("no folder at {}", path.display())));
+    }
+    let status = run(path, &["status", "--porcelain=v1", "-z", "-uall"])?;
+    if !status.status.success() {
+        let stderr = String::from_utf8_lossy(&status.stderr);
+        return Err(RunError::Failed(format!(
+            "git status failed: {}",
+            stderr.trim()
+        )));
+    }
+    let changes = crate::git_diff::parse_status_z(&status.stdout).len();
+    Ok(Findings {
+        changes,
+        unpushed: unpushed(path, run)?,
+    })
+}
+
+fn count(path: &Path, args: &[&str], run: GitRun<'_>) -> Result<Option<usize>, RunError> {
+    let out = match run(path, args) {
+        Ok(out) => out,
+        Err(RunError::TimedOut) => return Err(RunError::TimedOut),
+        Err(RunError::Failed(_)) => return Ok(None),
+    };
+    if !out.status.success() {
+        return Ok(None);
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().parse().ok())
+}
+
+fn unpushed(path: &Path, run: GitRun<'_>) -> Result<Option<usize>, RunError> {
+    if let Some(n) = count(path, &["rev-list", "--count", "@{upstream}..HEAD"], run)? {
+        return Ok(Some(n));
     }
     // No upstream: the commits no remote has. With no remote at all the
     // count would be the whole history, which says nothing.
-    let remotes = crate::git_diff::run_git(path, &["remote"]).ok()?;
+    let remotes = match run(path, &["remote"]) {
+        Ok(out) => out,
+        Err(RunError::TimedOut) => return Err(RunError::TimedOut),
+        Err(RunError::Failed(_)) => return Ok(None),
+    };
     if String::from_utf8_lossy(&remotes.stdout).trim().is_empty() {
-        return None;
+        return Ok(None);
     }
-    count(path, &["rev-list", "--count", "HEAD", "--not", "--remotes"])
+    count(
+        path,
+        &["rev-list", "--count", "HEAD", "--not", "--remotes"],
+        run,
+    )
 }
 
 /// What runs in a checkout: its live sessions' and terminals' names.
@@ -302,6 +369,65 @@ pub fn land(app: &mut App, worktree: WorktreeId, result: Result<Findings, String
 
 #[cfg(test)]
 mod tests {
+    fn repo() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(tmp.path())
+            .args(["init", "-q"])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        tmp
+    }
+
+    /// A deadline that has passed runs no git and reads as timed out.
+    #[test]
+    fn a_bounded_read_past_its_deadline_times_out() {
+        let tmp = repo();
+        assert_eq!(
+            read_within(tmp.path(), std::time::Duration::ZERO),
+            Err(RunError::TimedOut)
+        );
+    }
+
+    /// A git that times out partway stops the read as timed out, never as a
+    /// clean checkout; one that fails on the commit count leaves it unknown.
+    #[test]
+    fn a_git_that_times_out_partway_is_a_timeout_not_a_clean_read() {
+        let tmp = repo();
+        let ok = |stdout: &str| {
+            let real = std::process::Command::new("git")
+                .arg("--version")
+                .output()
+                .unwrap();
+            std::process::Output {
+                status: real.status,
+                stdout: stdout.as_bytes().to_vec(),
+                stderr: Vec::new(),
+            }
+        };
+        let status_then_hang = |_: &Path, args: &[&str]| match args[0] {
+            "status" => Ok(ok("?? a.txt ")),
+            _ => Err(RunError::TimedOut),
+        };
+        assert_eq!(
+            read_with(tmp.path(), &status_then_hang),
+            Err(RunError::TimedOut)
+        );
+        let status_then_fail = |_: &Path, args: &[&str]| match args[0] {
+            "status" => Ok(ok("?? a.txt ?? b.txt ")),
+            _ => Err(RunError::Failed("no git".into())),
+        };
+        assert_eq!(
+            read_with(tmp.path(), &status_then_fail),
+            Ok(Findings {
+                changes: 2,
+                unpushed: None
+            })
+        );
+    }
+
     use super::*;
 
     fn live(sessions: &[&str], terminals: &[&str]) -> Live {

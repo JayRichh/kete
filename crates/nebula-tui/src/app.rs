@@ -5267,6 +5267,9 @@ pub struct JobState {
     /// The checkout whose count is being read right now, so a repaint can't
     /// stack `git status` processes; the answer clears it.
     pub git_changes_inflight: Option<WorktreeId>,
+    /// Sessions whose MOVE CHECK read is out, so a second Move press on one
+    /// starts no second read; the answer clears it.
+    pub move_checks_inflight: std::collections::HashSet<nebula_core::AgentId>,
     /// The last changed-file count read in each checkout, and when: what
     /// the LAUNCHER VIEW's cards print beside their branch. Fed by the
     /// selected checkout's own reads (`git_changes`) and by a sweep that

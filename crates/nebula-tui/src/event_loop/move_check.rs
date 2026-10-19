@@ -4,14 +4,22 @@
 //! A checkout holding either says so and asks; a clean one moves at once
 //! (or, for a drag with **Confirm drag move** on, asks the usual question).
 //!
-//! The read is the DELETE CHECK's (`delete_check::read`), on the blocking
-//! pool, landing through [`land`]. A read that fails moves without the
-//! report: nothing is lost by a move, the work stays where it was. The
-//! desktop builds the same line (`desktop/src/lib/move.ts`).
+//! The read is the DELETE CHECK's, bounded (`delete_check::read_within`,
+//! [`READ_TIMEOUT`] for all of its git), on the blocking pool, landing
+//! through [`land`]. A read that fails moves without the report: nothing
+//! is lost by a move, the work stays where it was. A read that runs out of
+//! time asks anyway, saying it could not tell. One read per session is out
+//! at a time: a second Move press while one is pending starts none. The
+//! desktop counts the same way and builds the same line
+//! (`desktop/src/lib/move.ts`).
 
 use super::launcher;
 use crate::app::{App, ConfirmDialog, Overlay, PendingAction};
-use crate::delete_check::Findings;
+use crate::delete_check::{Findings, RunError};
+use std::time::Duration;
+
+/// How long the whole read may take before the move asks without it.
+pub(crate) const READ_TIMEOUT: Duration = Duration::from_secs(3);
 use nebula_core::{AgentId, ClientRequest, WorktreeId};
 
 fn plural(n: usize, one: &str, many: &str) -> String {
@@ -66,17 +74,20 @@ pub(super) fn start(
     let Some((path, _)) = home(app, &id) else {
         return launcher::move_agent(app, id, worktree, out);
     };
+    if !app.jobs.move_checks_inflight.insert(id.clone()) {
+        return;
+    }
     match app.jobs.view_jobs.clone() {
         Some(jobs) => jobs.run(move || {
             Some(crate::view_jobs::Answer::MoveCheck {
                 agent: id,
                 worktree,
                 ask,
-                result: crate::delete_check::read(&path),
+                result: crate::delete_check::read_within(&path, READ_TIMEOUT),
             })
         }),
         None => {
-            let result = crate::delete_check::read(&path);
+            let result = crate::delete_check::read_within(&path, READ_TIMEOUT);
             land(app, id, worktree, ask, result, out);
         }
     }
@@ -88,14 +99,22 @@ pub(super) fn land(
     id: AgentId,
     worktree: WorktreeId,
     ask: bool,
-    result: Result<Findings, String>,
+    result: Result<Findings, RunError>,
     out: &mut Vec<ClientRequest>,
 ) {
+    app.jobs.move_checks_inflight.remove(&id);
     let Some((name, dest, _)) = launcher::move_plan(app, &id, &worktree) else {
         return;
     };
     let branch = home(app, &id).map(|(_, b)| b).unwrap_or_default();
-    match result.ok().and_then(|f| report(&f, &branch)) {
+    let line = match result {
+        Ok(found) => report(&found, &branch),
+        Err(RunError::TimedOut) => Some(format!(
+            "Could not read what stays behind in {branch} (git took too long)."
+        )),
+        Err(RunError::Failed(_)) => None,
+    };
+    match line {
         Some(line) => {
             app.modals.overlay = Some(Overlay::Confirm(ConfirmDialog {
                 title: "Move session".into(),

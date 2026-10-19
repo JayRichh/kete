@@ -13554,6 +13554,56 @@ mod tests {
         });
     }
 
+    /// A move whose read runs out of time asks anyway and says why, and a
+    /// second Move press while a read is out starts no second read.
+    #[test]
+    fn a_move_read_that_times_out_asks_and_a_pending_read_is_not_stacked() {
+        with_default_config(|| {
+            let mut app = two_sessions();
+            draw_at(&mut app, 130, 50);
+            let id = nebula_core::AgentId("a2".into());
+            let to = nebula_core::WorktreeId("w1".into());
+
+            app.jobs.move_checks_inflight.insert(id.clone());
+            let mut out = Vec::new();
+            crate::event_loop::move_check::start(&mut app, id.clone(), to.clone(), false, &mut out);
+            assert!(out.is_empty(), "nothing moves while the read is out");
+            assert!(app.modals.overlay.is_none(), "no second read, no dialog");
+            assert!(app.jobs.move_checks_inflight.contains(&id));
+
+            crate::event_loop::move_check::land(
+                &mut app,
+                id.clone(),
+                to,
+                false,
+                Err(crate::delete_check::RunError::TimedOut),
+                &mut out,
+            );
+            assert!(
+                !app.jobs.move_checks_inflight.contains(&id),
+                "the answer clears it"
+            );
+            assert_eq!(
+                sent_move(&out),
+                None,
+                "a timed-out read never moves on its own"
+            );
+            let Some(Overlay::Confirm(confirm)) = &app.modals.overlay else {
+                panic!("the move asks: {:?}", app.modals.overlay);
+            };
+            assert!(
+                confirm
+                    .message
+                    .starts_with("Could not read what stays behind in ")
+                    && confirm
+                        .message
+                        .contains("(git took too long). Move 'polish-nav' to main anyway?"),
+                "{}",
+                confirm.message
+            );
+        });
+    }
+
     /// `m` on a card lists the project's other checkouts, then the other
     /// projects', and a pick moves the session there; a mid-turn one is
     /// told it follows when its turn ends.
