@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.58.0
+
+The sidebar resizes, folds to a rail and peeks, and shows what WACUP is playing.
 
 - **Resizable sidebar (desktop).** Drag the sidebar's right edge to resize it from 200 to 480 px; double-click the edge for the default, and the arrow keys resize it with the edge focused. The default is 24 px wider than before (244 px, was 220). The width is saved with your desktop settings (`desktop.sidebar_width`).
 - **Collapse to an icon rail (desktop).** `Ctrl+B`, or the button on the sidebar's edge, folds the sidebar to a 44 px rail of section icons with tooltips. Rest the pointer on the rail for 300 ms and the full sidebar opens over the page without moving it; leave and it closes. A click on a rail icon opens the sidebar and goes to that section. The fold is saved (`desktop.sidebar_collapsed`).
