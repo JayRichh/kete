@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.55.0
+
+Subagents show under their session in both apps, and finished ones tidy themselves away.
+
+- **Subagents under their session.** The desktop board and the terminal app's cards and overview list every subagent beneath its session. Finished ones fold into one "N finished" row, with Clear finished beside it. Turn the fold off with `hide_done_subagents` (Settings › Sessions › Subagents).
+- **Finished subagents age out.** The daemon drops an ended subagent after an hour by default. `subagent_retention` takes `10m`, `1h`, `4h`, `1d` or `off`.
+- **Subagent status is truer.** A subagent counts as waiting only while a background task it launched is still running, so finished ones are no longer shown as waiting. A lost stop no longer leaves a row running for the life of its session, and killing or restarting a session closes its old subagents without touching the new process's.
+- **Upgrade note.** The protocol moved from 62 to 63. Run `kete kill` and reopen.
+
 ## 0.54.0
 
 Editors, menus, appearance, Files, wake-up scheduling, usage limits and critters ship together in this release.
