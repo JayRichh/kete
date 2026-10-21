@@ -181,25 +181,30 @@ pub fn write(dir: &Path, note: &NewNote, now: i64) -> Result<Written, Refused> {
     ));
 
     let path = dir.join(format!("{id}.md"));
+    put(dir, &id, &out)
+        .map_err(|e| Refused::Failed(format!("could not write {}: {e}", path.display())))?;
+    Ok(Written { id, path })
+}
+
+/// Writes `text` to `<dir>/.<id>.md.tmp` and renames it to `<dir>/<id>.md`;
+/// on any error the temp file is removed.
+fn put(dir: &Path, id: &str, text: &str) -> std::io::Result<()> {
     let tmp = dir.join(format!(".{id}.md.tmp"));
     let written = std::fs::File::create(&tmp)
         .and_then(|mut f| {
-            f.write_all(out.as_bytes())?;
+            f.write_all(text.as_bytes())?;
             f.sync_all()
         })
         .and_then(|()| {
-            // shortcut: a writer racing for this id between the check above
-            // and here would be replaced; notes come from one person typing.
-            std::fs::rename(&tmp, &path)
+            // shortcut: a writer racing for this id between the check in
+            // `write` and here would be replaced; notes come from one
+            // person typing.
+            std::fs::rename(&tmp, dir.join(format!("{id}.md")))
         });
-    if let Err(e) = written {
+    if written.is_err() {
         let _ = std::fs::remove_file(&tmp);
-        return Err(Refused::Failed(format!(
-            "could not write {}: {e}",
-            path.display()
-        )));
     }
-    Ok(Written { id, path })
+    written
 }
 
 /// The first `words` words of `text`, lowercased and joined with `-`.
@@ -682,16 +687,51 @@ mod tests {
     #[test]
     fn no_temp_file_is_left_behind_on_an_error() {
         let dir = tempfile::tempdir().unwrap();
-        // A folder where the note's file goes: the rename fails.
+        // A folder that is not empty where the note's file goes: the
+        // rename onto it fails on every platform.
         let id = "2026-10-22-storm";
-        std::fs::create_dir(dir.path().join(format!("{id}.md"))).unwrap();
-        let got = write(dir.path(), &note("storm"), NOW);
-        assert!(got.is_err(), "{got:?}");
+        let blocker = dir.path().join(format!("{id}.md"));
+        std::fs::create_dir(&blocker).unwrap();
+        std::fs::write(blocker.join("x"), "x").unwrap();
+        assert!(put(dir.path(), id, "---\n---\n").is_err());
         let names: Vec<String> = std::fs::read_dir(dir.path())
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
-        assert!(names.iter().all(|n| !n.ends_with(".tmp")), "{names:?}");
+        assert_eq!(names, [format!("{id}.md")], "no .tmp left");
+        // And a good write leaves only the note.
+        put(dir.path(), "ok", "---\n---\n").unwrap();
+        assert!(dir.path().join("ok.md").is_file());
+        assert!(!dir.path().join(".ok.md.tmp").exists());
+    }
+
+    #[test]
+    fn an_open_note_holding_the_id_blocks_whatever_its_title() {
+        let dir = tempfile::tempdir().unwrap();
+        // Same file name, another title: only the id rule can refuse it.
+        let path = dir.path().join("2026-10-22-storm.md");
+        std::fs::write(&path, "---\nstatus: open\ntitle: weather\n---\n").unwrap();
+        let got = write(dir.path(), &note("storm"), NOW);
+        let Err(Refused::Duplicate(d)) = got else {
+            panic!("{got:?}")
+        };
+        assert_eq!(
+            (d.existing, d.reason.as_str()),
+            (path, "a note with its id is open")
+        );
+        // An `id:` key that differs from its file name counts too.
+        let dir = tempfile::tempdir().unwrap();
+        let other = dir.path().join("elsewhere.md");
+        std::fs::write(
+            &other,
+            "---\nid: 2026-10-22-storm\nstatus: new\ntitle: weather\n---\n",
+        )
+        .unwrap();
+        let got = write(dir.path(), &note("storm"), NOW);
+        let Err(Refused::Duplicate(d)) = got else {
+            panic!("{got:?}")
+        };
+        assert_eq!(d.existing, other);
     }
 
     #[test]
