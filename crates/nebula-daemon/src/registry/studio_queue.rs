@@ -474,6 +474,8 @@ mod tests {
             },
         );
         daemon.set_studio_root(studio.path().to_path_buf());
+        // Usage readings too: the first look would read the real profiles.
+        daemon.set_usage_root(studio.path().join("usage"));
         daemon
             .store
             .insert_project(&Project {
