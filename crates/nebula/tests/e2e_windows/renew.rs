@@ -18,6 +18,10 @@ pub const TESTS: &[(&str, fn())] = &[
         "renew_keep_old_leaves_the_old_one_as_a_worker",
         renew_keep_old_leaves_the_old_one_as_a_worker,
     ),
+    (
+        "renew_a_partial_log_line_is_skipped",
+        renew_a_partial_log_line_is_skipped,
+    ),
 ];
 
 const ROLES: &str = r#"version = 1
@@ -100,15 +104,29 @@ fn wait_record(t: &Tui, new: &str) -> serde_json::Value {
     let deadline = Instant::now() + WAIT;
     loop {
         let text = std::fs::read_to_string(&file).unwrap_or_default();
-        if let Some(line) = text.lines().last() {
-            let line: serde_json::Value = serde_json::from_str(line).unwrap();
-            if line["new"] == new && line["state"] != "scheduled" {
-                return line;
-            }
+        if let Some(line) = record_for(&text, new) {
+            return line;
         }
         assert!(Instant::now() < deadline, "no renewal record in:\n{text}");
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+/// The log's last line when it is the finished record for `new`; None
+/// while it is not there yet, or is only partly written.
+fn record_for(text: &str, new: &str) -> Option<serde_json::Value> {
+    let line: serde_json::Value = serde_json::from_str(text.lines().last()?).ok()?;
+    (line["new"] == new && line["state"] != "scheduled").then_some(line)
+}
+
+fn renew_a_partial_log_line_is_skipped() {
+    let done = r#"{"at":1,"old":"a","new":"b","note":"n","state":"done","reason":null}"#;
+    assert_eq!(record_for(done, "b").unwrap()["state"], "done");
+    assert_eq!(record_for(done, "c"), None);
+    // The next record half written: not read, not a panic.
+    let partial = format!("{done}\n{{\"at\":2,\"old\":\"b\",\"ne");
+    assert_eq!(record_for(&partial, "b"), None);
+    assert_eq!(record_for("", "b"), None);
 }
 
 /// The `agent <id> args [...]` line of the fake agent's log for a launch

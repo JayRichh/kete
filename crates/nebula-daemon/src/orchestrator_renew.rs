@@ -429,7 +429,8 @@ fn append_record(
         .create(true)
         .append(true)
         .open(file)?;
-    writeln!(f, "{line}")?;
+    // One write per line, so a reader never sees half of one.
+    f.write_all(format!("{line}\n").as_bytes())?;
     Ok(())
 }
 
