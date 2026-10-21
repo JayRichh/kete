@@ -2037,33 +2037,70 @@ mod tests {
         }
     }
 
+    /// One session's spend delta for `day`: 1,200 input tokens, one turn.
+    fn spent(agent: &str, day: &str) -> crate::store::SpendDelta {
+        crate::store::SpendDelta {
+            agent: nebula_core::AgentId(agent.into()),
+            day: day.into(),
+            project: None,
+            branch: None,
+            session: None,
+            model: None,
+            profile: None,
+            role_card: None,
+            input_tokens: 1200,
+            output_tokens: 300,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            cost_usd: 0.04,
+            tool_uses: 2,
+            turns: 1,
+            at: 1,
+        }
+    }
+
+    fn today() -> String {
+        nebula_core::usage_ledger::local_day(nebula_core::clock::now_secs() as i64)
+    }
+
+    /// A client that connects and subscribes after a session spent gets
+    /// that session's SessionSpend once, on its first subscribe.
+    #[tokio::test]
+    async fn a_client_that_subscribes_after_a_turn_gets_its_spend_once() {
+        let daemon = test_daemon();
+        daemon.store.add_spend(&spent("ran", &today())).unwrap();
+        let (tx, mut rx) = mpsc::channel(64);
+        let mut client = ClientConnection::new(daemon, tx);
+        let hello = ClientRequest::Hello {
+            protocol_version: PROTOCOL_VERSION,
+        };
+        assert!(client.handle_request(hello).await.unwrap());
+        assert!(client
+            .handle_request(ClientRequest::Subscribe)
+            .await
+            .unwrap());
+        client.subscription.take().unwrap().abort();
+        // Everything the subscribe sends is queued before it returns.
+        let mut spend = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            if let ServerEvent::SessionSpend { rows } = ev {
+                spend.push(rows);
+            }
+        }
+        assert_eq!(spend.len(), 1, "{spend:?}");
+        assert_eq!(spend[0].len(), 1, "{spend:?}");
+        assert_eq!(spend[0][0].agent.0, "ran");
+        assert_eq!(spend[0][0].input_tokens, 1200);
+    }
+
     /// Today's spend rides beside a Snapshot to a 66 subscriber that
     /// connects after a turn ran, and never to a 65 one.
     #[tokio::test]
     async fn todays_spend_follows_a_snapshot_only_to_peers_that_decode_them() {
-        let today = nebula_core::usage_ledger::local_day(nebula_core::clock::now_secs() as i64);
         for (peer, expect) in [(65u32, false), (66, true)] {
             let daemon = test_daemon();
-            let delta = |agent: &str, day: &str| crate::store::SpendDelta {
-                agent: nebula_core::AgentId(agent.into()),
-                day: day.into(),
-                project: None,
-                branch: None,
-                session: None,
-                model: None,
-                profile: None,
-                role_card: None,
-                input_tokens: 1200,
-                output_tokens: 300,
-                cache_read_tokens: 0,
-                cache_write_tokens: 0,
-                cost_usd: 0.04,
-                tool_uses: 2,
-                turns: 1,
-                at: 1,
-            };
-            daemon.store.add_spend(&delta("ran", &today)).unwrap();
-            daemon.store.add_spend(&delta("old", "2000-01-01")).unwrap();
+            daemon.store.add_spend(&spent("ran", &today())).unwrap();
+            daemon.store.add_spend(&spent("old", "2000-01-01")).unwrap();
             let (tx, mut out) = mpsc::channel(16);
             assert!(send_snapshot(&daemon, &tx, peer).await);
             drop(tx);
