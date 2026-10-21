@@ -50,7 +50,7 @@ describe('stateLine', () => {
   });
 
   it('appends the last idle note time', () => {
-    expect(stateLine(row({ last_note_at: 1 }), 0, fmt)).toBe('Ready: 3 new notes for the next idle note 00b7 last idle note at 14:05');
-    expect(stateLine(row({ held: 'nothing new', last_note_at: 1 }), 0, fmt)).toBe('Holding: nothing new 00b7 last idle note at 14:05');
+    expect(stateLine(row({ last_note_at: 1 }), 0, fmt)).toBe('Ready: 3 new notes for the next idle note \u00b7 last idle note at 14:05');
+    expect(stateLine(row({ held: 'nothing new', last_note_at: 1 }), 0, fmt)).toBe('Holding: nothing new \u00b7 last idle note at 14:05');
   });
 });

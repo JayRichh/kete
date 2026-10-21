@@ -14,6 +14,7 @@ use nebula_core::studio::inbox::{self, InboxNote};
 use nebula_core::studio::queue::{self, OrchestratorView, QueueState, TickInputs};
 use nebula_core::studio::wire::StudioQueueRow;
 use nebula_core::studio::{manifest, settings, StudioSettings};
+use nebula_core::usage::{AccountUsage, ContextUsage};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The runner's state (announced notes, the last idle note), on
@@ -324,7 +325,7 @@ impl Daemon {
                     .map(|(n, _)| queue::queue_note(n, root))
                     .collect(),
                 held: decision.err().map(|h| h.to_string()),
-                last_note_at: book.state().last_note_at,
+                last_note_at: book.state().last_note_for.get(&key).copied(),
             });
         }
         if *book.state() != before {
@@ -334,41 +335,14 @@ impl Daemon {
         Ok(rows)
     }
 
-    /// The accounts line of an idle note: each Claude account's 5-hour
-    /// window and when it resets, and the reserved accounts by name.
+    /// The accounts line of an idle note, from the profiles on disk and
+    /// the latest readings.
     fn headroom(&self, now_ms: i64) -> Option<String> {
-        let now = now_ms / 1000;
-        let profiles = nebula_core::profiles::load();
-        let reserved: Vec<String> = profiles
-            .iter()
-            .filter(|p| p.reserved && !p.disabled)
-            .map(|p| p.name.clone())
-            .collect();
-        let disabled: Vec<&str> = profiles
-            .iter()
-            .filter(|p| p.disabled)
-            .map(|p| p.name.as_str())
-            .collect();
-        let accounts: Vec<(String, Option<f32>, Option<String>)> = self
-            .account_usage_list()
-            .into_iter()
-            .filter(|a| a.harness == "claude" && !disabled.contains(&a.account.as_str()))
-            .filter_map(|a| {
-                let window = nebula_core::usage_window::headline(&a.windows, now)?;
-                let label = nebula_core::usage_window::format(
-                    window,
-                    now,
-                    nebula_core::usage_window::local,
-                );
-                let name = if a.account.starts_with('@') {
-                    "default".to_string()
-                } else {
-                    a.account.clone()
-                };
-                Some((name, label.percent, label.clock))
-            })
-            .collect();
-        queue::headroom_line(&accounts, &reserved)
+        headroom_from(
+            &nebula_core::profiles::load(),
+            &self.account_usage_list(),
+            now_ms,
+        )
     }
 
     /// The context nudge for the orchestrator: its context against its
@@ -384,22 +358,71 @@ impl Daemon {
             .into_iter()
             .find(|c| c.agent == orchestrator.id)?
             .context;
-        let window = context.window.unwrap_or_else(|| {
-            nebula_core::usage::claude_window_for(orchestrator.model.as_deref())
-        });
-        let budget = self
+        let role_budget = self
             .session_roles()
             .into_iter()
             .find(|r| r.agent == orchestrator.id)
-            .and_then(|r| r.context_budget)
-            .unwrap_or(window);
-        let tokens = context.tokens.or_else(|| {
-            context
-                .percent
-                .map(|p| (f64::from(p) / 100.0 * window as f64) as u64)
-        })?;
+            .and_then(|r| r.context_budget);
+        let (tokens, budget) =
+            context_measure(&context, orchestrator.model.as_deref(), role_budget)?;
         queue::nudge(now_ms, tokens, budget, last_nudge_at)
     }
+}
+
+/// The accounts line: each enabled Claude account's 5-hour window and
+/// when it resets (a default login reads `default`), then the enabled
+/// reserved accounts by name.
+fn headroom_from(
+    profiles: &[nebula_core::profiles::Profile],
+    usage: &[AccountUsage],
+    now_ms: i64,
+) -> Option<String> {
+    let now = now_ms / 1000;
+    let reserved: Vec<String> = profiles
+        .iter()
+        .filter(|p| p.reserved && !p.disabled)
+        .map(|p| p.name.clone())
+        .collect();
+    let disabled: Vec<&str> = profiles
+        .iter()
+        .filter(|p| p.disabled)
+        .map(|p| p.name.as_str())
+        .collect();
+    let accounts: Vec<(String, Option<f32>, Option<String>)> = usage
+        .iter()
+        .filter(|a| a.harness == "claude" && !disabled.contains(&a.account.as_str()))
+        .filter_map(|a| {
+            let window = nebula_core::usage_window::headline(&a.windows, now)?;
+            let label =
+                nebula_core::usage_window::format(window, now, nebula_core::usage_window::local);
+            let name = if a.account.starts_with('@') {
+                "default".to_string()
+            } else {
+                a.account.clone()
+            };
+            Some((name, label.percent, label.clock))
+        })
+        .collect();
+    queue::headroom_line(&accounts, &reserved)
+}
+
+/// The orchestrator's context as (tokens, budget): the budget is the role
+/// card's `context_budget`, else the reported window, else the model's.
+/// Tokens fall back to the percent of the window. None without either.
+fn context_measure(
+    context: &ContextUsage,
+    model: Option<&str>,
+    role_budget: Option<u64>,
+) -> Option<(u64, u64)> {
+    let window = context
+        .window
+        .unwrap_or_else(|| nebula_core::usage::claude_window_for(model));
+    let tokens = context.tokens.or_else(|| {
+        context
+            .percent
+            .map(|p| (f64::from(p) / 100.0 * window as f64) as u64)
+    })?;
+    Some((tokens, role_budget.unwrap_or(window)))
 }
 
 /// A file's modification time, epoch ms; 0 when unreadable.
@@ -694,5 +717,176 @@ mod tests {
             .daemon
             .studio_check_spawn(&ProjectId("nope".into()))
             .is_ok());
+    }
+
+    /// A second repo, "other", rooted at its own temp repo with one note,
+    /// studio on at `autonomy`.
+    fn second_repo(f: &Fixture, autonomy: Autonomy) -> tempfile::TempDir {
+        let repo = tempfile::tempdir().unwrap();
+        let inbox = repo.path().join("notes").join("inbox");
+        std::fs::create_dir_all(&inbox).unwrap();
+        write_note(
+            &inbox,
+            "d-other",
+            "to: orchestrator
+priority: normal",
+        );
+        f.daemon
+            .store
+            .insert_project(&Project {
+                id: ProjectId("q".into()),
+                name: "other".into(),
+                repo_path: repo.path().to_path_buf(),
+                sort_order: 1,
+            })
+            .unwrap();
+        f.daemon
+            .studio_set(
+                &ProjectId("q".into()),
+                Some(StudioSettings {
+                    studio_inbox: "notes/inbox".into(),
+                    autonomy,
+                    queue_exclude: Vec::new(),
+                }),
+            )
+            .unwrap();
+        repo
+    }
+
+    #[test]
+    fn each_repo_reports_its_own_last_idle_note() {
+        let f = fixture();
+        enable(&f, Autonomy::A1);
+        let _other = second_repo(&f, Autonomy::A0);
+
+        let (rows, sent) = pass(&f.daemon, true);
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert!(sent[0].contains("demo A1"), "{}", sent[0]);
+        let row = |name: &str| rows.iter().find(|r| r.name == name).unwrap().clone();
+        assert!(row("demo").last_note_at.is_some());
+        assert_eq!(
+            row("other").last_note_at,
+            None,
+            "A0: no note went out for it"
+        );
+        assert_eq!(row("other").held.as_deref(), Some("autonomy A0 (Hold)"));
+    }
+
+    fn profile(name: &str, disabled: bool, reserved: bool) -> nebula_core::profiles::Profile {
+        nebula_core::profiles::Profile {
+            name: name.into(),
+            harness: "claude".into(),
+            env: Default::default(),
+            default: false,
+            use_default: false,
+            disabled,
+            reserved,
+        }
+    }
+
+    const HEADROOM_NOW_MS: i64 = 1_800_000_000_000;
+
+    fn reading(account: &str, harness: &str, percent: f32, resets_at: Option<i64>) -> AccountUsage {
+        AccountUsage {
+            account: account.into(),
+            harness: harness.into(),
+            windows: vec![nebula_core::usage::UsageWindow {
+                kind: nebula_core::usage::WindowKind::Session,
+                label: None,
+                percent,
+                resets_at,
+                // Read just now: a window with no reset time is live.
+                read_at: HEADROOM_NOW_MS / 1000,
+                estimated: false,
+            }],
+            source: nebula_core::usage::UsageSource::Statusline,
+            at: 0,
+            plan: None,
+        }
+    }
+
+    #[test]
+    fn the_accounts_line_drops_disabled_and_names_reserved() {
+        let now_ms = HEADROOM_NOW_MS;
+        let now = now_ms / 1000;
+        let profiles = [
+            profile("work", false, false),
+            profile("off", true, false),
+            profile("mine", false, true),
+            profile("gone", true, true),
+        ];
+        let mut no_window = reading("blank", "claude", 0.0, None);
+        no_window.windows.clear();
+        let usage = [
+            reading("@claude", "claude", 40.0, Some(now + 3_600)),
+            reading("work", "claude", 12.0, None),
+            reading("off", "claude", 90.0, None),
+            reading("mine", "claude", 5.0, None),
+            reading("cx", "codex", 50.0, None),
+            no_window,
+        ];
+        let line = headroom_from(&profiles, &usage, now_ms).unwrap();
+        let (default, rest) = line.split_once("; ").unwrap();
+        assert!(default.starts_with("default 5h 40% (resets "), "{line}");
+        assert_eq!(rest, "work 5h 12%; mine reserved.", "{line}");
+
+        // Nothing to say: no reading and nothing reserved.
+        assert_eq!(headroom_from(&profiles[..2], &[], now_ms), None);
+    }
+
+    #[test]
+    fn the_context_budget_is_the_role_card_then_the_window_then_the_model() {
+        let context =
+            |percent: Option<f32>, tokens: Option<u64>, window: Option<u64>| ContextUsage {
+                percent,
+                tokens,
+                window,
+                compactions: 0,
+                last_compact_at: None,
+                source: nebula_core::usage::UsageSource::Statusline,
+                at: 0,
+            };
+        // Role card budget wins over the reported window.
+        let c = context(None, Some(130_000), Some(1_000_000));
+        assert_eq!(
+            context_measure(&c, None, Some(200_000)),
+            Some((130_000, 200_000))
+        );
+        // No card: the reported window.
+        assert_eq!(context_measure(&c, None, None), Some((130_000, 1_000_000)));
+        // No window either: the model's, and tokens from the percent.
+        let c = context(Some(50.0), None, None);
+        assert_eq!(context_measure(&c, None, None), Some((100_000, 200_000)));
+        assert_eq!(
+            context_measure(&c, Some("opus[1m]"), None),
+            Some((500_000, 1_000_000))
+        );
+        assert_eq!(
+            context_measure(&context(None, None, None), None, None),
+            None
+        );
+
+        // Through the daemon: the orchestrator's recorded context, no card.
+        let f = fixture();
+        let orch = f
+            .daemon
+            .store
+            .get_agent(&AgentId("orch".into()))
+            .unwrap()
+            .unwrap();
+        let now = nebula_core::clock::now_ms();
+        assert_eq!(f.daemon.context_nudge(&orch, now, None), None, "no reading");
+        f.daemon
+            .record_context(&orch.id, context(Some(59.0), None, None));
+        assert_eq!(f.daemon.context_nudge(&orch, now, None), None);
+        f.daemon
+            .record_context(&orch.id, context(None, Some(120_000), None));
+        assert_eq!(
+            f.daemon.context_nudge(&orch, now, None),
+            Some(queue::ContextNudge {
+                percent: 60,
+                budget: 200_000
+            })
+        );
     }
 }

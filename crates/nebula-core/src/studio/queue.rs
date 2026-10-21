@@ -47,6 +47,10 @@ pub struct QueueState {
     /// When the last idle note went out, epoch ms.
     #[serde(default)]
     pub last_note_at: Option<i64>,
+    /// When the last idle note for each repo key went out, epoch ms: a
+    /// queue row reports its own repo's, not another repo's.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub last_note_for: BTreeMap<String, i64>,
     /// When each idle note of the last hour went out, epoch ms.
     #[serde(default)]
     pub notes_this_hour: Vec<i64>,
@@ -107,6 +111,7 @@ impl QueueState {
             self.announced.remove(repo);
         }
         self.last_note_at = Some(now_ms);
+        self.last_note_for.insert(repo.to_string(), now_ms);
         self.notes_this_hour.retain(|at| now_ms - *at < HOUR_MS);
         self.notes_this_hour.push(now_ms);
         if nudged {
@@ -704,6 +709,7 @@ mod tests {
         let back = QueueState::load(&path);
         assert_eq!(back, state);
         assert_eq!(back.last_nudge_at, Some(NOW));
+        assert_eq!(back.last_note_for.get("C:/repo"), Some(&NOW));
 
         let mut present = BTreeSet::new();
         present.insert("b".to_string());

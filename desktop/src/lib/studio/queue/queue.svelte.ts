@@ -43,7 +43,7 @@ export function stateLine(row: StudioQueueRow | null, _nowMs: number, fmt: (ms: 
   if (!row) return 'Studio is off for this repo. Run kete studio enable to turn it on';
   const n = row.unannounced;
   const head = row.held ? `Holding: ${row.held}` : `Ready: ${n} new ${n === 1 ? 'note' : 'notes'} for the next idle note`;
-  return row.last_note_at != null ? `${head} 00b7 last idle note at ${fmt(row.last_note_at)}` : head;
+  return row.last_note_at != null ? `${head} \u00b7 last idle note at ${fmt(row.last_note_at)}` : head;
 }
 
 const rowFor = (rows: StudioQueueRow[], repo: string) => rows.find((r) => r.project === repo) ?? null;
