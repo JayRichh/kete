@@ -219,9 +219,7 @@ pub fn decide<'a>(now_ms: i64, inputs: &TickInputs<'a>) -> Result<Vec<&'a InboxN
         AgentStatus::Fresh | AgentStatus::Finished => {}
         AgentStatus::Running => return Err(Holding::Busy),
         AgentStatus::NeedsFeedback => return Err(Holding::NeedsYou),
-        AgentStatus::Terminated | AgentStatus::Disconnected => {
-            return Err(Holding::NoOrchestrator)
-        }
+        AgentStatus::Terminated | AgentStatus::Disconnected => return Err(Holding::NoOrchestrator),
     }
     if let Some(typed) = orch.last_input_at {
         let secs = (now_ms - typed).max(0) / 1000;
@@ -338,7 +336,10 @@ pub fn compose_note(
     let build = |listed: usize| -> String {
         let mut lines = Vec::new();
         if notes.is_empty() {
-            lines.push(format!("{NOTE_HEADER} {clock} · {repo_name} {}", autonomy.as_str()));
+            lines.push(format!(
+                "{NOTE_HEADER} {clock} · {repo_name} {}",
+                autonomy.as_str()
+            ));
         } else {
             let count = notes.len();
             let noun = if count == 1 { "note" } else { "notes" };
@@ -388,7 +389,7 @@ pub fn compose_note(
 
 /// `400k`, `1M`: a token count as an idle note writes it.
 fn tokens_short(tokens: u64) -> String {
-    if tokens >= 1_000_000 && tokens % 1_000_000 == 0 {
+    if tokens >= 1_000_000 && tokens.is_multiple_of(1_000_000) {
         format!("{}M", tokens / 1_000_000)
     } else {
         format!("{}k", tokens.div_ceil(1000))
@@ -457,9 +458,17 @@ mod tests {
     #[test]
     fn eligible_notes_go_out_by_priority_then_oldest_first() {
         let all = vec![
-            note("b-normal-new", Priority::Normal, Some("2026-10-21T09:00:00Z")),
+            note(
+                "b-normal-new",
+                Priority::Normal,
+                Some("2026-10-21T09:00:00Z"),
+            ),
             note("c-low", Priority::Low, Some("2026-10-20T09:00:00Z")),
-            note("a-normal-old", Priority::Normal, Some("2026-10-20T09:00:00Z")),
+            note(
+                "a-normal-old",
+                Priority::Normal,
+                Some("2026-10-20T09:00:00Z"),
+            ),
             note("d-high", Priority::High, Some("2026-10-21T10:00:00Z")),
         ];
         let picked = eligible(&all, &[], &[]);
@@ -521,10 +530,7 @@ mod tests {
             (AgentStatus::Terminated, Holding::NoOrchestrator),
             (AgentStatus::Disconnected, Holding::NoOrchestrator),
         ] {
-            check(
-                &|t| t.orchestrator.as_mut().unwrap().status = status,
-                want,
-            );
+            check(&|t| t.orchestrator.as_mut().unwrap().status = status, want);
         }
         check(
             &|t| t.orchestrator.as_mut().unwrap().last_input_at = Some(NOW - 40_000),
@@ -544,8 +550,14 @@ mod tests {
         assert!(decide(NOW, &tick).is_ok());
 
         // The words the status line and `kete studio status` print.
-        assert_eq!(Holding::Typing { secs: 40 }.to_string(), "you typed 40 s ago");
-        assert_eq!(Holding::HourlyCap.to_string(), "6 idle notes in the last hour");
+        assert_eq!(
+            Holding::Typing { secs: 40 }.to_string(),
+            "you typed 40 s ago"
+        );
+        assert_eq!(
+            Holding::HourlyCap.to_string(),
+            "6 idle notes in the last hour"
+        );
     }
 
     #[test]

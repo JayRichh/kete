@@ -312,7 +312,10 @@ impl Daemon {
                 to_jay: all
                     .iter()
                     .filter(|n| n.status.is_open())
-                    .filter(|n| n.to.as_deref().is_some_and(|t| t.trim().eq_ignore_ascii_case("jay")))
+                    .filter(|n| {
+                        n.to.as_deref()
+                            .is_some_and(|t| t.trim().eq_ignore_ascii_case("jay"))
+                    })
                     .count() as u32,
                 unannounced: fresh.len() as u32,
                 next: fresh
@@ -352,8 +355,11 @@ impl Daemon {
             .filter(|a| a.harness == "claude" && !disabled.contains(&a.account.as_str()))
             .filter_map(|a| {
                 let window = nebula_core::usage_window::headline(&a.windows, now)?;
-                let label =
-                    nebula_core::usage_window::format(window, now, nebula_core::usage_window::local);
+                let label = nebula_core::usage_window::format(
+                    window,
+                    now,
+                    nebula_core::usage_window::local,
+                );
                 let name = if a.account.starts_with('@') {
                     "default".to_string()
                 } else {
@@ -378,9 +384,9 @@ impl Daemon {
             .into_iter()
             .find(|c| c.agent == orchestrator.id)?
             .context;
-        let window = context
-            .window
-            .unwrap_or_else(|| nebula_core::usage::claude_window_for(orchestrator.model.as_deref()));
+        let window = context.window.unwrap_or_else(|| {
+            nebula_core::usage::claude_window_for(orchestrator.model.as_deref())
+        });
         let budget = self
             .session_roles()
             .into_iter()
@@ -411,7 +417,9 @@ fn mtime_ms(path: &Path) -> i64 {
 pub(crate) fn inbox_inside(root: &Path, rel: &str) -> std::result::Result<(), String> {
     use std::path::Component;
     let path = Path::new(rel);
-    let lexical_ok = path.components().all(|c| matches!(c, Component::Normal(_) | Component::CurDir));
+    let lexical_ok = path
+        .components()
+        .all(|c| matches!(c, Component::Normal(_) | Component::CurDir));
     if !lexical_ok || path.components().next().is_none() {
         return Err(format!(
             "the inbox must be a folder inside the repo, relative to its root: {rel}"
@@ -512,7 +520,10 @@ mod tests {
                 recent_prompts: Vec::new(),
             })
             .unwrap();
-        daemon.store.set_orchestrator(Some(&AgentId("orch".into()))).unwrap();
+        daemon
+            .store
+            .set_orchestrator(Some(&AgentId("orch".into())))
+            .unwrap();
         Fixture {
             daemon,
             repo,
@@ -633,7 +644,12 @@ mod tests {
                 }),
             )
         };
-        for bad in ["../elsewhere", "notes/../../x", "/abs/inbox", "C:/abs/inbox"] {
+        for bad in [
+            "../elsewhere",
+            "notes/../../x",
+            "/abs/inbox",
+            "C:/abs/inbox",
+        ] {
             if bad.starts_with("C:") && !cfg!(windows) {
                 continue;
             }

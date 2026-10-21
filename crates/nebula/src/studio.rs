@@ -183,7 +183,8 @@ fn status_text(row: &StudioQueueRow, now_ms: i64) -> String {
 /// What `kete studio queue` prints for one repo: what the runner would
 /// send, or with `--now` whether it sent (`was` is the row before).
 fn queue_text(row: &StudioQueueRow, was: Option<&StudioQueueRow>, now: bool) -> String {
-    let sent = now && row.last_note_at.is_some() && was.map(|w| w.last_note_at) != Some(row.last_note_at);
+    let sent =
+        now && row.last_note_at.is_some() && was.map(|w| w.last_note_at) != Some(row.last_note_at);
     if sent {
         return format!("{}: sent the idle note to the orchestrator.", row.name);
     }
@@ -239,7 +240,10 @@ fn pick<'a>(projects: &'a [Project], query: &str) -> Result<&'a Project> {
         .find(|p| {
             let root = std::fs::canonicalize(&p.repo_path).unwrap_or_else(|_| p.repo_path.clone());
             settings::same_repo(&settings::repo_key(&root), &want)
-                || settings::same_repo(&settings::repo_key(&p.repo_path), &settings::repo_key(Path::new(q)))
+                || settings::same_repo(
+                    &settings::repo_key(&p.repo_path),
+                    &settings::repo_key(Path::new(q)),
+                )
         })
         .ok_or_else(|| anyhow::anyhow!("no kete project named `{q}`: `kete add` adds one"))
 }
@@ -302,7 +306,10 @@ mod tests {
         assert_eq!(pick(&all, "WHEAKO").unwrap().id.0, "p1");
         assert!(pick(&all, "nope").is_err());
         let twins = [project("a", "dup"), project("b", "Dup")];
-        assert!(pick(&twins, "dup").unwrap_err().to_string().contains("2 projects"));
+        assert!(pick(&twins, "dup")
+            .unwrap_err()
+            .to_string()
+            .contains("2 projects"));
     }
 
     #[test]
@@ -327,7 +334,10 @@ mod tests {
     #[test]
     fn status_shows_the_counts_and_the_hold() {
         let text = status_text(&row(Some("nothing new"), Some(1_000)), 61_000);
-        assert!(text.starts_with("wheako  A1 (Plan)  inbox notes/inbox\n"), "{text}");
+        assert!(
+            text.starts_with("wheako  A1 (Plan)  inbox notes/inbox\n"),
+            "{text}"
+        );
         assert!(text.contains("3 open, 1 for you, 2 new"));
         assert!(text.contains("holding: nothing new"));
         assert!(text.contains("last idle note: 1 min ago"));

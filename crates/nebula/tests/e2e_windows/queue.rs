@@ -14,10 +14,16 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 pub const TESTS: &[(&str, fn())] = &[
-    ("queue_idle_note_once_then_on_an_edit", queue_idle_note_once_then_on_an_edit),
+    (
+        "queue_idle_note_once_then_on_an_edit",
+        queue_idle_note_once_then_on_an_edit,
+    ),
     ("queue_typing_holds_the_note", queue_typing_holds_the_note),
     ("queue_a0_refuses_every_spawn", queue_a0_refuses_every_spawn),
-    ("queue_status_json_shows_the_counts", queue_status_json_shows_the_counts),
+    (
+        "queue_status_json_shows_the_counts",
+        queue_status_json_shows_the_counts,
+    ),
 ];
 
 /// How long a flow waits for the runner to send: the 30 s idle wait the
@@ -68,7 +74,10 @@ fn studio_repo() -> (Tui, std::path::PathBuf) {
     std::fs::write(&config, json.to_string()).unwrap();
     ok(&tui, &["add", &repo.display().to_string()]);
     tui.wait_for_text("game");
-    let said = ok(&tui, &["studio", "enable", "game", "--inbox", "notes/inbox"]);
+    let said = ok(
+        &tui,
+        &["studio", "enable", "game", "--inbox", "notes/inbox"],
+    );
     assert!(said.contains("Studio on for game at A1 (Plan)"), "{said}");
     (tui, repo)
 }
@@ -97,10 +106,7 @@ fn send_now(tui: &Tui) {
         if said.contains("sent the idle note") {
             return;
         }
-        assert!(
-            Instant::now() < deadline,
-            "the runner never sent: {said}"
-        );
+        assert!(Instant::now() < deadline, "the runner never sent: {said}");
         std::thread::sleep(Duration::from_secs(2));
     }
 }
@@ -128,7 +134,10 @@ fn wait_in_file(path: &Path, needle: &str) -> String {
         if got.contains(needle) {
             return got;
         }
-        assert!(Instant::now() < deadline, "{needle:?} never reached {path:?}:\n{got}");
+        assert!(
+            Instant::now() < deadline,
+            "{needle:?} never reached {path:?}:\n{got}"
+        );
         std::thread::sleep(Duration::from_millis(100));
     }
 }
@@ -151,14 +160,21 @@ fn queue_idle_note_once_then_on_an_edit() {
         {
             break line.to_string();
         }
-        assert!(Instant::now() < deadline, "no idle note as a prompt:
-{log}");
+        assert!(
+            Instant::now() < deadline,
+            "no idle note as a prompt:
+{log}"
+        );
         std::thread::sleep(Duration::from_millis(100));
     };
     println!("idle note as the e2e saw it: {prompt}");
     assert!(prompt.contains("game A1 · 2 new inbox notes"), "{prompt}");
-    let high = prompt.find("notes/inbox/2026-10-21-storm-sky.md").expect(&prompt);
-    let normal = prompt.find("notes/inbox/2026-10-21-ledger.md").expect(&prompt);
+    let high = prompt
+        .find("notes/inbox/2026-10-21-storm-sky.md")
+        .expect(&prompt);
+    let normal = prompt
+        .find("notes/inbox/2026-10-21-ledger.md")
+        .expect(&prompt);
     assert!(high < normal, "{prompt}");
     assert!(!prompt.contains("ask-jay"), "{prompt}");
     assert!(prompt.contains("Act within A1 (Plan)."), "{prompt}");
@@ -390,7 +406,10 @@ fn req_id(req: &ClientRequest) -> Option<u64> {
 }
 
 /// Run `talk` on a connection to the harness's daemon, after Hello.
-fn pipe<T, F>(runtime_dir: &Path, talk: impl FnOnce(tokio::net::windows::named_pipe::NamedPipeClient) -> F) -> T
+fn pipe<T, F>(
+    runtime_dir: &Path,
+    talk: impl FnOnce(tokio::net::windows::named_pipe::NamedPipeClient) -> F,
+) -> T
 where
     F: std::future::Future<Output = T>,
 {
