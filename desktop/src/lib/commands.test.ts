@@ -112,6 +112,22 @@ describe('the verbs menu (?)', () => {
     expect(items.map(label)).toContain('New session\u2026');
   });
 
+  it('offers the 0.60 window verbs in the palette while they apply', () => {
+    nav.go({ view: 'overview' });
+    const labels = () => paletteCommands().map((c) => c.label);
+    app.studioRepos = [];
+    expect(labels()).toContain('Export usage (CSV)');
+    expect(labels()).not.toContain('Studio board');
+    expect(labels()).not.toContain('Triage note\u2026');
+    app.studioRepos = [{ repo: 'p', name: 'demo', manifest: true, enabled: true, autonomy: 'A1' }] as unknown as typeof app.studioRepos;
+    app.model = {
+      ...app.model,
+      agents: [...app.model.agents, { id: 'o', worktree_id: 'w', name: 'orchestrator', archived: false, unseen: false, status: 'idle', role: 'orchestrator' }],
+    } as unknown as typeof app.model;
+    expect(labels()).toEqual(expect.arrayContaining(['Studio board', 'Gauntlet', 'Triage note\u2026', 'Export usage (CSV)']));
+    app.studioRepos = [];
+  });
+
   it('puts the verbs of the selection first in the palette', () => {
     selection.target = { kind: 'agent', id: 'a' };
     const rows = paletteCommands().filter((c) => c.pinned);

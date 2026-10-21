@@ -152,6 +152,18 @@ async function toAccounts(d) {
   await d.el('section[aria-label="Accounts"]');
 }
 
+/** The rows of the menu a right-click on `css` opens, whatever its title;
+ *  the menu closed again. */
+async function menuRows(d, css) {
+  await d.contextClick(css);
+  const rows = await d.waitFor(`the menu of ${css}`, () =>
+    d.wd.exec(`const m = [...document.querySelectorAll('[role="menu"]')].filter((x) => x.getBoundingClientRect().height).pop();
+      return m ? [...m.querySelectorAll('[role^="menuitem"]')].map((b) => (b.querySelector('[data-label]') ?? b).innerText.split('\\n')[0]) : null;`),
+  );
+  await d.press(Key.Escape);
+  return rows;
+}
+
 async function studioRepo(d) {
   const repo = d.makeRepo('game');
   put(repo, STUDIO);
@@ -228,9 +240,37 @@ for (const theme of ['light', 'dark']) {
         await d.press('k', Key.Control);
         await d.type('[aria-label="Command palette"] input', 'studio');
         await d.waitForText('Studio board');
-        await shoot(d, theme, w, 'palette-studio', '[aria-label="Command palette"]', seen);
+        await shoot(d, theme, w, 'palette-studio', '[role="dialog"][aria-label="Command palette"]', seen);
         await d.press(Key.Escape);
       }
+
+      // The six 0.60 verbs in the palette, each from where it applies: the
+      // global four anywhere, Renew with the orchestrator in view, Studio
+      // autonomy with the studio repo in view.
+      // Searched by the verb's palette word; the row wears its menu label.
+      const inPalette = async ([word, row]) => {
+        await d.press('k', Key.Control);
+        await d.type('[aria-label="Command palette"] input', word);
+        await d.waitFor(`${row} in the palette for ${word}`, () =>
+          d.wd.exec(`return (document.querySelector('[role="dialog"][aria-label="Command palette"]')?.innerText ?? '').includes(arguments[0]);`, row),
+        );
+        await d.press(Key.Escape);
+      };
+      await d.click('[aria-label="Home view"] button', 'Board');
+      for (const verb of [['studio', 'Studio board'], ['gauntlet', 'Gauntlet'], ['triage', 'Triage note'], ['usage csv', 'Export usage']]) await inPalette(verb);
+      await d.click('[data-target="orchestrator:rail"]');
+      await inPalette(['renew', 'Renew orchestrator']);
+      await d.click('[data-rail="studio"]');
+      await inPalette(['autonomy', 'Autonomy']);
+
+      // Menus by state: Renew on the orchestrator's menu, not a runner's;
+      // the repo menu's Studio rows on a studio repo.
+      await d.click('[aria-label="Home view"] button', 'Board');
+      assert.ok(!(await menuRows(d, `[data-target="agent:${runner}"]`)).some((r) => r.startsWith('Renew orchestrator')), 'no Renew on a runner');
+      await d.click('[data-target="orchestrator:rail"]');
+      assert.ok((await menuRows(d, `[data-target="agent:${orch.id}"]`)).some((r) => r.startsWith('Renew orchestrator')), 'Renew on the orchestrator');
+      const project = (await d.invoke('get_state')).projects[0].id;
+      assert.ok((await menuRows(d, `[data-target="project:${project}"]`)).some((r) => r.startsWith('Studio')), 'Studio on a studio repo');
 
       // The renew notice, narrowest: a real renewal from a note in the repo.
       await resize(d, 640);
@@ -287,6 +327,8 @@ test('with no studio repo: no Studio or Gauntlet on the rail, and the 0.59 views
       await d.el('form[aria-label="Start a session"]');
       assert.equal(await d.wd.exec(`return !!document.querySelector('form[aria-label="Start a session"] select[aria-label="Role"]');`), false, 'no role picker without roles');
       await shoot(d, 'plain', w, 'home', 'main', seen);
+      const project = (await d.invoke('get_state')).projects[0].id;
+      assert.ok(!(await menuRows(d, `[data-target="project:${project}"]`)).some((r) => r.startsWith('Studio')), 'no Studio rows on a plain repo');
       await d.click('[data-target="orchestrator:rail"]');
       await d.waitForText('Start orchestrator');
       await shoot(d, 'plain', w, 'orchestrator-none', 'main', seen);
