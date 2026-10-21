@@ -498,6 +498,17 @@ export function paletteCommands(): Command[] {
           ),
         ]
       : []),
+    // Studio mode (0.60): the background menu's rows, each while it shows
+    // there. With a repo in view, Studio board and Gauntlet come from its
+    // menu, below.
+    ...(app.studioRepos.length && !currentRepo()
+      ? [
+          cmd('studio-board', menuLabel('studio_board', 'global'), 'Window', () => openStudio(), undefined, 'studio departments queue'),
+          cmd('gauntlet', menuLabel('gauntlet_view', 'global'), 'Window', () => openGauntlet(), undefined, 'verdicts sign-offs reviews'),
+        ]
+      : []),
+    ...(triageAvailable() ? [cmd('triage-note', menuLabel('triage_note', 'global'), 'Window', focusTriage, undefined, 'inbox note desk')] : []),
+    cmd('usage-csv', menuLabel('usage_csv', 'global'), 'Window', () => void exportUsage(), undefined, 'ledger spend cost tokens export'),
     cmd('next-attention', 'Next session needing you', 'Window', () => jumpAttention(1), 'next_attention', 'attention jump feedback'),
     cmd('prev-attention', 'Previous session needing you', 'Window', () => jumpAttention(-1), 'prev_attention', 'attention jump feedback'),
     cmd('diff', 'Diff the worktree', 'Window', () => openDiff(diffTarget()), ['diff', 'open_diff']),

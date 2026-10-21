@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { StudioQueueRow } from '../types';
-import { LEVELS, needsConfirm, stateLine } from './queue.svelte';
+import { LEVELS, needsConfirm, offLine, stateLine } from './queue.svelte';
 
 const row = (over: Partial<StudioQueueRow>): StudioQueueRow => ({
   project: 'p1',
@@ -37,7 +37,8 @@ describe('stateLine', () => {
   const fmt = () => '14:05';
 
   it('says the studio is off with no row', () => {
-    expect(stateLine(null, 0)).toBe('Studio is off for this repo. Run kete studio enable to turn it on');
+    expect(stateLine(null, 0)).toBe('Studio is off for this repo. Run kete studio enable <repo> to turn it on');
+    expect(offLine('wheako')).toBe('Studio is off for this repo. Run kete studio enable wheako to turn it on');
   });
 
   it('says why it holds', () => {

@@ -35,7 +35,7 @@
 
 {#if rows.length}
   {#if bar}
-    <span class="relative flex max-w-72 min-w-0 items-center border-r border-rule">
+    <span class="relative flex max-w-52 min-w-0 items-center border-r border-rule">
       <span class="pl-3 font-mono text-[11px] text-muted">role</span>
       <select class={barSelect} value={value ?? ''} onchange={(e) => (value = e.currentTarget.value || null)} aria-label="Role" title={tip}>
         {@render options()}

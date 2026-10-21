@@ -155,7 +155,7 @@
     {:else if board}
       {#if reply.error}
         <p class="m-0 border border-fail px-3 py-2 text-[13px] text-fail" role="alert">
-          <span aria-hidden="true">&#x2715; </span>Manifest error: {reply.error}
+          <span aria-hidden="true">&#x2715;</span>{' '}Manifest error: {reply.error}
         </p>
       {/if}
 
@@ -204,7 +204,9 @@
       {#if board.columns.length === 0}
         <p class="m-0 max-w-[60ch] text-[13px] text-muted">No departments: add a departments table to the manifest's departments file.</p>
       {:else}
-        <div class="flex min-w-0 items-start gap-3 overflow-x-auto pb-2">
+        <!-- relative: the cells' sr-only words are absolute, and would
+             widen the page past a scroller that is not their containing block. -->
+        <div class="relative flex min-w-0 items-start gap-3 overflow-x-auto pb-2">
           {#each board.columns as col (col.slug)}
             {@const un = col.slug === UNASSIGNED}
             {@const menu = columnMenu(col)}
@@ -317,7 +319,7 @@
                   {/if}
                 {/if}
                 <span class={col.blocked ? 'font-medium text-ember-ink' : 'text-muted'} title="Notes to Jay about this department, and its sessions waiting on a reply">
-                  {#if col.blocked}<span aria-hidden="true">! </span>{/if}Blocked on Jay: <span class="font-mono" data-board-blocked>{col.blocked}</span>
+                  {#if col.blocked}<span aria-hidden="true">!</span>{' '}{/if}Blocked on Jay: <span class="font-mono" data-board-blocked>{col.blocked}</span>
                 </span>
                 <span class="text-muted" title="Input plus output tokens today, and a list-price estimate">
                   Today: <span class="font-mono text-ink">{tokensWord(col.spend.tokens)}</span> tokens, <span class="font-mono text-ink">{money(col.spend.cost_usd)}</span>

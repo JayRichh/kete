@@ -22,19 +22,21 @@ function flow(name, options, body) {
 }
 
 const FORM = '[role="dialog"][aria-labelledby="renew-title"]';
+// The session header in the orchestrator view (Session.svelte).
 const card = (id) => `[data-target="agent:${id}"]`;
 const orchestrator = async (d) => (await d.agents()).find((a) => a.role === 'orchestrator' && !a.archived);
 
 /** A repo in the window, an orchestrator started in its root checkout (so
- *  a note inside the repo is one the daemon allows), and the board up with
- *  its card. Resolves to the repo and the orchestrator. */
+ *  a note inside the repo is one the daemon allows), and the orchestrator
+ *  view up with its session header (the board leaves the orchestrator
+ *  off). Resolves to the repo and the orchestrator. */
 async function withOrchestrator(d) {
   const repo = d.makeRepo('renew-proj');
   await d.addRepo(repo);
   const project = (await d.invoke('get_state')).projects[0].id;
   await d.invoke('start_orchestrator', { spec: { kind: 'claude', project, replace: false } });
   const old = await d.waitFor('the orchestrator in the model', () => orchestrator(d));
-  await d.click('[aria-label="Home view"] button', 'Board');
+  await d.click('[data-target="orchestrator:rail"]');
   await d.el(card(old.id));
   return { repo, old };
 }
@@ -43,7 +45,8 @@ async function withOrchestrator(d) {
  *  clicked, and the form up with the focus on the note field. */
 async function openForm(d, old) {
   await d.contextClick(card(old.id));
-  const rows = await d.menu(`session ${old.name}`);
+  // The header's own menu is titled with the session's name.
+  const rows = await d.menu(old.name);
   assert.ok(rows.some((r) => r.label.startsWith('Renew orchestrator')), 'the session menu has Renew orchestrator');
   await d.click('[role="menu"] [role^="menuitem"]', 'Renew orchestrator');
   await d.el(`${FORM} input[aria-label="Handover note"]`);

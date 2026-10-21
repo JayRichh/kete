@@ -392,6 +392,13 @@ export class Desktop {
     return sleep(250);
   }
 
+  /** The window as a PNG at `file` (W3C Take Screenshot), folders made. */
+  async screenshot(file) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, Buffer.from(await this.wd.screenshot(), 'base64'));
+    return file;
+  }
+
   openGate(name) {
     fs.writeFileSync(path.join(this.gates, name), '');
   }

@@ -223,7 +223,7 @@
 
     {#if problem}
       <p class="m-0 border border-fail px-3 py-2 text-[13px] text-fail" role="alert" data-state-error>
-        <span aria-hidden="true">&#x2715; </span>{problem}
+        <span aria-hidden="true">&#x2715;</span>{' '}{problem}
       </p>
     {/if}
 
@@ -286,7 +286,7 @@
               >
                 <span class="truncate text-[13px] text-ink">{nd.label || nd.id}</span>
                 <span class="truncate font-mono text-[11px] {ember ? 'font-medium text-ember-ink' : 'text-muted'}"
-                  >{#if ember}<span aria-hidden="true">! </span>{/if}{rowWord(nd)}</span
+                  >{#if ember}<span aria-hidden="true">!</span>{' '}{/if}{rowWord(nd)}</span
                 >
               </button>
             </div>
@@ -296,7 +296,7 @@
         {#if sel && joined}
           <section class="flex min-w-0 flex-1 flex-col gap-3" aria-label="Selected node" data-state-detail>
             <p class="m-0 font-mono text-[13px] break-words text-ink">
-              {#if needsYou(sel)}<span class="text-ember-ink" aria-hidden="true">! </span>{/if}{line(sel)}
+              {#if needsYou(sel)}<span class="text-ember-ink" aria-hidden="true">!</span>{' '}{/if}{line(sel)}
             </p>
             <dl class="m-0 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12px]">
               <dt class="text-muted">Owner</dt>
@@ -363,7 +363,7 @@
                         <span class="flex-none font-mono text-[11px] text-muted">{joinWord(l)}</span>
                         <span class="min-w-0 flex-1 truncate text-[12px] text-ink">{l.node.label || l.node.id}</span>
                         <span class="flex-none font-mono text-[11px] {needsYou(l.node) ? 'font-medium text-ember-ink' : 'text-muted'}"
-                          >{#if needsYou(l.node)}<span aria-hidden="true">! </span>{/if}{l.node.status ? words(l.node.status) : l.node.kind}</span
+                          >{#if needsYou(l.node)}<span aria-hidden="true">!</span>{' '}{/if}{l.node.status ? words(l.node.status) : l.node.kind}</span
                         >
                       </button>
                     </li>

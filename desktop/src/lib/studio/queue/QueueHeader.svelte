@@ -2,14 +2,14 @@
   // One row over the board: autonomy, the runner's state, and Send now.
   import { app, toast } from '../../store.svelte';
   import AutonomyControl from './AutonomyControl.svelte';
-  import { queueState, stateLine } from './queue.svelte';
+  import { offLine, queueState, stateLine } from './queue.svelte';
 
   let props: { repo: string | null } = $props();
 
   const q = queueState(() => props.repo);
   const info = $derived(app.studioRepos.find((r) => r.repo === props.repo));
   const row = $derived(q.row);
-  const line = $derived(q.error ?? (q.loaded ? stateLine(row, Date.now()) : 'Reading the queue'));
+  const line = $derived(q.error ?? (!q.loaded ? 'Reading the queue' : row ? stateLine(row, Date.now()) : offLine(info?.name ?? '<repo>')));
 </script>
 
 {#if props.repo}
@@ -21,7 +21,7 @@
         onchange={(to) => (row ? q.setLevel(to) : toast('The queue has not loaded yet'))}
       />
     {/if}
-    <p class="m-0 min-w-0 flex-1 basis-[200px] self-center text-[13px] {q.error ? 'text-ember-ink' : 'text-muted'}" data-queue-state>{line}</p>
+    <p class="m-0 min-w-0 flex-1 basis-[200px] self-center text-[13px] {q.error ? 'text-fail' : 'text-muted'}" data-queue-state>{line}</p>
     {#if row}
       <p class="m-0 self-center text-[13px] text-muted">
         {row.open} open

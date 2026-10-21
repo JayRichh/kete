@@ -56,6 +56,9 @@
     const profile = choice === PICK ? (pick?.profile ?? null) : choice || null;
     error = await submitRenew(note, profile, keepOld, now);
     busy = false;
+    // The disabled button dropped the focus out of the dialog: back on the
+    // note, so Escape still closes it and the path can be fixed.
+    if (error) tick().then(() => box?.querySelector<HTMLElement>('input')?.focus());
   }
 
   function onKey(e: KeyboardEvent) {

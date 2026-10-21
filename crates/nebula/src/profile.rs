@@ -722,6 +722,12 @@ fn live(with_tree: bool) -> Live {
     })
 }
 
+/// Live agent sessions per account, the load `kete orchestrator renew
+/// --pick` spreads over as `pick` does.
+pub(crate) fn live_sessions_per_account() -> BTreeMap<String, u32> {
+    live(false).sessions
+}
+
 /// The daemon's `ListSessions` answer.
 async fn live_sessions(
     conn: &mut nebula_tui::ipc::Connection,
