@@ -1196,6 +1196,123 @@ pub(crate) mod tests {
         assert_eq!(claude_transcript_exists(&[missing], "sid-1"), None);
     }
 
+    /// Kete's four guidance blocks, joined as the system-prompt flag
+    /// carries them, written out here rather than through [`guided`] so the
+    /// pin below does not lean on the code it pins.
+    fn guidance_0_59() -> String {
+        [
+            CLAUDE_WORKTREE_GUIDANCE,
+            crate::sibling::CLAUDE_SPAWN_GUIDANCE,
+            crate::sibling::CLAUDE_SESSION_CONTEXT_GUIDANCE,
+            crate::open_files::CLAUDE_OPEN_GUIDANCE,
+        ]
+        .join("\n\n")
+    }
+
+    /// The 0.59 argv for the four launches 0.60 must leave alone, byte for
+    /// byte: a plain Claude session, a resume with model, effort and a
+    /// trailing prompt, a PR launch, and an orchestrator start. Pinned
+    /// before the launch overlay existed.
+    #[test]
+    fn the_0_59_claude_argv_is_pinned() {
+        let all = test_registry();
+        let claude = test_harness(&all, AgentKind::Claude);
+        let cwd = Some(Path::new(TEST_CWD));
+        let s = |v: &[&str]| v.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+
+        let plain = agent_spawn_command_with(&claude, None, cwd, None, None, None, None, None, true);
+        assert_eq!(
+            plain,
+            (
+                "claude".to_string(),
+                vec!["--append-system-prompt".to_string(), guidance_0_59()],
+                false
+            )
+        );
+
+        let resume = agent_spawn_command_with(
+            &claude,
+            Some("sid-1"),
+            cwd,
+            Some("opus"),
+            Some("high"),
+            None,
+            Some("carry on"),
+            None,
+            true,
+        );
+        let mut want = s(&["--resume", "sid-1", "--model", "opus", "--effort", "high"]);
+        want.extend(["--append-system-prompt".to_string(), guidance_0_59()]);
+        want.push("carry on".into());
+        assert_eq!(resume, ("claude".to_string(), want, true));
+
+        let pr = agent_spawn_command_with(
+            &claude,
+            None,
+            cwd,
+            None,
+            None,
+            None,
+            None,
+            Some("PR RULE"),
+            true,
+        );
+        assert_eq!(
+            pr.1,
+            vec![
+                "--append-system-prompt".to_string(),
+                format!("{}\n\nPR RULE", guidance_0_59())
+            ]
+        );
+
+        let orchestrator = Agent {
+            parent: None,
+            profile: None,
+            id: AgentId("o".into()),
+            worktree_id: WorktreeId("w".into()),
+            name: "orchestrator".into(),
+            status: AgentStatus::Fresh,
+            archived: false,
+            archived_at: 0,
+            unseen: false,
+            kind: AgentKind::Claude,
+            custom_harness: None,
+            model: None,
+            effort: None,
+            session_id: None,
+            cloud_session_id: None,
+            sort_order: 0,
+            status_changed_at: 0,
+            alive: false,
+            issue_url: None,
+            role: nebula_core::AgentRole::Orchestrator,
+            recent_prompts: Vec::new(),
+        };
+        let prompts = agent_launch_prompts(&orchestrator, &claude, None, false, None);
+        let start = agent_spawn_command_with(
+            &claude,
+            None,
+            cwd,
+            None,
+            None,
+            None,
+            prompts.initial.as_deref(),
+            prompts.system.as_deref(),
+            true,
+        );
+        assert_eq!(
+            start.1,
+            vec![
+                "--append-system-prompt".to_string(),
+                format!(
+                    "{}\n\n{}",
+                    guidance_0_59(),
+                    crate::orchestrator::CLAUDE_ORCHESTRATOR_GUIDANCE
+                )
+            ]
+        );
+    }
+
     #[test]
     fn spawn_command_per_kind_resume_shapes() {
         // Fresh sessions: bare CLI (Claude plus its system-prompt guidance).
