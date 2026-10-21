@@ -17,7 +17,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use nebula_core::studio::wire::RenewState;
-use nebula_core::{Agent, AgentId, AgentStatus, EntityId, ProjectId, ServerEvent};
+use nebula_core::{
+    Agent, AgentId, AgentStatus, EntityId, ProjectId, ServerEvent, MAX_CLOUD_PROMPT_BYTES,
+};
 
 use crate::orchestrator::StartOrchestratorSpec;
 use crate::registry::Daemon;
@@ -116,6 +118,16 @@ impl Daemon {
                 .context("there is no orchestrator to renew")?,
         };
         let (note, text) = self.read_note(&req.note)?;
+        // A session's starting prompt is capped (`MAX_CLOUD_PROMPT_BYTES`,
+        // registry.rs) below the note's own cap: refused now, not at the swap.
+        let prompt = starting_prompt(&old.name, &note, &text, 0);
+        if prompt.trim().len() > MAX_CLOUD_PROMPT_BYTES {
+            bail!(
+                "the handover note is too long to start a session on: with the renewal line \
+                 the first prompt is {} bytes, and a session takes at most {MAX_CLOUD_PROMPT_BYTES}",
+                prompt.trim().len()
+            );
+        }
         let project = self
             .store
             .get_worktree(&old.worktree_id)?
@@ -724,11 +736,8 @@ mod tests {
             vec![b'a'; NOTE_MAX_BYTES as usize],
         )
         .unwrap();
-        let plan = f
-            .daemon
-            .plan_renewal(ask(Some("orch"), home.join("handover.md")))
-            .unwrap();
-        assert_eq!(plan.text.len(), NOTE_MAX_BYTES as usize);
+        let (_, text) = f.daemon.read_note(&home.join("handover.md")).unwrap();
+        assert_eq!(text.len(), NOTE_MAX_BYTES as usize);
     }
 
     /// The new one takes the old one's profile, model and role card, or
@@ -915,32 +924,25 @@ mod tests {
         f.daemon.kill_session(&SessionRef::Agent(new));
     }
 
-    /// Windows caps a command line at 32,767 characters and the note rides
-    /// the new CLI's argv: a note within the 65,536-byte cap that does not
-    /// fit fails the start, and the old orchestrator keeps the role.
-    #[cfg(windows)]
-    #[tokio::test]
-    async fn a_note_too_long_for_the_command_line_leaves_the_old_one_in_charge() {
+    /// A session's first prompt is capped at `MAX_CLOUD_PROMPT_BYTES`, below
+    /// the note's own cap: a note that would not fit with the renewal line
+    /// is refused up front, and one that does fit is taken.
+    #[test]
+    fn a_note_too_long_for_a_first_prompt_is_refused_up_front() {
         let f = fixture();
-        let old = started(&f).await;
-        let mut rx = f.daemon.events.subscribe();
-        let note = f.note("handover.md", &vec![b'a'; 40_000]);
         f.daemon
-            .renew_orchestrator(RenewRequest {
-                now: true,
-                ..ask(None, note)
-            })
+            .store
+            .insert_agent(&row("orch", AgentRole::Orchestrator))
             .unwrap();
-        let (_, new, state) = outcome(&mut rx).await;
-        let RenewState::Failed { reason } = state else {
-            panic!("{state:?}");
-        };
-        assert_eq!(new, None, "{reason}");
-        assert!(reason.contains("start the new orchestrator"), "{reason}");
-        assert_eq!(pinned(&f), Some(old.clone()));
-        assert_eq!(orchestrator_rows(&f), 1);
-        assert!(f.daemon.is_alive(&SessionRef::Agent(old.clone())));
-        f.daemon.kill_session(&SessionRef::Agent(old));
+        let long = f.note("long.md", &vec![b'a'; MAX_CLOUD_PROMPT_BYTES]);
+        let err = f
+            .daemon
+            .renew_orchestrator(ask(Some("orch"), long))
+            .unwrap_err();
+        assert!(err.contains("too long to start a session on"), "{err}");
+        assert!(f.daemon.renewals.lock().pending.is_none());
+        let fits = f.note("fits.md", &vec![b'a'; MAX_CLOUD_PROMPT_BYTES - 1024]);
+        assert!(f.daemon.plan_renewal(ask(Some("orch"), fits)).is_ok());
     }
 
     #[test]

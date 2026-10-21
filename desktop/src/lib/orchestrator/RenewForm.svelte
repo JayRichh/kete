@@ -34,9 +34,13 @@
     busy = false;
     pick = null;
     const asked = kind;
-    api
-      .accountPick(asked, null)
-      .then((p) => (pick = p?.profile ? p : null))
+    // The window's pick is a person's (it may land on a reserved account):
+    // never offered for an orchestrator, which automation runs.
+    Promise.all([api.accountPick(asked, null), api.accounts()])
+      .then(([p, rows]) => {
+        const reserved = rows.some((r) => r.profile && r.harness === asked && r.name === p?.profile && r.reserved);
+        pick = p?.profile && !reserved ? p : null;
+      })
       .catch(() => {});
     tick().then(() => box?.querySelector<HTMLElement>('input')?.focus());
   });

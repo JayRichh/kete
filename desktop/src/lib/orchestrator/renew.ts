@@ -37,14 +37,19 @@ export function closeRenew(): void {
  *  when the daemon took it (the form closes and the toast says so). */
 export async function submitRenew(note: string, profile: string | null, keepOld: boolean, now: boolean): Promise<string | null> {
   const path = note.trim();
+  // Set before the reply: a swap with `now` can end before it lands.
+  sent = path;
   try {
     const state = await api.orchestratorRenew(path, profile, keepOld, now);
-    if (typeof state === 'object') return state.Failed.reason;
-    sent = path;
+    if (typeof state === 'object') {
+      sent = null;
+      return state.Failed.reason;
+    }
     renewForm.set(false);
     toast('Renewal scheduled');
     return null;
   } catch (e) {
+    sent = null;
     return String(e);
   }
 }

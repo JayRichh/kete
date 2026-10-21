@@ -125,7 +125,8 @@ kete orchestrator renew --from <note> [--profile P | --pick] [--model M] [--keep
 
 1. **The checks come first.** The note must be a file inside the
    orchestrator's workspace (`<data dir>/orchestrator`) or inside a registered
-   project or one of its checkouts, UTF-8, 1 to 65,536 bytes. A bad note, no
+   project or one of its checkouts, UTF-8, 1 to 65,536 bytes, and short
+   enough for a first prompt (below). A bad note, no
    live orchestrator, or a renewal already waiting is refused before anything
    changes. The daemon answers **Scheduled**.
 2. **It waits for the turn to end.** The swap happens once the old
@@ -163,10 +164,10 @@ Each renewal ends in one line of `<data dir>/orchestrator-renewals.jsonl`:
 `at` is epoch milliseconds; `state` is `done` or `failed`; `new` is null when
 no new session was started; `reason` says why a renewal failed.
 
-On Windows a command line holds at most 32,767 characters and the note rides
-the new CLI's command line beside the guidance, so a note well inside the
-65,536-byte cap can still be too long there (a 40,000-byte note is). The
-start fails and the old orchestrator stays in charge.
+A session's first prompt holds at most 16 KiB (16,384 bytes), the same cap
+every starting prompt has. A note that would not fit beside the renewal line
+is refused up front with its size, though it is inside the 65,536-byte note
+cap.
 
 ## Agent-facing commands
 
