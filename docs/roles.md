@@ -73,9 +73,10 @@ Path rules are written in the absolute form Claude matches: `C:\Code\my-game\DEC
 
 `kete _guard --session <id>` runs before every Bash and PowerShell command a role or studio session makes. It is a PreToolUse hook in the session's settings file. It splits the command on `&&`, `||`, `;`, pipes and subshells, looks through `bash -c` and `pwsh -Command`, skips environment prefixes and wrappers such as `env` and `sudo`, and follows git's own options (`-C <dir>`, `-c k=v`) to the subcommand. It refuses:
 
-- any force flag, a `+` refspec and `--mirror`;
+- any force flag, a `+` refspec and `--mirror`, including the shortened spellings git accepts (`--forc`, `--force-w`, `--mirro`);
 - deleting `main` or `master` on a remote;
-- a git alias set with `-c alias.…`, and an encoded PowerShell command;
+- git config that defines a command or forces a push (`alias.*`, `remote.<r>.mirror`, `remote.<r>.push`), whether given with `-c`, with `--config-env`, through `GIT_CONFIG_*` variables, or written with `git config`;
+- an encoded PowerShell command;
 - what the repo's autonomy level denies (see [Studio mode](studio.md)).
 
 It reads the repo's live autonomy from `config.local.json` on every command, so a level you lower applies from the next command. Without a studio entry it falls back to the level the settings file was written with. It never asks the daemon, so a hung daemon cannot let a push through.
@@ -97,7 +98,8 @@ account max2 has not accepted bypass mode: run `kete roles accept-bypass max2` i
 The rules and the guard read the command Claude writes. They are not a sandbox.
 
 - A script that opens files or runs git itself, such as `python -c "subprocess.run(['git', 'push', '-f'])"`, passes both. Keep branch protection on your remote's default branch: the remote is the boundary that holds.
-- A git alias in your own git config (for example `pf = push --force`) passes the guard.
+- A git alias or a `remote.<r>.mirror` or `remote.<r>.push` entry already in a git config file (yours, or one a session edits as a file rather than with `git config`) passes the guard.
+- At A2 a tag pushed by its short name (`git push origin v1.0`) passes: the guard and the rules see only `--tags`, `--follow-tags` and `refs/tags/`.
 - `Edit` deny rules cover Claude's file tools, the shell file commands Claude recognises and redirects, not a program that writes files on its own.
 - A session can run `kete spawn` without a role. Inside a studio repo the orchestrator's own spawns are restricted; a sibling another session starts without a role is not.
 - Allow rules in your other Claude settings files pre-approve calls in an allowlist session too.

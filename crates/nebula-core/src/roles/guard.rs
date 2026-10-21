@@ -141,6 +141,15 @@ fn check_words(words: &[String], autonomy: Autonomy, depth: usize) -> Result<(),
             return Ok(());
         };
         if is_assignment(word) {
+            // `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_KEY_<n>`: config given
+            // through the environment, refused like `-c`.
+            if let Some((name, value)) = word.split_once('=') {
+                if name.starts_with("GIT_CONFIG") && mentions_forcing_key(value) {
+                    return Err(format!(
+                        "kete guard: `{name}` sets git config that can force a push, refused in this session"
+                    ));
+                }
+            }
             i += 1;
         } else if WRAPPERS.contains(&program(word).as_str()) {
             i += 1;
@@ -221,14 +230,20 @@ fn check_git(args: &[String], autonomy: Autonomy) -> Result<(), String> {
         } else {
             args.get(i + 1)
         };
-        // `-c alias.x=…` defines a command on the spot: nothing to check it by.
-        let config = if word == "-c" {
-            value.map(String::as_str)
-        } else {
-            word.strip_prefix("-c")
+        // `-c alias.x=…` defines a command on the spot, and `-c
+        // remote.<r>.mirror=true` or `-c remote.<r>.push=+…` turns a plain
+        // `git push` into a mirror or force push.
+        let config = match word.as_str() {
+            "-c" | "--config-env" => value.map(String::as_str),
+            _ => word
+                .strip_prefix("--config-env=")
+                .or_else(|| word.strip_prefix("-c")),
         };
-        if config.is_some_and(|c| c.trim_start().to_ascii_lowercase().starts_with("alias.")) {
-            return Err("kete guard: git aliases set with -c are refused in this session".into());
+        if let Some(key) = config.filter(|c| forcing_key(c)) {
+            return Err(format!(
+                "kete guard: setting `{}` with -c is refused in this session",
+                key.split('=').next().unwrap_or(key).trim()
+            ));
         }
         i += if value.is_some() { 2 } else { 1 };
     }
@@ -238,9 +253,43 @@ fn check_git(args: &[String], autonomy: Autonomy) -> Result<(), String> {
     let rest = &args[i + 1..];
     match sub.as_str() {
         "push" => check_push(rest, autonomy),
+        "config" => match rest.iter().find(|w| !w.starts_with('-') && forcing_key(w)) {
+            Some(key) => Err(format!(
+                "kete guard: `git config {key}` can force a push, refused in this session"
+            )),
+            None => Ok(()),
+        },
         "tag" if autonomy != Autonomy::A3 => Err(level_refusal(autonomy, "git tag")),
         _ => Ok(()),
     }
+}
+
+/// Whether `entry` (`key` or `key=value`) is git config that defines a
+/// command (`alias.*`) or a mirror or forced push (`remote.<r>.mirror`,
+/// `remote.<r>.push`). Keys match in any case, as git reads them.
+fn forcing_key(entry: &str) -> bool {
+    let key = entry
+        .split('=')
+        .next()
+        .unwrap_or(entry)
+        .trim()
+        .to_ascii_lowercase();
+    key.starts_with("alias.")
+        || (key.starts_with("remote.") && (key.ends_with(".mirror") || key.ends_with(".push")))
+}
+
+/// [`forcing_key`] anywhere in an environment value
+/// (`GIT_CONFIG_PARAMETERS` quotes its keys).
+fn mentions_forcing_key(value: &str) -> bool {
+    let v = value.to_ascii_lowercase();
+    v.contains("alias.")
+        || (v.contains("remote.") && (v.contains(".mirror") || v.contains(".push")))
+}
+
+/// Whether `name` is `full` or an abbreviation git takes for it: git
+/// accepts any unambiguous prefix of a long option (`--forc`, `--mirro`).
+fn abbreviates(name: &str, full: &str, min: usize) -> bool {
+    name.len() >= min && full.starts_with(name)
 }
 
 /// `git push` options that take the next word as their value.
@@ -259,19 +308,21 @@ fn check_push(args: &[String], autonomy: Autonomy) -> Result<(), String> {
         }
         if let Some(long) = word.strip_prefix("--") {
             let name = long.split('=').next().unwrap_or(long);
-            match name {
-                "force" | "force-with-lease" | "force-if-includes" => {
-                    return Err(format!(
-                        "kete guard: force-push is refused in this session (`--{name}`)"
-                    ))
-                }
-                "mirror" => {
-                    return Err("kete guard: `git push --mirror` is refused in this session".into())
-                }
-                "delete" => delete = true,
-                "tags" | "follow-tags" => tags = true,
-                _ => {}
+            // Abbreviations count as the option they shorten; an ambiguous
+            // one (`--fo`) is refused too, git would not run it anyway.
+            if ["force", "force-with-lease", "force-if-includes"]
+                .iter()
+                .any(|full| abbreviates(name, full, 1))
+            {
+                return Err(format!(
+                    "kete guard: force-push is refused in this session (`--{name}`)"
+                ));
             }
+            if abbreviates(name, "mirror", 1) {
+                return Err("kete guard: `git push --mirror` is refused in this session".into());
+            }
+            delete |= abbreviates(name, "delete", 2);
+            tags |= abbreviates(name, "tags", 2) || abbreviates(name, "follow-tags", 3);
             if !long.contains('=') && PUSH_VALUE_OPTS.contains(&word.as_str()) {
                 i += 1;
             }
@@ -395,6 +446,7 @@ mod tests {
         "git push -\\f",
         "git push `-f",
         "git -c alias.p='push -f' p",
+        "git -c Alias.P='push -f' p",
         "pwsh -EncodedCommand ZwBpAHQA",
     ];
 
@@ -419,6 +471,9 @@ mod tests {
         "git push origin --delete old-lane",
         "git -C ../x push origin x",
         "git push -o ci.skip origin x",
+        "git push --dry-run origin x",
+        "git -c core.autocrlf=false push origin x",
+        "git -c remote.origin.url=x push origin x",
     ];
 
     /// Never refused at any level.
@@ -432,8 +487,70 @@ mod tests {
         "gh issue list",
         "kete sessions",
         "git fetch origin && git merge --ff-only origin/main",
+        "git config user.name kete",
+        "git config --get remote.origin.url",
+        "GIT_CONFIG_NOSYSTEM=1 git status",
         "",
     ];
+
+    /// git takes any unambiguous prefix of a long option, so each
+    /// shortened force or mirror spelling is refused like the full one.
+    #[test]
+    fn abbreviated_force_and_mirror_options_are_refused() {
+        for cmd in [
+            "git push --forc origin x",
+            "git push --force-w origin x",
+            "git push --force-with origin x",
+            "git push --force-i origin x",
+            "git push --fo origin x",
+            "git push origin x --forc",
+            "git push --mirro origin",
+            "git push --mirr",
+            "git push --mi origin",
+            "git push --m origin",
+        ] {
+            for level in Autonomy::ALL {
+                assert!(check(cmd, level).is_err(), "{cmd} at {level}");
+            }
+        }
+        assert!(check("git push --forc", A3)
+            .unwrap_err()
+            .contains("force-push"));
+        assert!(check("git push --mirro", A3)
+            .unwrap_err()
+            .contains("--mirror"));
+        assert!(
+            check("git push origin --de main", A3).is_err(),
+            "--de is --delete"
+        );
+    }
+
+    /// Config that makes a plain `git push` a mirror or force push, given
+    /// inline, through the environment, or written with `git config`.
+    #[test]
+    fn config_that_forces_a_push_is_refused() {
+        for cmd in [
+            "git -c remote.origin.mirror=true push origin",
+            "git -c Remote.Origin.Mirror=true push origin",
+            "git -c remote.origin.push=+HEAD:main push origin",
+            "git -c remote.origin.push=HEAD:main push origin",
+            "git -cremote.origin.mirror=true push origin",
+            "git --config-env=remote.origin.push=PUSHSPEC push origin",
+            "git --config-env remote.origin.mirror=MIRROR push origin",
+            "git config remote.origin.mirror true",
+            "git config --add remote.origin.push +HEAD:main",
+            "git config alias.pf 'push --force'",
+            "git config --global alias.pf 'push --force'",
+            "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.mirror GIT_CONFIG_VALUE_0=true git push origin",
+            "GIT_CONFIG_PARAMETERS=\"'remote.origin.push'='+HEAD:main'\" git push origin",
+        ] {
+            for level in Autonomy::ALL {
+                assert!(check(cmd, level).is_err(), "{cmd} at {level}");
+            }
+        }
+        let why = check("git -c remote.origin.mirror=true push origin", A3).unwrap_err();
+        assert!(why.contains("remote.origin.mirror"), "{why}");
+    }
 
     #[test]
     fn safe_commands_pass() {
@@ -468,6 +585,8 @@ mod tests {
             ("bro ado pr", [true, true, false, false]),
             ("kete ado sync", [false, false, false, false]),
             ("cd x && git tag v2", [true, true, true, false]),
+            ("git push --tag", [true, true, true, false]),
+            ("git push origin --follow", [true, true, true, false]),
         ];
         for (cmd, refused) in table {
             for (level, want) in Autonomy::ALL.iter().zip(refused) {
