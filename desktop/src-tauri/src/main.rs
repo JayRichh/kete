@@ -901,6 +901,10 @@ fn main() {
     // Before anything writes a settings file: is this a first install?
     learn::note_startup();
     let client = Client::new();
+    #[allow(unused_mut)]
+    let mut context: tauri::Context<tauri::Wry> = tauri::generate_context!();
+    #[cfg(all(windows, debug_assertions))]
+    quiet::take_driver_args(&mut context);
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -1133,6 +1137,6 @@ fn main() {
             ado::ui::ado_store_error,
             ado::ui::ado_sign_in,
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("kete-desktop failed to start");
 }

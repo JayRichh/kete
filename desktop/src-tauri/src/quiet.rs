@@ -23,6 +23,51 @@
 //! when it had started before them. A bare reload while it is still
 //! pending would reload the blank page before it and drop the app.
 
+/// The arguments wry gives a WebView2 window that names none.
+#[cfg(debug_assertions)]
+const WRY_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection";
+
+/// A debug build driven by msedgedriver (the e2e suite): its browser
+/// arguments, `--remote-debugging-port=0` among them, on every window.
+/// WebView2 takes the app's own arguments, which wry always sets, over the
+/// `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` msedgedriver sets, so without
+/// this the driver never finds the window's DevTools port.
+#[cfg(debug_assertions)]
+pub fn take_driver_args(context: &mut tauri::Context<tauri::Wry>) {
+    let Ok(more) = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS") else {
+        return;
+    };
+    for w in &mut context.config_mut().app.windows {
+        let own = w.additional_browser_args.as_deref().unwrap_or(WRY_ARGS);
+        w.additional_browser_args = Some(merge_browser_args(own, &more));
+    }
+}
+
+/// `own` then `more`, each argument once, with one `--disable-features=`
+/// holding both lists: Chromium reads only the last of that switch.
+#[cfg(debug_assertions)]
+fn merge_browser_args(own: &str, more: &str) -> String {
+    const OFF: &str = "--disable-features=";
+    let mut features: Vec<&str> = Vec::new();
+    let mut rest: Vec<&str> = Vec::new();
+    for arg in own.split_whitespace().chain(more.split_whitespace()) {
+        let (list, items) = match arg.strip_prefix(OFF) {
+            Some(names) => (&mut features, names.split(',').collect::<Vec<_>>()),
+            None => (&mut rest, vec![arg]),
+        };
+        for item in items.into_iter().filter(|i| !i.is_empty()) {
+            if !list.contains(&item) {
+                list.push(item);
+            }
+        }
+    }
+    let off = (!features.is_empty()).then(|| format!("{OFF}{}", features.join(",")));
+    off.into_iter()
+        .chain(rest.into_iter().map(String::from))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Whether WebView2's browser keys stay on: in debug builds (F12 opens the
 /// devtools there, F5 reloads), unless `KETE_BROWSER_KEYS=off` asks for the
 /// release behaviour (the e2e keyboard flow).
@@ -186,6 +231,18 @@ mod tests {
         assert!(!browser_keys(true, Some("OFF")));
         assert!(!browser_keys(false, None));
         assert!(!browser_keys(false, Some("on")));
+    }
+
+    #[test]
+    fn the_drivers_arguments_join_wrys_with_one_disable_features() {
+        let driver = "--disable-features=IgnoreDuplicateNavs,Prewarm --enable-automation --remote-debugging-port=0";
+        assert_eq!(
+            merge_browser_args(WRY_ARGS, driver),
+            "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,IgnoreDuplicateNavs,Prewarm \
+             --enable-automation --remote-debugging-port=0"
+        );
+        assert_eq!(merge_browser_args("--a --a", ""), "--a");
+        assert_eq!(merge_browser_args("", "--disable-features="), "");
     }
 
     #[test]
