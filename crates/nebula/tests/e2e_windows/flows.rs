@@ -10,6 +10,10 @@ type Test = fn();
 pub const TESTS: &[(&str, Test)] = &[
     ("boots_to_the_empty_grid", boots_to_the_empty_grid),
     (
+        "no_session_sees_a_real_login_or_home",
+        no_session_sees_a_real_login_or_home,
+    ),
+    (
         "quick_prompt_session_runs_needs_you_and_lands_in_review",
         quick_prompt_session_runs_needs_you_and_lands_in_review,
     ),
@@ -180,6 +184,85 @@ const FEATURE: &str =
 fn boots_to_the_empty_grid() {
     let tui = Tui::spawn(Options::default());
     tui.wait_for_text("create your first project");
+}
+
+/// Run from a shell that names a real login (a Kete profile's
+/// `CLAUDE_CONFIG_DIR`, a token, a gh config), the TUI, its daemon and
+/// the session it starts still see only the harness's home: every home
+/// variable under it, no login token, and no config dir outside the
+/// harness's temp root.
+fn no_session_sees_a_real_login_or_home() {
+    /// Puts the suite's own variables back, pass or fail.
+    struct Restore(Vec<(&'static str, Option<std::ffi::OsString>)>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            for (var, was) in &self.0 {
+                match was {
+                    Some(value) => std::env::set_var(var, value),
+                    None => std::env::remove_var(var),
+                }
+            }
+        }
+    }
+    // `NEBULA_CONFIG_FILE` is dropped like the rest but never set here: a
+    // leak of it would move the TUI off the config that makes `claude`
+    // the fake agent.
+    let canaries: Vec<&'static str> = LOGIN_DIR_VARS
+        .iter()
+        .copied()
+        .filter(|&var| var != nebula_core::env::CONFIG_FILE)
+        .collect();
+    let real = tempfile::tempdir().unwrap();
+    let _restore = Restore(
+        canaries
+            .iter()
+            .chain(LOGIN_TOKEN_VARS)
+            .map(|&var| (var, std::env::var_os(var)))
+            .collect(),
+    );
+    for var in &canaries {
+        std::env::set_var(var, real.path());
+    }
+    for var in LOGIN_TOKEN_VARS {
+        std::env::set_var(var, "e2e-canary");
+    }
+
+    let tui = Tui::spawn(Options::default());
+    tui.wait_for_text("create your first project");
+    let repo = tui.make_repo("canary");
+    let out = tui.kete(&["add", &repo.display().to_string()]);
+    assert!(out.status.success(), "{out:?}");
+    let out = tui.kete(&["orchestrator", "start", "--project", "canary"]);
+    assert!(out.status.success(), "{out:?}");
+    tui.wait_for_agent("dirs ");
+
+    let log = std::fs::read_to_string(&tui.agent_log).unwrap();
+    let line = log.lines().find_map(|l| l.split("] dirs ").nth(1)).unwrap();
+    let (dirs, tokens) = line.split_once(" tokens ").unwrap();
+    assert_eq!(tokens, "[]", "a login token reached the session: {line}");
+    let seen: Vec<(&str, &str)> = dirs
+        .split('|')
+        .filter_map(|pair| pair.split_once('='))
+        .collect();
+    let home = tui.home();
+    for var in HOME_VARS {
+        let value = seen.iter().find(|(v, _)| *v == var).map(|(_, p)| *p);
+        assert!(
+            value.is_some_and(|p| Path::new(p).starts_with(&home)),
+            "{var} is not under {}: {line}",
+            home.display()
+        );
+    }
+    // A config dir Kete itself gives the session (a profile's) is the
+    // harness's; the shell's never is.
+    let root = home.parent().unwrap();
+    for var in LOGIN_DIR_VARS {
+        assert!(
+            seen.iter()
+                .all(|(v, p)| v != var || Path::new(p).starts_with(root)),
+            "{var} reached the session: {line}"
+        );
+    }
 }
 
 /// A session from the quick prompt, followed on the board: Running while

@@ -83,7 +83,7 @@ fn wait_for_agent_row(tui: &Tui, what: &str, pick: impl Fn(&Agent) -> bool) -> A
 /// `kete <args>` as the session `agent` runs it: the harness's command
 /// with that session's id, which the orchestrator verbs read.
 fn kete_as(tui: &Tui, agent: &str, args: &[&str]) -> std::process::Output {
-    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_kete"));
+    let mut cmd = tui.kete_command();
     cmd.args(args)
         .env(nebula_core::env::RUNTIME_DIR, &tui.runtime_dir)
         .env(nebula_core::env::DATA_DIR, &tui.data_dir)

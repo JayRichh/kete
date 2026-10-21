@@ -249,6 +249,24 @@ fn renew_keep_old_leaves_the_old_one_as_a_worker() {
     let sessions = listed(&t);
     assert!(sessions.contains(&old), "{sessions:?}");
     assert!(sessions.contains(&new), "{sessions:?}");
+    // The old one runs on as a worker; the new one is the orchestrator.
+    let out = t.kete_with(
+        &["orchestrator", "list", "--json"],
+        &[(nebula_core::env::AGENT_ID, &new)],
+    );
+    ok(&out);
+    let tree: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let role = |id: &str| {
+        tree["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["id"] == id)
+            .map(|a| a["role"].clone())
+            .unwrap_or_else(|| panic!("{id} is not in the tree: {tree}"))
+    };
+    assert_eq!(role(&old), "worker");
+    assert_eq!(role(&new), "orchestrator");
     // A note outside the workspace and every project is refused, and the
     // new orchestrator keeps the role.
     let elsewhere = t.home().join("note.md");

@@ -92,6 +92,20 @@ pub fn run() {
         "agent {} args {args:?}",
         std::env::var(nebula_core::env::AGENT_ID).unwrap_or_default()
     ));
+    // What the daemon handed down, for the flow that checks no real login
+    // reaches a session: home paths in full, login variables by name only.
+    use super::harness::{HOME_VARS, LOGIN_DIR_VARS, LOGIN_TOKEN_VARS};
+    let homes: Vec<String> = HOME_VARS
+        .iter()
+        .chain(LOGIN_DIR_VARS)
+        .filter_map(|var| Some(format!("{var}={}", std::env::var(var).ok()?)))
+        .collect();
+    let tokens: Vec<&str> = LOGIN_TOKEN_VARS
+        .iter()
+        .copied()
+        .filter(|var| std::env::var_os(var).is_some())
+        .collect();
+    agent.log(&format!("dirs {} tokens {tokens:?}", homes.join("|")));
     print_line("fake agent up");
     agent.hook("SessionStart", serde_json::json!({ "source": "startup" }));
     let prompt = match prompt_of(&args) {
