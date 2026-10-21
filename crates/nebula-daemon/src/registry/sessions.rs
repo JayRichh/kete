@@ -13,6 +13,28 @@ impl Daemon {
         self.sessions.lock().contains_key(sref)
     }
 
+    /// A client typed into `sref` (`ClientRequest::Input`): stamped for an
+    /// agent session, so the studio queue runner can tell a person is at
+    /// the keyboard.
+    pub fn note_input(&self, sref: &SessionRef) {
+        if let SessionRef::Agent(id) = sref {
+            self.last_input.lock().insert(id.clone(), Instant::now());
+        }
+    }
+
+    /// When a client last typed into `agent`, since this daemon started.
+    pub fn last_input_at(&self, agent: &AgentId) -> Option<Instant> {
+        self.last_input.lock().get(agent).copied()
+    }
+
+    /// Every 66 peer's view of the role sessions (`ServerEvent::SessionRoles`,
+    /// the whole list): pushed when a role session is created or archived.
+    pub fn broadcast_session_roles(&self) {
+        self.broadcast(ServerEvent::SessionRoles {
+            roles: self.session_roles(),
+        });
+    }
+
     /// Whether `session` is still the PTY registered for `sref` — not one
     /// a kill (restart, move, relocation) has since replaced.
     pub(super) fn owns_session(&self, sref: &SessionRef, session: &Arc<PtySession>) -> bool {

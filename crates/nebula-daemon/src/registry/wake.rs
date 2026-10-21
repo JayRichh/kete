@@ -288,6 +288,7 @@ impl Daemon {
             Some(nebula_core::wake::PROMPT),
             None,
             false,
+            &LaunchOverlay::default(),
         );
         if cmd_override.is_none() {
             if let Some(path) = super::spawn::statusline_settings() {

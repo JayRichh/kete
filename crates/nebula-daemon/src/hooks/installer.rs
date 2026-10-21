@@ -297,6 +297,11 @@ fn hook_command(endpoint: &str, event: &str) -> String {
 /// skip-permissions flags). The same commands as PowerShell rules too,
 /// for Claude's PowerShell tool — what a Windows machine without Git Bash
 /// runs commands with — in the documented `PowerShell(cmd *)` form.
+/// 0.60 adds the read-only studio commands the orchestrator's guidance
+/// teaches (`kete studio status`, `queue`, `note`, `kete usage`, `kete
+/// profile list` and `pick`) and `kete orchestrator renew`; never the
+/// ones that change what a studio may do (`kete studio autonomy`,
+/// `enable`, `disable`, `exclude`, `include`).
 const CLAUDE_ALLOW_RULES: &[&str] = &[
     "Bash(kete rename:*)",
     "Bash(kete worktree:*)",
@@ -305,6 +310,13 @@ const CLAUDE_ALLOW_RULES: &[&str] = &[
     "Bash(kete sessions:*)",
     "Bash(kete read:*)",
     "Bash(kete ask:*)",
+    "Bash(kete studio status:*)",
+    "Bash(kete studio queue:*)",
+    "Bash(kete studio note:*)",
+    "Bash(kete usage:*)",
+    "Bash(kete profile list:*)",
+    "Bash(kete profile pick:*)",
+    "Bash(kete orchestrator renew:*)",
     "Bash(bro rename:*)",
     "Bash(bro worktree:*)",
     "Bash(bro spawn:*)",
@@ -312,6 +324,13 @@ const CLAUDE_ALLOW_RULES: &[&str] = &[
     "Bash(bro sessions:*)",
     "Bash(bro read:*)",
     "Bash(bro ask:*)",
+    "Bash(bro studio status:*)",
+    "Bash(bro studio queue:*)",
+    "Bash(bro studio note:*)",
+    "Bash(bro usage:*)",
+    "Bash(bro profile list:*)",
+    "Bash(bro profile pick:*)",
+    "Bash(bro orchestrator renew:*)",
     "PowerShell(kete rename *)",
     "PowerShell(kete worktree *)",
     "PowerShell(kete spawn *)",
@@ -319,6 +338,13 @@ const CLAUDE_ALLOW_RULES: &[&str] = &[
     "PowerShell(kete sessions *)",
     "PowerShell(kete read *)",
     "PowerShell(kete ask *)",
+    "PowerShell(kete studio status *)",
+    "PowerShell(kete studio queue *)",
+    "PowerShell(kete studio note *)",
+    "PowerShell(kete usage *)",
+    "PowerShell(kete profile list *)",
+    "PowerShell(kete profile pick *)",
+    "PowerShell(kete orchestrator renew *)",
     "PowerShell(bro rename *)",
     "PowerShell(bro worktree *)",
     "PowerShell(bro spawn *)",
@@ -326,6 +352,13 @@ const CLAUDE_ALLOW_RULES: &[&str] = &[
     "PowerShell(bro sessions *)",
     "PowerShell(bro read *)",
     "PowerShell(bro ask *)",
+    "PowerShell(bro studio status *)",
+    "PowerShell(bro studio queue *)",
+    "PowerShell(bro studio note *)",
+    "PowerShell(bro usage *)",
+    "PowerShell(bro profile list *)",
+    "PowerShell(bro profile pick *)",
+    "PowerShell(bro orchestrator renew *)",
 ];
 
 /// Cursor variant: the payload arrives on stdin like Claude's, but cursor
@@ -1284,6 +1317,60 @@ mod tests {
         {
             let twin = format!("PowerShell({} *)", bash.trim_end_matches(":*)"));
             assert!(CLAUDE_ALLOW_RULES.contains(&twin.as_str()), "{twin}");
+        }
+    }
+
+    /// Whether a prefix rule (`Bash(x:*)`, `PowerShell(x *)`) lets `cmd`
+    /// run: `x` alone, or `x` and its arguments.
+    fn allows(rule: &str, cmd: &str) -> bool {
+        let prefix = rule
+            .strip_prefix("Bash(")
+            .and_then(|r| r.strip_suffix(":*)"))
+            .or_else(|| {
+                rule.strip_prefix("PowerShell(")
+                    .and_then(|r| r.strip_suffix(" *)"))
+            })
+            .expect("a prefix rule");
+        cmd == prefix || cmd.starts_with(&format!("{prefix} "))
+    }
+
+    /// The 0.60 studio rules let the read-only commands through and never
+    /// the ones that change what a studio may do: only a person does that.
+    #[test]
+    fn studio_rules_allow_reading_and_never_changing_autonomy() {
+        for bin in ["kete", "bro"] {
+            for cmd in [
+                "studio status --json",
+                "studio queue --project wheako",
+                "studio note \"storm sky\" --project wheako",
+                "usage --csv --since 2026-10-21",
+                "profile list --json",
+                "profile pick --json",
+                "orchestrator renew --from handover.md",
+            ] {
+                let cmd = format!("{bin} {cmd}");
+                assert!(
+                    CLAUDE_ALLOW_RULES.iter().any(|r| allows(r, &cmd)),
+                    "{cmd} is not allowed"
+                );
+            }
+            for cmd in [
+                "studio",
+                "studio autonomy wheako A3",
+                "studio enable wheako",
+                "studio disable wheako",
+                "studio exclude wheako x",
+                "studio include wheako x",
+                "profile reserve jayrich",
+                "profile set-project wheako max2",
+                "roles accept-bypass max2",
+            ] {
+                let cmd = format!("{bin} {cmd}");
+                assert!(
+                    !CLAUDE_ALLOW_RULES.iter().any(|r| allows(r, &cmd)),
+                    "{cmd} is allowed"
+                );
+            }
         }
     }
 

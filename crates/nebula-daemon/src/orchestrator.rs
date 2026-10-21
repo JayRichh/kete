@@ -61,6 +61,27 @@ Tell, then ask: report what you found or did in a line or two, then ask before a
 destructive or irreversible. Never approve another session's permission prompt unless the user \
 explicitly tells you to; surface it instead. Prefer `read` over `ask` when the answer is already \
 on screen, and do not interrupt a `running` session unless the user asked you to.\n\n\
+## Studio\n\
+A repo can run as a studio: its inbox notes are work for you, and while you sit idle kete hands \
+you a short `[from kete studio]` note naming new ones and which accounts have room. You decide \
+what to do with each; set a note's status when you take it.\n\
+  kete studio status [--json]      each studio repo: autonomy, inbox, open notes, what waits on the user\n\
+  kete studio queue [--project P]  what the next idle note would list, or why it is holding\n\
+  kete studio note \"<text>\" --project P [--to R] [--priority high|normal|low]   file one inbox note\n\
+  kete profile pick --json         the account the next spawn should take, and why; pass its name to --profile\n\
+  kete profile list --json         every account with its 5-hour and weekly use\n\
+  kete usage --csv [--since YYYY-MM-DD]   tokens, estimated cost, tool uses and turns per session per day\n\
+`--role <id>` on `kete orchestrator spawn` (and on `kete spawn`) starts the worker with that role \
+card from the repo's `.kete/roles.toml`: its model, tools, prompt and permissions.\n\
+Each studio repo has an autonomy level. It is the user's to set, never yours:\n\
+  A0 Hold: no new sessions in the repo; spawns are refused, so finish or park what is running.\n\
+  A1 Plan: spawn and plan; no pushes, pull requests, ships or tags.\n\
+  A2 Deliver: push and open pull requests; no tags or releases.\n\
+  A3 Release: tags and releases too.\n\
+Handover: at 60 percent of your context budget, write a handover note into your workspace (what \
+is in flight, what is next, what waits on the user), then run `kete orchestrator renew --from \
+<note>`. A fresh orchestrator starts on the note once this turn ends, and this session is \
+archived, so end your turn after the command.\n\n\
 ## Azure DevOps\n\
 For a repo whose git remote is on Azure DevOps, `kete ado` does what the desktop app's Tasks and \
 Pull requests views do. Your own workspace has no remote, so name the repo: `--project <kete \
@@ -126,6 +147,12 @@ pub struct StartOrchestratorSpec {
     pub project: Option<ProjectId>,
     pub name: Option<String>,
     pub replace: bool,
+    /// The ROLE CARD the orchestrator launches with (0.60).
+    pub role_card: Option<String>,
+    /// The new orchestrator's first prompt: a renewal's handover. Only the
+    /// daemon's own renewal sets it (`orchestrator_renew.rs`), so a start
+    /// with one is automation's (`accounts::Launcher`).
+    pub starting_prompt: Option<String>,
 }
 
 /// Every orchestrator-spawned worker's knobs, `OrchestratorSpawn[With]`.
@@ -142,6 +169,8 @@ pub struct OrchestratorSpawnSpec {
     pub effort: Option<String>,
     pub profile: Option<String>,
     pub starting_prompt: String,
+    /// The ROLE CARD the worker launches with (0.60).
+    pub role_card: Option<String>,
 }
 
 /// Fold the role's guidance into a spawn's launch rule (the PR / issue
@@ -264,6 +293,13 @@ impl Daemon {
             .map(|n| n.trim().to_string())
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| DEFAULT_ORCHESTRATOR_NAME.into());
+        // A person starts an orchestrator; a renewal (the daemon handing
+        // over on its own) or one with a role card is automation's.
+        let launcher = if spec.role_card.is_some() || spec.starting_prompt.is_some() {
+            nebula_core::accounts::Launcher::Automation
+        } else {
+            nebula_core::accounts::Launcher::Person
+        };
         let created = self
             .create_agent(CreateAgentSpec {
                 parent: None,
@@ -276,10 +312,12 @@ impl Daemon {
                 effort: spec.effort,
                 auto_title: false,
                 cloud_prompt: None,
-                starting_prompt: None,
+                starting_prompt: spec.starting_prompt,
                 pr_url: None,
                 issue_url: None,
                 role: AgentRole::Orchestrator,
+                role_card: spec.role_card,
+                launcher,
             })
             .await;
         match created {
@@ -532,6 +570,7 @@ impl Daemon {
             effort,
             profile,
             starting_prompt,
+            role_card,
         } = spec;
         let project = &project;
         let worktree = match worktree {
@@ -614,6 +653,8 @@ impl Daemon {
             pr_url: None,
             issue_url: None,
             role: AgentRole::Worker,
+            role_card,
+            launcher: nebula_core::accounts::Launcher::Automation,
         })
         .await
     }
@@ -844,3 +885,40 @@ fn random_branch_name() -> String {
 
 #[cfg(test)]
 mod tests;
+
+/// The 0.60 Studio section of the guidance (orchestrator/tests.rs holds the
+/// rest of its checks).
+#[cfg(test)]
+mod studio_guidance_tests {
+    use super::CLAUDE_ORCHESTRATOR_GUIDANCE as GUIDANCE;
+
+    #[test]
+    fn the_guidance_teaches_the_studio_commands_autonomy_and_the_handover() {
+        for needle in [
+            "## Studio",
+            "kete studio status",
+            "kete studio queue",
+            "kete studio note",
+            "kete profile pick --json",
+            "kete usage --csv",
+            "--role <id>",
+            "A0 Hold",
+            "A1 Plan",
+            "A2 Deliver",
+            "A3 Release",
+            "60 percent",
+            "kete orchestrator renew --from",
+        ] {
+            assert!(GUIDANCE.contains(needle), "guidance lacks {needle}");
+        }
+        // Autonomy is the user's: the guidance never teaches the verbs that
+        // change it.
+        for never in [
+            "kete studio autonomy",
+            "kete studio enable",
+            "kete studio disable",
+        ] {
+            assert!(!GUIDANCE.contains(never), "guidance teaches {never}");
+        }
+    }
+}

@@ -40,7 +40,19 @@ impl Daemon {
             role,
             profile,
             parent,
+            role_card,
+            launcher,
         } = spec;
+        let role_card = match role_card {
+            Some(card) => Some(validate_role_card(&card)?),
+            None => None,
+        };
+        // A launch with a role card is automation's, whoever asked for it.
+        let launcher = if role_card.is_some() {
+            nebula_core::accounts::Launcher::Automation
+        } else {
+            launcher
+        };
         let cloud_prompt = match cloud_prompt {
             Some(_) if kind != AgentKind::Claude => {
                 bail!("cloud launch is only supported for Claude")
@@ -108,17 +120,20 @@ impl Daemon {
             .store_blocking(move |store| store.get_project(&project_lookup))
             .await?
             .map(|p| p.repo_path);
-        let profile = resolve_profile_name(&harness, profile.as_deref(), repo.as_deref())?;
+        let profile =
+            resolve_profile_name(&harness, profile.as_deref(), repo.as_deref(), launcher)?;
         // A warm session for this (worktree, kind) hands over its PTY and
         // its pre-generated id — the CLI booted while the user typed the
         // name, so the create feels instant. A starting prompt rides the
         // CLI's argv, and a spare already booted bare cannot be handed one;
         // neither can it be handed a PR or issue rule.
         // Nor the orchestrator's guidance: a spare booted as a worker.
+        // Nor a role card's flags and prompt: a spare booted without one.
         let adopted = (cloud_prompt.is_none()
             && pr_url.is_none()
             && issue_url.is_none()
             && starting_prompt.is_none()
+            && role_card.is_none()
             && !role.is_orchestrator())
         .then(|| {
             self.take_prewarmed(
@@ -192,6 +207,7 @@ impl Daemon {
         let pr_to_insert = pr_url.clone();
         let issue_to_insert = issue_url.clone();
         let prompt_to_insert = prompt_entry.clone();
+        let card_to_insert = role_card.clone();
         self.store_blocking(move |store| {
             store.insert_agent_with_launch_context(
                 &agent_to_insert,
@@ -201,6 +217,10 @@ impl Daemon {
             )?;
             if let Some(entry) = &prompt_to_insert {
                 store.push_prompt(&agent_to_insert.id, entry)?;
+            }
+            // Before the spawn: the launch overlay reads it from the row.
+            if let Some(card) = &card_to_insert {
+                store.set_agent_role_card(&agent_to_insert.id, Some(card))?;
             }
             Ok(())
         })
@@ -237,6 +257,9 @@ impl Daemon {
         self.broadcast(ServerEvent::EntityUpserted {
             entity: Entity::Agent(broadcast_agent),
         });
+        if role_card.is_some() {
+            self.broadcast_session_roles();
+        }
         if let Some(entry) = adopted {
             // Now that the row exists, replay the hooks the warm CLI fired
             // before adoption (SessionStart stores the resume session id).
@@ -599,6 +622,17 @@ impl Daemon {
                 )
             }
             (None, None) => {
+                // A role card's additions (`registry/roles.rs`), rebuilt
+                // on every spawn and resume; a refusal (a roles file that
+                // does not parse, an account that has not accepted bypass
+                // mode) stops the spawn with its reason.
+                let project = self
+                    .store
+                    .get_project(&worktree.project_id)?
+                    .context("project not found")?;
+                let overlay = self
+                    .launch_overlay(agent, &project)
+                    .map_err(anyhow::Error::msg)?;
                 let (program, mut args, resumed) = agent_spawn_command_with(
                     &harness,
                     agent.session_id.as_deref(),
@@ -609,12 +643,15 @@ impl Daemon {
                     prompts.initial.as_deref(),
                     prompts.system.as_deref(),
                     true,
+                    &overlay,
                 );
                 // Kete's statusLine (plan usage and context,
                 // `registry::usage`) as a settings file of its own, for
-                // every fresh, resumed, restarted or warm Claude spawn.
+                // every fresh, resumed, restarted or warm Claude spawn. A
+                // role session's own settings file carries it, with its
+                // rules and guard, whether or not the statusLine is on.
                 if cmd_override.is_none() && agent.kind == AgentKind::Claude {
-                    if let Some(path) = statusline_settings() {
+                    if let Some(path) = overlay.settings_path.clone().or_else(statusline_settings) {
                         insert_settings_flag(&mut args, &path);
                     }
                 }
@@ -918,6 +955,22 @@ pub(super) fn statusline_settings() -> Option<std::path::PathBuf> {
     hooks::installer::write_statusline_settings(&dir)
         .map_err(|e| tracing::warn!(error = %e, "writing the statusLine settings failed"))
         .ok()
+}
+
+/// A role card's id as a launch names it: trimmed, 1 to 64 characters of
+/// letters, digits, `-`, `_` and `.`. Whether the repo's roles file
+/// defines it is the roles lane's check, at spawn.
+fn validate_role_card(raw: &str) -> Result<String> {
+    let card = raw.trim();
+    let ok = !card.is_empty()
+        && card.len() <= 64
+        && card
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    if !ok {
+        bail!("role card `{card}` is not a role id: use letters, digits, - and _ (at most 64)");
+    }
+    Ok(card.to_string())
 }
 
 /// `--settings <path>` at the front of a Claude argv, ahead of any resume

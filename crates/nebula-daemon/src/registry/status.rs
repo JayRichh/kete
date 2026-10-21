@@ -24,6 +24,10 @@ impl Daemon {
         // A usage limit's `StopFailure` learns what the screen and the
         // account say of the wait, outside every lock here.
         let event = self.with_limit_outlook(agent_id, event);
+        // The USAGE LEDGER counts every tool call a turn makes (`ledger.rs`).
+        if matches!(event, HookEvent::PostToolUse { .. }) {
+            self.ledger_on_tool_use(agent_id);
+        }
         let outcome = {
             let mut machines = self.status_machines.lock();
             match machines.entry(agent_id.clone()) {
@@ -110,9 +114,12 @@ impl Daemon {
                     // A turn's edges: what the checkout looks like now.
                     match status {
                         AgentStatus::Running => self.snapshot_turn_start(agent_id),
-                        AgentStatus::Finished | AgentStatus::NeedsFeedback => {
-                            self.snapshot_turn_end(agent_id, false)
+                        AgentStatus::Finished => {
+                            self.snapshot_turn_end(agent_id, false);
+                            // The turn is over: the ledger adds its spend.
+                            self.ledger_on_turn_end(agent_id);
                         }
+                        AgentStatus::NeedsFeedback => self.snapshot_turn_end(agent_id, false),
                         AgentStatus::Terminated => self.snapshot_turn_end(agent_id, true),
                         AgentStatus::Fresh | AgentStatus::Disconnected => {}
                     }

@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use nebula_core::clock::now_ms;
 use nebula_core::review_base::RecordedBase;
 use nebula_core::session_snapshot::SnapshotPoint;
+use nebula_core::studio::wire::{LedgerRow, SpendRow};
 use nebula_core::{
     Agent, AgentId, AgentKind, AgentStatus, Link, LinkId, PrSeen, Project, ProjectId, PromptEntry,
     ReorderScope, TerminalId, TerminalTab, Worktree, WorktreeId, RECENT_PROMPTS_KEPT,
@@ -414,7 +415,65 @@ const MIGRATIONS: &[&str] = &[
     );
     INSERT INTO daemon_identity (id, daemon_id) VALUES (1, lower(hex(randomblob(8))));
     ",
+    // 36: the ROLE CARD a session launched with (`.kete/roles.toml`, by
+    // id), so a resume or restart re-applies the same card. NULL for every
+    // existing row and every session started without one.
+    "ALTER TABLE agents ADD COLUMN role_card TEXT;",
+    // 37: the USAGE LEDGER: one row per session per local day, summed at
+    // each turn end. No foreign key: the ledger outlives a deleted
+    // session, and `project`, `branch` and `session` (names, as they
+    // were) are copied in so an old row still says what it was.
+    "
+    CREATE TABLE session_spend (
+      agent_id           TEXT NOT NULL,
+      day                TEXT NOT NULL,
+      project            TEXT,
+      branch             TEXT,
+      session            TEXT,
+      model              TEXT,
+      profile            TEXT,
+      role_card          TEXT,
+      input_tokens       INTEGER NOT NULL DEFAULT 0,
+      output_tokens      INTEGER NOT NULL DEFAULT 0,
+      cache_read_tokens  INTEGER NOT NULL DEFAULT 0,
+      cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+      cost_usd           REAL NOT NULL DEFAULT 0,
+      tool_uses          INTEGER NOT NULL DEFAULT 0,
+      turns              INTEGER NOT NULL DEFAULT 0,
+      first_at           INTEGER NOT NULL,
+      last_at            INTEGER NOT NULL,
+      PRIMARY KEY (agent_id, day)
+    );
+    ",
 ];
+
+/// One turn's spend for one session (the ledger lane builds it at a turn
+/// end), added to the session's row for `day` by [`Store::add_spend`].
+/// The descriptive fields are what the session was at that turn: a later
+/// turn's non-empty value replaces an earlier one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpendDelta {
+    pub agent: AgentId,
+    /// Local date, `YYYY-MM-DD`.
+    pub day: String,
+    /// The project's name.
+    pub project: Option<String>,
+    pub branch: Option<String>,
+    /// The session's name.
+    pub session: Option<String>,
+    pub model: Option<String>,
+    pub profile: Option<String>,
+    pub role_card: Option<String>,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
+    pub cost_usd: f64,
+    pub tool_uses: u32,
+    pub turns: u32,
+    /// Epoch ms.
+    pub at: i64,
+}
 
 pub struct Store {
     conn: Mutex<Connection>,
@@ -776,6 +835,129 @@ impl Store {
         }
         tx.commit()?;
         Ok(changed)
+    }
+
+    /// Record (or with None, clear) the ROLE CARD `id` launched with.
+    pub fn set_agent_role_card(&self, id: &AgentId, card: Option<&str>) -> Result<()> {
+        self.conn.lock().execute(
+            "UPDATE agents SET role_card = ?2 WHERE id = ?1",
+            params![id.as_str(), card],
+        )?;
+        Ok(())
+    }
+
+    /// Every session row holding a role card, archived ones too, in
+    /// creation order.
+    pub fn agent_role_cards(&self) -> Result<Vec<(AgentId, String)>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, role_card FROM agents WHERE role_card IS NOT NULL ORDER BY created_at, id",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((AgentId(r.get(0)?), r.get::<_, String>(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Add one turn's spend to `d.agent`'s row for `d.day`, creating it
+    /// on the day's first turn, and return the row as it now stands.
+    pub fn add_spend(&self, d: &SpendDelta) -> Result<SpendRow> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO session_spend (agent_id, day, project, branch, session, model, profile,
+                role_card, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+                cost_usd, tool_uses, turns, first_at, last_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16)
+             ON CONFLICT (agent_id, day) DO UPDATE SET
+                project = COALESCE(excluded.project, project),
+                branch = COALESCE(excluded.branch, branch),
+                session = COALESCE(excluded.session, session),
+                model = COALESCE(excluded.model, model),
+                profile = COALESCE(excluded.profile, profile),
+                role_card = COALESCE(excluded.role_card, role_card),
+                input_tokens = input_tokens + excluded.input_tokens,
+                output_tokens = output_tokens + excluded.output_tokens,
+                cache_read_tokens = cache_read_tokens + excluded.cache_read_tokens,
+                cache_write_tokens = cache_write_tokens + excluded.cache_write_tokens,
+                cost_usd = cost_usd + excluded.cost_usd,
+                tool_uses = tool_uses + excluded.tool_uses,
+                turns = turns + excluded.turns,
+                last_at = MAX(last_at, excluded.last_at)",
+            params![
+                d.agent.as_str(),
+                d.day,
+                d.project,
+                d.branch,
+                d.session,
+                d.model,
+                d.profile,
+                d.role_card,
+                d.input_tokens as i64,
+                d.output_tokens as i64,
+                d.cache_read_tokens as i64,
+                d.cache_write_tokens as i64,
+                d.cost_usd,
+                d.tool_uses as i64,
+                d.turns as i64,
+                d.at,
+            ],
+        )?;
+        Ok(conn.query_row(
+            &format!(
+                "SELECT {SPEND_COLUMNS} FROM session_spend s WHERE agent_id = ?1 AND day = ?2"
+            ),
+            params![d.agent.as_str(), d.day],
+            row_to_spend,
+        )?)
+    }
+
+    /// The ledger: every session's row per day from `since` to `until`
+    /// (local dates, `YYYY-MM-DD`, inclusive; None leaves that end open),
+    /// for one project or all, by day, project and session. A session still
+    /// in the tree says what it is now (name, status, pull request); a
+    /// deleted one says what its rows recorded.
+    pub fn spend_rows(
+        &self,
+        since: Option<&str>,
+        until: Option<&str>,
+        project: Option<&ProjectId>,
+    ) -> Result<Vec<LedgerRow>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {SPEND_COLUMNS},
+                    COALESCE(a.name, s.session, s.agent_id),
+                    COALESCE(p.name, s.project, ''),
+                    COALESCE(s.branch, w.branch),
+                    COALESCE(s.role_card, a.role_card),
+                    COALESCE(s.profile, a.profile),
+                    COALESCE(s.model, a.model),
+                    a.status,
+                    a.pr_url
+             FROM session_spend s
+             LEFT JOIN agents a ON a.id = s.agent_id
+             LEFT JOIN worktrees w ON w.id = a.worktree_id
+             LEFT JOIN projects p ON p.id = w.project_id
+             WHERE (?1 IS NULL OR s.day >= ?1)
+               AND (?2 IS NULL OR s.day <= ?2)
+               AND (?3 IS NULL OR p.id = ?3
+                    OR (p.id IS NULL AND s.project = (SELECT name FROM projects WHERE id = ?3)))
+             ORDER BY s.day, COALESCE(p.name, s.project, ''), COALESCE(a.name, s.session, s.agent_id)"
+        ))?;
+        let rows = stmt.query_map(params![since, until, project.map(ProjectId::as_str)], |r| {
+            Ok(LedgerRow {
+                spend: row_to_spend(r)?,
+                session: r.get(9)?,
+                project: r.get(10)?,
+                branch: r.get(11)?,
+                role_card: r.get(12)?,
+                profile: r.get(13)?,
+                model: r.get(14)?,
+                status: r
+                    .get::<_, Option<String>>(15)?
+                    .and_then(|s| AgentStatus::parse(&s))
+                    .unwrap_or(AgentStatus::Terminated),
+                pr_url: r.get(16)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// The row holding the ORCHESTRATOR role, archived or not.
@@ -1796,6 +1978,24 @@ const AGENT_COLUMNS: &str = "id, worktree_id, name, status, archived, kind, \
                              archived_at, unseen, cloud_session_id, recent_prompts, custom_harness, \
                              issue_url, role, profile, parent";
 const TERMINAL_COLUMNS: &str = "id, worktree_id, name, sort_order, run_command";
+/// A `session_spend` row as [`row_to_spend`] reads it (table alias `s`).
+const SPEND_COLUMNS: &str = "s.agent_id, s.day, s.input_tokens, s.output_tokens, \
+                             s.cache_read_tokens, s.cache_write_tokens, s.cost_usd, s.tool_uses, \
+                             s.turns";
+
+fn row_to_spend(r: &rusqlite::Row) -> rusqlite::Result<SpendRow> {
+    Ok(SpendRow {
+        agent: AgentId(r.get(0)?),
+        day: r.get(1)?,
+        input_tokens: r.get::<_, i64>(2)?.max(0) as u64,
+        output_tokens: r.get::<_, i64>(3)?.max(0) as u64,
+        cache_read_tokens: r.get::<_, i64>(4)?.max(0) as u64,
+        cache_write_tokens: r.get::<_, i64>(5)?.max(0) as u64,
+        cost_usd: r.get(6)?,
+        tool_uses: r.get::<_, i64>(7)?.clamp(0, u32::MAX as i64) as u32,
+        turns: r.get::<_, i64>(8)?.clamp(0, u32::MAX as i64) as u32,
+    })
+}
 const LINK_COLUMNS: &str = "id, worktree_id, url, sort_order";
 
 fn row_to_project(r: &rusqlite::Row) -> rusqlite::Result<Project> {
@@ -1984,6 +2184,191 @@ mod tests {
             role,
             recent_prompts: Vec::new(),
         }
+    }
+
+    /// 0.60 is migrations 36 (`agents.role_card`) and 37
+    /// (`session_spend`): a fresh store ends on the last one.
+    #[test]
+    fn a_fresh_store_is_at_migration_37() {
+        assert_eq!(MIGRATIONS.len(), 37);
+        let store = Store::open_in_memory().unwrap();
+        let version: i64 = store
+            .conn
+            .lock()
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, MIGRATIONS.len() as i64);
+    }
+
+    #[test]
+    fn a_role_card_round_trips_and_clears() {
+        let store = store_with_worktree();
+        for id in ["a", "b", "c"] {
+            store
+                .insert_agent(&role_agent(id, nebula_core::AgentRole::Worker))
+                .unwrap();
+        }
+        assert!(store.agent_role_cards().unwrap().is_empty());
+        store
+            .set_agent_role_card(&AgentId("b".into()), Some("runner"))
+            .unwrap();
+        store
+            .set_agent_role_card(&AgentId("c".into()), Some("triage"))
+            .unwrap();
+        let mut cards = store.agent_role_cards().unwrap();
+        cards.sort();
+        assert_eq!(
+            cards,
+            [
+                (AgentId("b".into()), "runner".to_string()),
+                (AgentId("c".into()), "triage".to_string())
+            ]
+        );
+        store
+            .set_agent_role_card(&AgentId("b".into()), None)
+            .unwrap();
+        assert_eq!(
+            store.agent_role_cards().unwrap(),
+            [(AgentId("c".into()), "triage".to_string())]
+        );
+    }
+
+    fn delta(agent: &str, day: &str, input: u64, cost: f64, at: i64) -> SpendDelta {
+        SpendDelta {
+            agent: AgentId(agent.into()),
+            day: day.into(),
+            project: Some("demo".into()),
+            branch: Some("main".into()),
+            session: Some(agent.into()),
+            model: Some("opus".into()),
+            profile: None,
+            role_card: None,
+            input_tokens: input,
+            output_tokens: input / 10,
+            cache_read_tokens: 7,
+            cache_write_tokens: 3,
+            cost_usd: cost,
+            tool_uses: 4,
+            turns: 1,
+            at,
+        }
+    }
+
+    #[test]
+    fn add_spend_sums_two_turns_into_one_row_per_day() {
+        let store = Store::open_in_memory().unwrap();
+        let first = store
+            .add_spend(&delta("a", "2026-10-21", 1000, 0.05, 10))
+            .unwrap();
+        assert_eq!((first.input_tokens, first.turns), (1000, 1));
+        let mut second = delta("a", "2026-10-21", 500, 0.03, 20);
+        second.profile = Some("max2".into());
+        let row = store.add_spend(&second).unwrap();
+        assert_eq!(
+            row,
+            SpendRow {
+                agent: AgentId("a".into()),
+                day: "2026-10-21".into(),
+                input_tokens: 1500,
+                output_tokens: 150,
+                cache_read_tokens: 14,
+                cache_write_tokens: 6,
+                cost_usd: row.cost_usd,
+                tool_uses: 8,
+                turns: 2,
+            }
+        );
+        assert!((row.cost_usd - 0.08).abs() < 1e-9, "{}", row.cost_usd);
+        let next_day = store
+            .add_spend(&delta("a", "2026-10-22", 9, 0.0, 30))
+            .unwrap();
+        assert_eq!((next_day.input_tokens, next_day.turns), (9, 1));
+        let rows = store.spend_rows(None, None, None).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0].profile.as_deref(),
+            Some("max2"),
+            "a later value fills in"
+        );
+        assert_eq!(
+            rows[0].status,
+            AgentStatus::Terminated,
+            "no row in the tree"
+        );
+        assert_eq!(rows[0].session, "a");
+    }
+
+    #[test]
+    fn spend_rows_filter_by_day_and_project_and_name_live_sessions() {
+        let store = store_with_worktree();
+        store
+            .insert_project(&Project {
+                id: ProjectId("q".into()),
+                name: "other".into(),
+                repo_path: "/tmp/other".into(),
+                sort_order: 1,
+            })
+            .unwrap();
+        store
+            .insert_agent(&role_agent("a", nebula_core::AgentRole::Worker))
+            .unwrap();
+        store
+            .rename_agent(&AgentId("a".into()), "fix login")
+            .unwrap();
+        store
+            .add_spend(&delta("a", "2026-10-20", 1, 0.0, 1))
+            .unwrap();
+        store
+            .add_spend(&delta("a", "2026-10-21", 2, 0.0, 2))
+            .unwrap();
+        store
+            .add_spend(&delta("a", "2026-10-23", 3, 0.0, 3))
+            .unwrap();
+        // A deleted session of the other project: only its copied name ties it.
+        let mut gone = delta("gone", "2026-10-21", 4, 0.0, 4);
+        gone.project = Some("other".into());
+        store.add_spend(&gone).unwrap();
+
+        let days = |rows: Vec<LedgerRow>| -> Vec<(String, String)> {
+            rows.into_iter().map(|r| (r.spend.day, r.session)).collect()
+        };
+        assert_eq!(
+            days(
+                store
+                    .spend_rows(Some("2026-10-21"), Some("2026-10-22"), None)
+                    .unwrap()
+            ),
+            [
+                ("2026-10-21".to_string(), "fix login".to_string()),
+                ("2026-10-21".to_string(), "gone".to_string()),
+            ]
+        );
+        assert_eq!(
+            days(store.spend_rows(None, Some("2026-10-20"), None).unwrap()),
+            [("2026-10-20".to_string(), "fix login".to_string())]
+        );
+        assert_eq!(
+            days(
+                store
+                    .spend_rows(None, None, Some(&ProjectId("p".into())))
+                    .unwrap()
+            )
+            .len(),
+            3
+        );
+        assert_eq!(
+            days(
+                store
+                    .spend_rows(None, None, Some(&ProjectId("q".into())))
+                    .unwrap()
+            ),
+            [("2026-10-21".to_string(), "gone".to_string())]
+        );
+        let live = &store.spend_rows(Some("2026-10-23"), None, None).unwrap()[0];
+        assert_eq!(
+            (live.project.as_str(), live.status),
+            ("demo", AgentStatus::Fresh)
+        );
     }
 
     #[test]
@@ -2809,6 +3194,7 @@ mod tests {
             "pr_seen",
             "projects",
             "session_snapshots",
+            "session_spend",
             "session_turns",
             "terminals",
             "ui_state",
@@ -3810,7 +4196,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
         assert_eq!(version, MIGRATIONS.len() as i64);
-        assert_eq!(version, 35);
+        assert_eq!(version, 37);
 
         let (projects, worktrees, agents, _) = store.load_tree().unwrap();
         // beta was dragged ahead of alpha.

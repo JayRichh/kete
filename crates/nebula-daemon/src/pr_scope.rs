@@ -309,6 +309,8 @@ impl Daemon {
             pr_url: Some(pr_url),
             issue_url: None,
             role: AgentRole::Worker,
+            role_card: None,
+            launcher: nebula_core::accounts::Launcher::Person,
         })
         .await
     }

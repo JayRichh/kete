@@ -321,6 +321,7 @@ impl ClientConnection {
                 issue_url,
                 role,
                 profile,
+                role_card,
             } => {
                 self.handle_create_agent(
                     req_id,
@@ -336,6 +337,7 @@ impl ClientConnection {
                     issue_url,
                     role,
                     profile,
+                    role_card,
                 )
                 .await;
                 Ok(true)
@@ -423,6 +425,7 @@ impl ClientConnection {
                     worktree,
                     base,
                     profile,
+                    None,
                 )
                 .await;
                 Ok(true)
@@ -508,6 +511,10 @@ impl ClientConnection {
                 effort,
                 starting_prompt,
             } => {
+                if let Err(e) = self.studio_gate(project.clone()).await {
+                    reply_done(&self.out_tx, req_id, Err(e)).await;
+                    return Ok(true);
+                }
                 let daemon = self.daemon.clone();
                 let out_tx = self.out_tx.clone();
                 tokio::spawn(async move {
@@ -526,6 +533,7 @@ impl ClientConnection {
                                 effort,
                                 profile: None,
                                 starting_prompt,
+                                role_card: None,
                             },
                         )
                         .await;
@@ -800,6 +808,7 @@ impl ClientConnection {
                 project,
                 name,
                 replace,
+                role_card,
             } => {
                 if let Err(e) = self.check_provisioning_peer().await {
                     reply_done(&self.out_tx, req_id, Err(e)).await;
@@ -818,6 +827,8 @@ impl ClientConnection {
                             project,
                             name,
                             replace,
+                            role_card,
+                            starting_prompt: None,
                         })
                         .await;
                     reply(&out_tx, req_id, result.map(Some)).await;
@@ -922,7 +933,12 @@ impl ClientConnection {
                 effort,
                 profile,
                 starting_prompt,
+                role_card,
             } => {
+                if let Err(e) = self.studio_gate(project.clone()).await {
+                    reply_done(&self.out_tx, req_id, Err(e)).await;
+                    return Ok(true);
+                }
                 let daemon = self.daemon.clone();
                 let out_tx = self.out_tx.clone();
                 tokio::spawn(async move {
@@ -941,6 +957,7 @@ impl ClientConnection {
                                 effort,
                                 profile,
                                 starting_prompt,
+                                role_card,
                             },
                         )
                         .await;
@@ -948,7 +965,176 @@ impl ClientConnection {
                 });
                 Ok(true)
             }
+            // -- protocol 66 (`STUDIO_PROTOCOL`). --
+            ClientRequest::SetStudio {
+                req_id,
+                project,
+                studio,
+            } => {
+                // Only a person changes what a studio may do.
+                let result = match self.check_studio_peer().await {
+                    Ok(()) => {
+                        self.blocking_daemon(move |daemon| {
+                            daemon
+                                .studio_set(&project, studio)
+                                .map_err(anyhow::Error::msg)
+                        })
+                        .await
+                    }
+                    Err(e) => Err(e),
+                };
+                reply_done(&self.out_tx, req_id, result).await;
+                Ok(true)
+            }
+            ClientRequest::StudioQueue {
+                req_id,
+                project,
+                run,
+            } => {
+                let result = self
+                    .blocking_daemon(move |daemon| {
+                        daemon
+                            .studio_queue(project.as_ref(), run)
+                            .map_err(anyhow::Error::msg)
+                    })
+                    .await;
+                match result {
+                    Ok(rows) => {
+                        self.send(ServerEvent::StudioQueueState { req_id, rows })
+                            .await
+                    }
+                    Err(err) => reply_done(&self.out_tx, req_id, Err(err)).await,
+                }
+                Ok(true)
+            }
+            ClientRequest::RenewOrchestrator {
+                req_id,
+                caller,
+                note,
+                profile,
+                model,
+                keep_old,
+                now,
+            } => {
+                // The orchestrator renewing itself passed the caller check
+                // above; anyone else is a person, never another session.
+                if caller.is_none() {
+                    if let Err(e) = self.check_provisioning_peer().await {
+                        reply_done(&self.out_tx, req_id, Err(e)).await;
+                        return Ok(true);
+                    }
+                }
+                let result = self
+                    .blocking_daemon(move |daemon| {
+                        let old = match &caller {
+                            Some(id) => Some(id.clone()),
+                            None => daemon.store.orchestrator()?.map(|a| a.id),
+                        };
+                        let state = daemon
+                            .renew_orchestrator(crate::orchestrator_renew::RenewRequest {
+                                caller,
+                                note,
+                                profile,
+                                model,
+                                keep_old,
+                                now,
+                            })
+                            .map_err(anyhow::Error::msg)?;
+                        let old = old.context("there is no orchestrator to renew")?;
+                        Ok((old, state))
+                    })
+                    .await;
+                match result {
+                    Ok((old, state)) => {
+                        self.send(ServerEvent::OrchestratorRenewal {
+                            req_id: Some(req_id),
+                            old,
+                            new: None,
+                            state,
+                        })
+                        .await
+                    }
+                    Err(err) => reply_done(&self.out_tx, req_id, Err(err)).await,
+                }
+                Ok(true)
+            }
+            ClientRequest::UsageLedger {
+                req_id,
+                since,
+                until,
+                project,
+            } => {
+                let result = self
+                    .blocking_daemon(move |daemon| {
+                        daemon
+                            .usage_ledger(since.as_deref(), until.as_deref(), project.as_ref())
+                            .map_err(anyhow::Error::msg)
+                    })
+                    .await;
+                match result {
+                    Ok(rows) => {
+                        self.send(ServerEvent::UsageLedgerRows { req_id, rows })
+                            .await
+                    }
+                    Err(err) => reply_done(&self.out_tx, req_id, Err(err)).await,
+                }
+                Ok(true)
+            }
+            ClientRequest::SpawnSiblingAgentWith {
+                req_id,
+                id,
+                kind,
+                starting_prompt,
+                worktree,
+                base,
+                profile,
+                role_card,
+            } => {
+                self.handle_spawn_sibling(
+                    req_id,
+                    id,
+                    kind,
+                    starting_prompt,
+                    worktree,
+                    base,
+                    profile,
+                    Some(role_card),
+                )
+                .await;
+                Ok(true)
+            }
         }
+    }
+
+    /// A0 (Hold) refuses new sessions in a studio repo
+    /// (`Daemon::studio_check_spawn`): asked before an orchestrator or
+    /// sibling spawn starts anything.
+    async fn studio_gate(&self, project: nebula_core::ProjectId) -> Result<()> {
+        self.blocking_daemon(move |daemon| {
+            daemon
+                .studio_check_spawn(&project)
+                .map_err(anyhow::Error::msg)
+        })
+        .await
+    }
+
+    /// [`Self::studio_gate`] on the project of the session asking for a
+    /// sibling. An unknown caller passes: the spawn refuses it itself.
+    async fn studio_gate_for_agent(&self, id: nebula_core::AgentId) -> Result<()> {
+        self.blocking_daemon(move |daemon| {
+            let project = daemon
+                .store
+                .get_agent(&id)?
+                .and_then(|agent| daemon.store.get_worktree(&agent.worktree_id).ok().flatten())
+                .map(|worktree| worktree.project_id);
+            match project {
+                Some(project) => daemon
+                    .studio_check_spawn(&project)
+                    .map_err(anyhow::Error::msg),
+                None => Ok(()),
+            }
+        })
+        .await
     }
 
     /// Orchestrator provisioning (start, set, clear) is the user's call,
@@ -957,6 +1143,25 @@ impl ClientConnection {
     /// the peer check is defence in depth over the same-user socket, not
     /// the trust boundary itself.
     async fn check_provisioning_peer(&self) -> Result<()> {
+        self.refuse_inside_session(
+            "orchestrator provisioning is refused from inside an agent session; start or \
+             pin the orchestrator from kete itself (F10) or your own shell",
+        )
+        .await
+    }
+
+    /// What a studio may do (`SetStudio`) is a person's call, refused the
+    /// same way as orchestrator provisioning.
+    async fn check_studio_peer(&self) -> Result<()> {
+        self.refuse_inside_session(
+            "studio settings are refused from inside an agent session: only you change a \
+             studio's autonomy, from your own shell or the apps",
+        )
+        .await
+    }
+
+    /// `refusal` when the client process runs inside a live agent session.
+    async fn refuse_inside_session(&self, refusal: &'static str) -> Result<()> {
         let Some(pid) = self.peer_pid else {
             return Ok(());
         };
@@ -964,10 +1169,7 @@ impl ClientConnection {
             .blocking_daemon(move |daemon| Ok(daemon.pid_inside_agent_session(pid)))
             .await?;
         if inside {
-            anyhow::bail!(
-                "orchestrator provisioning is refused from inside an agent session; start or \
-                 pin the orchestrator from kete itself (F10) or your own shell"
-            );
+            anyhow::bail!("{refusal}");
         }
         Ok(())
     }
@@ -1013,6 +1215,7 @@ impl ClientConnection {
             .into_iter()
             .chain(usage_events(&self.daemon, self.peer_protocol).await)
             .chain(stop_events(&self.daemon, self.peer_protocol))
+            .chain(role_events(&self.daemon, self.peer_protocol))
         {
             self.send(ev).await;
         }
@@ -1100,6 +1303,7 @@ impl ClientConnection {
     async fn handle_input(&self, session: SessionRef, data: Vec<u8>) {
         let result = self
             .blocking_daemon(move |daemon| {
+                daemon.note_input(&session);
                 if let Some(s) = daemon.session(&session) {
                     if let Err(e) = s.write_input(&data) {
                         tracing::warn!(error = %e, "pty write failed");
@@ -1178,6 +1382,7 @@ impl ClientConnection {
         issue_url: Option<String>,
         role: nebula_core::AgentRole,
         profile: Option<String>,
+        role_card: Option<String>,
     ) {
         // The ORCHESTRATOR role is granted only by StartOrchestrator and
         // SetOrchestrator, which keep it to one per machine and refuse a
@@ -1214,6 +1419,8 @@ impl ClientConnection {
                 pr_url: None,
                 issue_url,
                 role,
+                role_card,
+                launcher: nebula_core::accounts::Launcher::Person,
             })
             .await;
         if let Some(launch_mode) = launch_mode {
@@ -1363,7 +1570,12 @@ impl ClientConnection {
         worktree: Option<String>,
         base: Option<String>,
         profile: Option<String>,
+        role_card: Option<String>,
     ) {
+        if let Err(e) = self.studio_gate_for_agent(id.clone()).await {
+            reply_done(&self.out_tx, req_id, Err(e)).await;
+            return;
+        }
         // Logged by mode only — never the prompt text.
         let worktree = worktree
             .as_deref()
@@ -1373,7 +1585,14 @@ impl ClientConnection {
             });
         let result = self
             .daemon
-            .spawn_sibling_agent(&id, kind, worktree, &starting_prompt, profile.as_deref())
+            .spawn_sibling_agent(
+                &id,
+                kind,
+                worktree,
+                &starting_prompt,
+                profile.as_deref(),
+                role_card.as_deref(),
+            )
             .await;
         match &result {
             Ok(nebula_core::EntityId::Agent(agent)) => tracing::info!(
@@ -1565,6 +1784,17 @@ fn stop_events(daemon: &Daemon, peer: u32) -> Vec<ServerEvent> {
     }]
 }
 
+/// The role sessions a subscriber at `peer` gets beside the Snapshot (the
+/// whole list): none for a peer older than `STUDIO_PROTOCOL`.
+fn role_events(daemon: &Daemon, peer: u32) -> Vec<ServerEvent> {
+    if peer < nebula_core::STUDIO_PROTOCOL {
+        return Vec::new();
+    }
+    vec![ServerEvent::SessionRoles {
+        roles: daemon.session_roles(),
+    }]
+}
+
 /// The recorded worktree bases a subscriber at `peer` gets beside the
 /// Snapshot: none for a peer older than `RECORDED_BASE_PROTOCOL`.
 async fn base_events(daemon: &Arc<Daemon>, peer: u32) -> Vec<ServerEvent> {
@@ -1598,6 +1828,7 @@ async fn send_snapshot(daemon: &Arc<Daemon>, tx: &mpsc::Sender<ServerEvent>, pee
         .into_iter()
         .chain(usage_events(daemon, peer).await)
         .chain(stop_events(daemon, peer))
+        .chain(role_events(daemon, peer))
     {
         if tx.send(ev).await.is_err() {
             return false;
@@ -1649,6 +1880,13 @@ fn privileged_caller(req: &ClientRequest) -> Option<(u64, nebula_core::AgentId)>
         | R::OrchestratorTell { req_id, caller, .. }
         | R::OrchestratorReadSession { req_id, caller, .. }
         | R::OrchestratorSpawnWith { req_id, caller, .. } => Some((*req_id, caller.clone())),
+        // The orchestrator renewing itself; a renewal with no caller is a
+        // person's, gated on the provisioning check instead.
+        R::RenewOrchestrator {
+            req_id,
+            caller: Some(caller),
+            ..
+        } => Some((*req_id, caller.clone())),
         _ => None,
     }
 }
@@ -1865,6 +2103,7 @@ mod tests {
                 issue_url: None,
                 role: nebula_core::AgentRole::Orchestrator,
                 profile: None,
+                role_card: None,
             })
             .await
             .unwrap();
@@ -2075,6 +2314,29 @@ mod tests {
                     project: None,
                     name: None,
                     replace: true,
+                    role_card: None,
+                },
+            ),
+            // 0.60: what a studio may do, and a renewal no session asked
+            // for, are a person's calls too.
+            (
+                5,
+                ClientRequest::SetStudio {
+                    req_id: 5,
+                    project: nebula_core::ProjectId("p".into()),
+                    studio: Some(nebula_core::studio::StudioSettings::default()),
+                },
+            ),
+            (
+                6,
+                ClientRequest::RenewOrchestrator {
+                    req_id: 6,
+                    caller: None,
+                    note: std::path::PathBuf::from("handover.md"),
+                    profile: None,
+                    model: None,
+                    keep_old: false,
+                    now: true,
                 },
             ),
         ] {
@@ -2083,6 +2345,25 @@ mod tests {
             assert!(err.contains("inside an agent session"), "{err}");
         }
         assert!(daemon.store.orchestrator().unwrap().is_none());
+        // From outside every session the studio request reaches the daemon
+        // (whose queue lane answers it).
+        client.peer_pid = Some(std::process::id());
+        client
+            .handle_request(ClientRequest::SetStudio {
+                req_id: 7,
+                project: nebula_core::ProjectId("p".into()),
+                studio: None,
+            })
+            .await
+            .unwrap();
+        let reached = error_for(&mut rx, 7).await;
+        assert!(
+            !reached
+                .as_deref()
+                .is_some_and(|e| e.contains("inside an agent session")),
+            "{reached:?}"
+        );
+        client.peer_pid = Some(root);
 
         // From outside every session: allowed.
         client.peer_pid = Some(std::process::id());
