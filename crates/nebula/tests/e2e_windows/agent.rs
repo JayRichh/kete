@@ -33,6 +33,14 @@
 //! - `statusline:<resets_at>` — runs the status line command Kete's
 //!   `--settings` file names, as Claude does after a reply, with a
 //!   reading whose five-hour window resets at `<resets_at>` (epoch secs).
+//! - `usage:<input>,<output>,<cost>` — one API response, as Claude records
+//!   it: appends an assistant line with a fresh `message.id` and that
+//!   `message.usage` to its transcript (`<config dir>/projects/<cwd
+//!   slug>/<session id>.jsonl`, where Claude keeps it), then runs the status
+//!   line command with `transcript_path` and `cost.total_cost_usd` =
+//!   `<cost>`: the session's total so far, as Claude reports it.
+//! - `prompt:<text>` — a new turn: `UserPromptSubmit` with that prompt, as
+//!   when one is typed (put a `gate:` before it to hold the turn back).
 //! - `echo` — the idle prompt: turns bracketed paste on and logs every
 //!   byte it is sent to [`ECHO_LOG`], printing `paste <n> bytes` for each
 //!   bracketed paste and `submit` for each Enter outside one.
@@ -78,6 +86,7 @@ pub fn run() {
         cwd: std::env::current_dir().unwrap_or_default(),
         input: std::io::stdin(),
         settings: settings_of(&args),
+        messages: 0,
     };
     agent.log(&format!(
         "agent {} args {args:?}",
@@ -166,6 +175,11 @@ pub fn run() {
             "subagent-open" => agent.subagent(rest, false),
             "say" => print_line(rest),
             "statusline" => agent.statusline(rest),
+            "usage" => agent.usage(rest),
+            "prompt" => {
+                agent.hook("UserPromptSubmit", serde_json::json!({ "prompt": rest }));
+                print_line(&format!("working on: {rest}"));
+            }
             "echo" => agent.echo(),
             other => agent.log(&format!("unknown step {other}")),
         }
@@ -207,6 +221,8 @@ struct Agent {
     input: std::io::Stdin,
     /// The `--settings` file Kete passed, which names its status line.
     settings: Option<PathBuf>,
+    /// Assistant messages written so far, for fresh message ids.
+    messages: u32,
 }
 
 impl Agent {
@@ -314,6 +330,87 @@ impl Agent {
     /// Run the status line command, as Claude does after a reply, with a
     /// plan reading on stdin.
     fn statusline(&self, resets_at: &str) {
+        self.run_statusline(serde_json::json!({
+            "session_id": self.session_id,
+            "rate_limits": {
+                "five_hour": {"used_percentage": 2, "resets_at": resets_at.trim().parse::<i64>().unwrap_or(0)},
+                "seven_day": {"used_percentage": 10, "resets_at": 1_900_000_000},
+            },
+        }));
+    }
+
+    /// The `usage` step: one assistant message in the transcript, then the
+    /// status line with the session's cost so far.
+    fn usage(&mut self, rest: &str) {
+        let mut parts = rest.split(',').map(str::trim);
+        let mut number = || parts.next().unwrap_or_default().to_string();
+        let (input, output, cost) = (number(), number(), number());
+        let transcript = self.transcript();
+        if let Some(dir) = transcript.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        self.messages += 1;
+        let secs = nebula_core::clock::now_secs() as i64;
+        let line = serde_json::json!({
+            "type": "assistant",
+            "sessionId": self.session_id,
+            "timestamp": format!(
+                "{}T{:02}:{:02}:{:02}.000Z",
+                nebula_core::usage_ledger::day_at(secs, |_| 0),
+                secs.rem_euclid(86_400) / 3600,
+                secs.rem_euclid(3600) / 60,
+                secs.rem_euclid(60)
+            ),
+            "message": {
+                "id": format!("msg_fake_{}_{}", std::process::id(), self.messages),
+                "type": "message",
+                "role": "assistant",
+                "content": [{ "type": "text", "text": "done" }],
+                "usage": {
+                    "input_tokens": input.parse::<u64>().unwrap_or(0),
+                    "output_tokens": output.parse::<u64>().unwrap_or(0),
+                    "cache_read_input_tokens": 0,
+                    "cache_creation_input_tokens": 0,
+                },
+            },
+        });
+        let written = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&transcript)
+            .and_then(|mut file| writeln!(file, "{line}"));
+        self.log(&format!("usage: transcript {written:?}"));
+        self.run_statusline(serde_json::json!({
+            "session_id": self.session_id,
+            "transcript_path": transcript.display().to_string(),
+            "cost": { "total_cost_usd": cost.parse::<f64>().unwrap_or(0.0) },
+        }));
+    }
+
+    /// Where Claude keeps this session's transcript: its config dir's
+    /// `projects/<cwd with every other character a dash>/<session id>.jsonl`.
+    fn transcript(&self) -> PathBuf {
+        let config = std::env::var_os(nebula_core::env::CLAUDE_CONFIG_DIR)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude")))
+            .unwrap_or_else(|| self.cwd.join(".claude"));
+        let slug: String = self
+            .cwd
+            .display()
+            .to_string()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
+        config
+            .join("projects")
+            .join(slug)
+            .join(format!("{}.jsonl", self.session_id))
+    }
+
+    /// Run the status line command Kete's `--settings` file names with
+    /// `reading` on stdin.
+    fn run_statusline(&self, reading: serde_json::Value) {
         let command = self
             .settings
             .as_ref()
@@ -324,13 +421,6 @@ impl Agent {
             self.log("statusline: no command passed");
             return;
         };
-        let reading = serde_json::json!({
-            "session_id": self.session_id,
-            "rate_limits": {
-                "five_hour": {"used_percentage": 2, "resets_at": resets_at.trim().parse::<i64>().unwrap_or(0)},
-                "seven_day": {"used_percentage": 10, "resets_at": 1_900_000_000},
-            },
-        });
         use std::os::windows::process::CommandExt;
         let child = Command::new("cmd")
             .raw_arg(format!("/D /C {command}"))
