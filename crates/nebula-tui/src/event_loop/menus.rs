@@ -925,6 +925,14 @@ fn account_items(
             items.push(press("Use for\u{2026}", key('p')));
         }
         items.push(press(&checked(!row.disabled(), "Switch on"), key(' ')));
+        items.push(press(
+            if row.reserved() {
+                "Stop reserving"
+            } else {
+                "Reserve for me"
+            },
+            key('y'),
+        ));
     }
     // Wake-up runs Claude accounts. Wake up now waits for a login and for
     // the switch (the desktop greys it with why, matrix §5.9); the

@@ -182,6 +182,8 @@ export interface AccountRow {
   /** Flagged default, on or off: a flagged one that is off keeps a dim star. */
   flaggedDefault?: boolean;
   disabled: boolean;
+  /** Kept for the person: automation never picks it. */
+  reserved?: boolean;
   useDefault: boolean;
   /** Credentials found or not; not proof that they still work. */
   login: 'logged_in' | 'needs_login' | 'unknown';
@@ -720,6 +722,7 @@ export const api = {
   /** Wake an account now, whatever its schedule (`kete wake <account> --force`). */
   wakeNow: (account: string) => invoke<WakeNowResult[]>('wake_now', { account }),
   profileSetEnabled: (name: string, enabled: boolean) => invoke<null>('profile_set_enabled', { name, enabled }),
+  profileSetReserved: (name: string, reserved: boolean) => invoke<null>('profile_set_reserved', { name, reserved }),
   /** A new terminal in `worktree` running the account's login command; its id. */
   accountLoginRun: (worktree: string, key: string) => invoke<string>('account_login_run', { worktree, key }),
   /** What "auto" would pick on a harness now (in `project`, an id, when
