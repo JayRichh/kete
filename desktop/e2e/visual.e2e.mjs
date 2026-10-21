@@ -263,6 +263,23 @@ for (const theme of ['light', 'dark']) {
       await d.click('[data-rail="studio"]');
       await inPalette(['autonomy', 'Autonomy']);
 
+      // `?` with nothing selected: the window's own verbs carry the 0.60
+      // ones (Studio board and Gauntlet under View). `?` acts on the
+      // selection, so Renew is the orchestrator header's right-click, below.
+      const verbs = async () => {
+        await d.press('?');
+        const rows = await d.waitFor('the ? menu', () =>
+          d.wd.exec(`const m = [...document.querySelectorAll('[role="menu"]')].filter((x) => x.getBoundingClientRect().height).pop();
+            return m ? [...m.querySelectorAll('[role^="menuitem"]')].map((b) => (b.querySelector('[data-label]') ?? b).innerText.split('\\n')[0]) : null;`),
+        );
+        await d.press(Key.Escape);
+        return rows;
+      };
+      await d.click('[aria-label="Home view"] button', 'Board');
+      await d.wd.exec('document.activeElement?.blur();');
+      const own = await verbs();
+      for (const row of ['Triage note', 'Export usage', 'View']) assert.ok(own.some((r) => r.startsWith(row)), `? with nothing selected offers ${row}: ${own.join(', ')}`);
+
       // Menus by state: Renew on the orchestrator's menu, not a runner's;
       // the repo menu's Studio rows on a studio repo.
       await d.click('[aria-label="Home view"] button', 'Board');
