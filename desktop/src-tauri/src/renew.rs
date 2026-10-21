@@ -80,6 +80,8 @@ mod tests {
         assert_eq!(note_path(&said).unwrap(), abs);
         assert!(note_path("").unwrap_err().contains("Name"));
         assert!(note_path("   ").unwrap_err().contains("Name"));
-        assert!(note_path("notes/handover.md").unwrap_err().contains("absolute"));
+        assert!(note_path("notes/handover.md")
+            .unwrap_err()
+            .contains("absolute"));
     }
 }
