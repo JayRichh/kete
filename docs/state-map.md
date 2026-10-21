@@ -93,7 +93,7 @@ When the whole repo layer is refused, the live layer is still written. The map's
 
 ### How the extractor is run
 
-The extractor is repo code that runs without anyone watching. These rules hold (`crates/nebula-daemon/src/state_map.rs:298` and `:334`).
+The extractor is repo code that runs without anyone watching. These rules hold (`crates/nebula-daemon/src/state_map.rs:330` and `:366`).
 
 | Rule | Value |
 |---|---|
@@ -180,6 +180,19 @@ Copy slice puts the slice for the selected node on the clipboard and says "Copie
 ## In the TUI and the CLI
 
 The TUI overlay and the `kete state` command are wired by the main thread; until then the desktop panel and the file are the surfaces.
+
+The TUI overlay (`crates/nebula-tui/src/state_overlay.rs`) draws the same tree. Roots start open. The footer names the keys.
+
+| Key | What it does |
+|---|---|
+| `j` `k` or `↓` `↑` | Move between rows. |
+| `l` or `→` | Opens the node, or steps into it when it is open. |
+| `h` or `←` | Closes the node, or steps to its parent. |
+| `Enter` or `Space` | Opens or closes the node. |
+| `Home` `End` `PgUp` `PgDn` | Jump. |
+| `c` | Copies the selected node's slice. |
+| `r` | Reads the file again. |
+| `Esc` or `q` | Closes the overlay. |
 
 | Command | Prints |
 |---|---|
