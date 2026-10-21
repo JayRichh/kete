@@ -97,16 +97,14 @@ jobs:
   # (matched to the runner's WebView2), a real daemon in temp dirs and the
   # TUI suite's scripted fake agent as Claude (desktop/e2e).
   e2e:
-    name: kete-desktop end-to-end (windows-latest)
-    runs-on: windows-latest
+    name: kete-desktop end-to-end (self-hosted desktop)
+    # Runs on Jay's always-on PC: a self-hosted runner in a signed-in desktop
+    # session, labelled desktop, so tauri-driver can start the WebView2 window
+    # (the hosted runner cannot: "DevToolsActivePort file doesn't exist").
+    # Gated by the repo variable DESKTOP_E2E so a missing runner skips, not reds.
+    runs-on: [self-hosted, windows, desktop]
     timeout-minutes: 45
-    # Not a gate yet: on the hosted runner tauri-driver cannot start the
-    # WebView2 window ("DevToolsActivePort file doesn't exist"). The suite
-    # passes locally (npm run e2e in desktop/); run it there before a release.
-    # Skipped (not red) until the repo variable DESKTOP_E2E is 'on', which
-    # is meant for a self-hosted Windows runner with a desktop session.
     if: vars.DESKTOP_E2E == 'on'
-    continue-on-error: true
 
     env:
       CARGO_TERM_COLOR: always
