@@ -246,8 +246,6 @@ pub fn profile_set_enabled(name: String, enabled: bool) -> Res<()> {
     crate::profiles::on_layer(|config, _| set_enabled_at(config, &name, enabled))
 }
 
-// registered in main.rs by the main thread (accounts lane PR)
-#[allow(dead_code)]
 #[tauri::command]
 pub fn profile_set_reserved(name: String, reserved: bool) -> Res<()> {
     crate::profiles::on_layer(|config, _| set_reserved_at(config, &name, reserved))

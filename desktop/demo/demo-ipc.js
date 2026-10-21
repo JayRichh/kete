@@ -496,6 +496,11 @@ const handlers = {
     if (r) r.disabled = !enabled;
     return null;
   },
+  profile_set_reserved: ({ name, reserved }) => {
+    const r = accountRows.find((x) => x.name === name);
+    if (r) r.reserved = reserved;
+    return null;
+  },
 };
 
 let cb = 0;

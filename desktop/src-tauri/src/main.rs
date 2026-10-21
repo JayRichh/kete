@@ -1039,6 +1039,7 @@ fn main() {
             profiles::profile_duplicate,
             profiles::profile_rename,
             accounts::profile_set_enabled,
+            accounts::profile_set_reserved,
             accounts::account_login_run,
             settings::settings_schema,
             settings::settings_set,
