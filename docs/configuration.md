@@ -42,9 +42,20 @@ Files beside it in the DATA DIR: `nebula.db` (the SQLITE STORE), `config.local.j
 `ssh_hosts.json` (the SSH HOSTS FILE), `reviewed.json` (REVIEWED MARKS). All but the database are
 convenience stores: missing or malformed reads as empty.
 
+Studio mode (0.60) keeps these in the DATA DIR too, none of them exported or sent over `kete ssh`:
+
+- `studio/queue-state.json`: the inbox notes already announced and when the last idle note went out, so a daemon restart never repeats a note.
+- `studio/refusals.jsonl`: one line for each refused unattended launch and each spawn refused at autonomy A0. It stays under 1 MiB.
+- `sessions/<agent id>/claude-settings.json`: the settings file generated for a role session (its status line, permission rules and guard hook). It is removed with the session.
+- `orchestrator-renewals.jsonl`: one line for each orchestrator renewal.
+- `profiles/.picks.json`: the 10-minute holds `kete profile pick` records.
+- In `nebula.db`: `agents.role_card` (the role card a session launched with) and the `session_spend` table (the usage ledger).
+
+See [Studio mode](studio.md#files-kete-keeps).
+
 ## Every setting
 
-Eighty-four keys. **Overlay** is the SETTINGS OVERLAY tab whose row edits the key; `: ` means the key
+Eighty-six keys. **Overlay** is the SETTINGS OVERLAY tab whose row edits the key; `: ` means the key
 exists only in the file, so it is hand-edit-only. Most rows toggle or cycle on `Enter` / `←` / `→`; a
 *typed* row (`worktree_base_branch`, the Project tab's **Run command**) opens a one-line prompt on
 `Enter` instead, pre-filled with the stored value, and an empty answer puts its default back. The Agents tab groups its rows under **Quick
@@ -78,6 +89,7 @@ behaviors that change how the tree is worked; every switch there is off by defau
 | `hide_done_subagents` | bool | `true` | Sessions | **Finished subagents**: a session's done, failed and closed subagents fold into one `N finished` count under its card on the desktop board, under a folded `N finished` row in the desktop overview's session tree, under its card's prompt in the terminal app, and under a folded node in the SUBAGENTS OVERLAY (`⇧S`). A subagent that stopped while a background task it launched still runs is waiting on that work, not finished, and stays shown as running. Running subagents always show one by one. A click on the count (board) or `→` on the node (overlay) shows the folded ones; the **Fold finished** checkbox above the board and the overview and `d` in the overlay flip this setting for both apps. Nothing is dropped: every subagent stays in the tree until it is cleared or ages out under `subagent_retention`. |
 | `subagent_retention` | string | `"1h"` | Sessions | **Keep finished subagents**: `10m`, `1h`, `4h`, `1d` or `off`. How long the daemon keeps an ended subagent before its 30 s sweep drops it from every client. `off` keeps them until cleared (the board's **Clear finished** / a card's **clear**, `x` / `X` in the overlay) or until the 20 newest ended ones per session push the oldest out. Independently of this, a subagent still marked running 2 h after it started, with no SubagentStop, is closed as `closed`, and restarting a session (restart, account switch, a move into its worktree) drops every row its old process left. A word off the list reads as `1h`. |
 | `usage_statusline` | bool | `true` | Sessions | **Usage status line**: Claude sessions start with `--settings <data dir>/claude-statusline.json`, a statusLine that runs `kete _statusline`. It reports the session's plan usage and context to the daemon (the Accounts list, the quick prompt's bars, a card's `ctx 42%`), then runs your own statusLine if you have one, else prints `ctx 34% · 5h 21% · wk 3%`. A custom statusLine takes the place of Claude's footer hints. Off, Claude's own footer is back and usage comes from the transcript and the on-screen limit notice only. Applies at the next spawn. |
+| `usage_ledger` | bool | `true` | Sessions | **Usage ledger** (Usage group, `on` / `off`): record each session's tokens, estimated cost, tool uses and turns for every local day, for `kete usage` and the studio board. Off keeps the rows already recorded and adds none. The cost is Claude Code's list-price estimate, not a bill. See [Usage ledger](usage-ledger.md). |
 | `theme` | string | `"kete-dark"` | Appearance | The THEME: the ANSI presets `default`, `ocean`, `forest`, `rose`, `amber`, `lavender`, `coral`, `slate`, `sand`, `mono`; the TRUECOLOR PRESETS `kete-dark` and `kete-light` (the Kete Workshop palette: ember accent on soot `#161412` or paper `#F4EFE6`, matching the desktop app and the "Kete Workshop" Windows Terminal scheme `kete setup terminal` adds), and `one-dark` and `one-light` (Atom One Dark and One Light as VS Code paints them, every color exact, the canvas included: the window is painted `#282C34` or `#FAFAFA` under everything, the session pane's plain output in the theme's text color, whatever the terminal's own palette is, and the previews and the DIFF VIEWER color code in the theme's own syntax colors); and two that read the machine. `auto` follows the OS app theme (Windows' *Choose your app mode* (`AppsUseLightTheme` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`), macOS's `defaults read -g AppleInterfaceStyle`, GNOME's `color-scheme`) between `kete-light` and `kete-dark`. `vscode` derives the palette from the theme VS Code is set to: it reads VS Code's user `settings.json` (`%APPDATA%\Code\User`, `~/Library/Application Support/Code/User`, `~/.config/Code/User`; comments and trailing commas allowed) for `workbench.colorTheme` (or, with `window.autoDetectColorScheme` on, `workbench.preferredDarkColorTheme` / `workbench.preferredLightColorTheme` by the OS's side) finds that theme among the installed extensions (`~/.vscode/extensions`, then VS Code's built-in ones), follows its `include`s, and maps its `colors` (the terminal ANSI colors for the statuses, the list and editor keys for the surfaces, `diffEditor.insertedLineBackground` / `removedLineBackground` / `insertedTextBackground` / `removedTextBackground` for the DIFF VIEWER's washes) and `tokenColors` onto kete's roles; anything it does not set, or sets in a way that would break a rule every theme keeps (a merged pull request purple, the two SCOPE COLORS a hue apart), comes from One Dark or One Light. Nothing to read (no VS Code, an unknown theme) is One Dark. Both re-check the machine every 3 seconds while picked and whenever the terminal window takes focus back, so flipping the OS to dark or picking another theme in VS Code repaints kete within moments. A fresh config starts on `kete-dark` on every OS; an existing `theme` is never rewritten. An unknown name falls back to `default`. |
 | `icons` | string | `"auto"` | Appearance | **File icons**: how the FILE ICONS are drawn, the per-file-type icon in Material Icon Theme's colors that leads every row of the TREE BROWSER, the FILE FINDER, the DIFF VIEWER's file list and tree, and the FILE TABS. `nerd` draws the Nerd Font glyph (the terminal's font has to be a Nerd Font, or they come out as boxes); `ascii` a two-letter tag in the icon's color (`rs`, `ts`, `{}`), which any font has; `off` nothing. `auto` is `nerd` when kete runs inside Windows Terminal (`WT_SESSION` set) and the profile it runs in (`WT_PROFILE_ID`, else the default profile) has a font whose name says `Nerd` or ` NF`, and `ascii` anywhere else (the VS Code terminal included) nothing can ask a terminal its font, so pick `nerd` by hand in another terminal with a Nerd Font. `kete setup terminal` installs one (see [Commands](commands.md#windows-terminal)). Anything else reads as `auto`. |
 | `animations` | bool | `true` | Appearance | Master switch for the STATUS SWEEP (running and needs-feedback rows for as long as they last; an unread finish and a just-merged checkout for about five seconds) and the SPLASH's motion. Off trades them for fewer repaints on a constrained machine. |
@@ -91,6 +103,7 @@ behaviors that change how the tree is worked; every switch there is off by defau
 | `kanban` | bool | `false` | Appearance | **Kanban**: lay the LAUNCHER VIEW's grid out as the BOARD, five lanes (Running, Needs you, Review, Ship, Done, the desktop's board's) instead of a band per worktree, whatever `worktree_layout` says; `Shift+K`, or the header's Overview | Board toggle, flips it and writes it here. Independent of `desktop.home`, the desktop window's own home view. See [Keys](keys.md#the-grid). |
 | `kanban_scope` | string | `"project"` | Appearance | **Kanban scope**: whose sessions the board's lanes hold while the SCOPE CHIP names no repo or worktree: `project` (the project on screen) or `all` (every project, each card naming its project). `Tab` on the board flips it and writes it here (a scope narrowed with **Focus here** or the chip's `@` account it clears first); the chip itself is not saved. Anything else reads as `project`. |
 | `orchestrator_view` | string | `"auto"` | General | **Open on the orchestrator**: whether the terminal app starts on the [orchestrator view](orchestrator.md#the-view) (as `F10` opens it) when an orchestrator exists: `auto` only in a terminal narrower than 100 columns, `always`, or `never`. Anything else reads as `auto`, and `auto` is left out of a save. The desktop window has its own **Open on** preference (Desktop tab, `desktop.startup`: `home` or `orchestrator`). |
+| `studio_idle_after` | string | `"45s"` | General | **Idle note after** (Studio group): how long the orchestrator must sit idle (finished, and unchanged) before kete hands it a `[from kete studio]` note naming new inbox notes. `30s`, `45s`, `60s` or `120s`. Only repos with studio mode on get notes; a word off the list reads as `45s`. See [Studio mode](studio.md). |
 | `inline_graphics` | string | `"auto"` | Appearance | INLINE GRAPHICS: how file tabs and the tree browser render local images and Mermaid diagrams. Choices are `auto`, `kitty`, `iterm`, `sixel`, `halfblocks`, and `off`. `off` shows source or a one-line hint instead of pixels. The enabled choices currently use the portable Unicode half-block renderer, so images work in native terminals, `kete browser`/ttyd and over `kete ssh`; the protocol names are accepted as stable config values for native protocol renderers to attach to later. Mermaid rendering also needs `mmdc` (`@mermaid-js/mermaid-cli`) on PATH; without it, kete shows the diagram source plus an install hint. |
 | `expand_all_worktrees` | bool | `false` | Appearance | **Expand all worktrees** (`on` / `off`): lay every band on the GRID out open at once (each worktree's sessions and terminals wrapped into rows under its rule (in the `list` layout, every entry listed)) instead of one band opened at a time with `Tab`. With it on there is no accordion: `Tab` and a second click on a band's rule open and fold nothing (the footer says so), and `j`/`k` walk down every worktree's rows as one column. The band `Tab` last opened is kept and is open again once this is off. |
 | `hide_card_prompt` | bool | `false` | (retired) | Through 0.40, **Card prompt** (Settings → Appearance, `shown` / `hidden`): `hidden` left the last prompt off every session card on the GRID. Every card shows it now, so this build never reads the key and no tab edits it; it is still loaded and written back as stored for an older kete sharing the file ([Compatibility rules](#compatibility-rules)). |
@@ -212,6 +225,34 @@ and NEEDS FEEDBACK agents, agents whose backgrounded tool call is still running 
 `run_in_background` Bash call or Monitor watch, a Codex shell command, the idle clock restarts when
 that job ends), and terminals with a command running, are spared. A reaped session revives on the
 next ATTACH or prewarm, and an agent RESUMES its conversation there.
+
+### The studio map
+
+`studio` in `config.local.json` holds what this machine allows each studio repo. It is a map keyed by the repo's root, with forward slashes:
+
+```json
+{
+  "studio": {
+    "C:/Code/my-game": {
+      "studio_inbox": "notes/inbox",
+      "autonomy": "A1",
+      "queue_exclude": ["2026-10-19-session-ledger", "World and weather"]
+    }
+  }
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `studio_inbox` | The inbox folder, relative to the repo root. |
+| `autonomy` | `A0` (Hold), `A1` (Plan, the default), `A2` (Deliver) or `A3` (Release). See [Studio mode](studio.md#autonomy). |
+| `queue_exclude` | Inbox notes the queue leaves alone: each value is a note's `id` or an `about` value. |
+
+A repo with no entry is not in studio mode. The map is written only through `kete studio` and the apps, which go through the daemon, and the daemon refuses a change from inside an agent session. Edit it by hand and kete reads it, but a session cannot raise a level that way: a repo file never can, and the guard on role sessions reads the live level on every shell command. It is never exported, never sent over `kete ssh`, and never written by an import, and it is not a row in the settings overlay. Writing it touches only the `studio` key; every other key in the file stays as it was.
+
+### Profiles: `reserved`
+
+Each entry of `profiles` in `config.json` takes one more field, `reserved` (bool, default `false`, left out of the file while false). A reserved account stays the default for the launches you start. It is never picked for a launch the orchestrator or a script starts, and `kete profile pick` skips it. Set it with `kete profile reserve <name>` and `kete profile unreserve <name>`, or the Reserve for me switch on the accounts page. An older kete ignores the field. See [Profiles](profiles.md).
 
 ## What the settings overlay owns
 
