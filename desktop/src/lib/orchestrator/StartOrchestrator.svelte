@@ -11,6 +11,7 @@
   import { canProvision, orchestratorOf, RELOAD_HINT } from '../orchestrator';
   import type { HarnessInfo } from '../api';
   import { initialProfile, profileOptions, stillOffered } from '../accounts/pick';
+  import RolePicker from '../roles/RolePicker.svelte';
 
   let { inline = false }: { inline?: boolean } = $props();
 
@@ -21,6 +22,7 @@
   let profile = $state('');
   let project = $state('');
   let name = $state('');
+  let role = $state<string | null>(null);
   let busy = $state(false);
   let box = $state<HTMLElement>();
 
@@ -76,7 +78,10 @@
       effort: efforts.length && effort && effort !== c?.effort ? effort : null,
       project: project || null,
       name: name.trim() || null,
-    });
+      // A role belongs to a repo; its own workspace has none.
+      role: project ? role : null,
+      // shortcut: `role` rides past the spec's type until orch.svelte.ts names it.
+    } as Parameters<typeof startOrchestrator>[0]);
     busy = false;
   }
 
@@ -137,6 +142,7 @@
       <span class={label}>Name</span>
       <input class={field} bind:value={name} placeholder="The daemon names it" aria-label="Name" spellcheck="false" />
     </label>
+    {#if project}<RolePicker repo={project} bind:value={role} />{/if}
   </div>
   {#if !ok}
     <p class="m-0 border border-fail px-3 py-2 text-[13px] text-fail" role="status">
