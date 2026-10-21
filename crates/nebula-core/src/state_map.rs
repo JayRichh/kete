@@ -559,11 +559,12 @@ pub fn slice(map: &StateMap, id: &str, now: i64) -> Option<String> {
 /// `lines` joined, as many as fit [`SLICE_MAX_BYTES`] with room for the
 /// line that says how many were left out.
 fn fit(lines: Vec<String>, id: &str) -> String {
+    let id = cut_bytes(id, 200);
     let tail_room = 120 + id.len();
     let total = lines.len();
     let mut out = String::new();
     for (i, l) in lines.iter().enumerate() {
-        let l = cut(l, SLICE_MAX_BYTES / 2);
+        let l = cut_bytes(l, SLICE_MAX_BYTES / 2);
         let last = i + 1 == total;
         let room = if last {
             SLICE_MAX_BYTES
@@ -591,6 +592,19 @@ fn cut(text: &str, max: usize) -> String {
     let mut out: String = text.chars().take(max.saturating_sub(3)).collect();
     out.push_str("...");
     out
+}
+
+/// `text` cut to at most `max` bytes on a character boundary, ending in
+/// `...` when cut.
+fn cut_bytes(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.into();
+    }
+    let mut end = max.saturating_sub(3);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &text[..end])
 }
 
 fn plural(n: u32, word: &str) -> String {
@@ -909,6 +923,24 @@ mod tests {
         assert!(text.len() <= SLICE_MAX_BYTES, "{} bytes", text.len());
         assert!(text.ends_with("`kete state --slice hub --json` has them all.\n"));
         assert!(text.starts_with("State map of"));
+    }
+
+    #[test]
+    fn a_slice_counts_bytes_not_characters() {
+        let id = "x".repeat(3000);
+        let mut hub = n(&id, NodeKind::System);
+        hub.label = "\u{1F30A}".repeat(1500);
+        let mut nodes = vec![hub];
+        let mut edges = Vec::new();
+        for i in 0..50 {
+            let mut f = n(&format!("f{i}"), NodeKind::File);
+            f.label = "\u{00E9}".repeat(99);
+            nodes.push(f);
+            edges.push(edge(&id, &format!("f{i}"), EdgeKind::Owns));
+        }
+        let text = slice(&map(nodes, edges), &id, 0).unwrap();
+        assert!(text.len() <= SLICE_MAX_BYTES, "{} bytes", text.len());
+        assert!(text.ends_with("has them all.\n"));
     }
 
     #[test]
