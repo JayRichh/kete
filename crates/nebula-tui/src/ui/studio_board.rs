@@ -353,6 +353,20 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
         }
         _ => return,
     };
+    if view.root.is_none() {
+        let rect = empty_state(
+            f,
+            app,
+            area,
+            " Studio board ",
+            "No repo here has studio mode: add .kete/studio.toml to one.",
+        );
+        if let Some(Overlay::StudioBoard(v)) = &mut app.modals.overlay {
+            v.area = rect;
+            v.list_area = Rect::default();
+        }
+        return;
+    }
     let th = app.chrome.theme;
     let rect = centered_rect_pct(area, 96, 90);
     let title = if view.name.is_empty() {
@@ -379,12 +393,6 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     let files = view.files.as_deref();
     let board = crate::studio_board::board_of(app, &view);
     match (files, &board) {
-        _ if view.root.is_none() => say(
-            f,
-            inner,
-            "No repo here has studio mode: add .kete/studio.toml to one.",
-            th,
-        ),
         (None, _) | (_, None) => say(f, body, "Reading the board…", th),
         (Some(d), _) if !d.manifest => say(f, body, "This repo has no .kete/studio.toml.", th),
         (Some(d), _) if d.error.is_some() => say(f, body, d.error.as_deref().unwrap_or(""), th),

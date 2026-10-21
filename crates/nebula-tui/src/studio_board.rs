@@ -773,8 +773,10 @@ mod tests {
         key(&mut app, KeyCode::Char('v'));
         match &app.modals.overlay {
             Some(Overlay::Gauntlet(g)) => {
-                assert_eq!(g.item, Some(("sound".into(), "S01".into())));
                 assert_eq!(g.repo, Some(ProjectId("p1".into())));
+                assert_eq!(g.kind().map(|k| k.kind.as_str()), Some("sound"));
+                assert_eq!(g.selected().map(|v| v.id.as_str()), Some("S01"));
+                assert!(g.detail, "opened on the verdict, its detail is up");
             }
             other => panic!("not the gauntlet: {other:?}"),
         }
