@@ -77,6 +77,7 @@ pub mod review_modal;
 pub mod settings_io;
 pub mod ship_view;
 pub mod splash;
+pub mod state_overlay;
 pub mod studio_board;
 pub mod studio_queue_view;
 pub mod subagents;

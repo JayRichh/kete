@@ -20,6 +20,7 @@ pub mod session_context;
 pub mod session_model;
 pub mod session_title;
 pub mod sibling;
+pub mod state_map;
 pub mod status;
 pub mod store;
 pub mod worktree_hooks;
@@ -402,6 +403,10 @@ async fn serve(opts: DaemonOpts) -> Result<()> {
             }
         });
     }
+
+    // STATE MAP (0.60, K10): each studio repo's `.kete/state-map.json`,
+    // rebuilt on session events and every minute.
+    state_map::spawn(daemon.clone());
 
     // WORKTREE PORTS watcher: which ports each worktree's sessions listen
     // on, re-read every few seconds and broadcast when it changes — a dev

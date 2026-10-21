@@ -1,14 +1,22 @@
 <script lang="ts">
   // STUDIO: the repos that keep a studio (a manifest, or a machine entry),
-  // one at a time. A repo picker, then that repo's queue header and board.
+  // one at a time. A repo picker, then that repo's queue header, board and
+  // state map.
   import { app } from '../store.svelte';
   import { nav } from '../shell/history.svelte';
   import QueueHeader from './queue/QueueHeader.svelte';
   import Board from './board/Board.svelte';
+  import StateMap from '../state/StateMap.svelte';
 
   const repos = $derived(app.studioRepos);
   /** The repo the place names, else the first with studio mode. */
   const picked = $derived(repos.find((r) => r.repo === nav.current.repo)?.repo ?? repos[0]?.repo ?? null);
+
+  /** The repo's main checkout, where the daemon writes the state map. */
+  const mainWorktree = $derived.by(() => {
+    const wts = app.model.worktrees.filter((w) => w.project_id === picked);
+    return (wts.find((w) => w.is_main) ?? wts[0])?.id ?? null;
+  });
 
   function pick(repo: string) {
     nav.replace({ view: 'studio', repo });
@@ -39,5 +47,6 @@
     </header>
     <QueueHeader repo={picked} />
     <Board repo={picked} />
+    <StateMap worktree={mainWorktree} />
   {/if}
 </section>

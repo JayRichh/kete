@@ -433,6 +433,7 @@ pub fn menu_rows(board: &Board, row: &Row, expanded: &BTreeSet<String>) -> (Stri
         }
         _ => String::new(),
     };
+    items.push(key_row("State map", KeyCode::Char('s')));
     items.push(key_row("Reload", KeyCode::Char('r')));
     (title, items)
 }
@@ -497,8 +498,21 @@ pub fn handle_key(app: &mut App, key: KeyEvent, out: &mut Vec<ClientRequest>) {
         KeyCode::Char(c @ ('l' | 'v' | 'n')) => dept_action(app, c, out),
         KeyCode::Char('m') => open_menu(app, None),
         KeyCode::Char('r') => reload(app),
+        KeyCode::Char('s') => open_state_map(app),
         _ => {}
     }
+}
+
+/// `s`: the repo's STATE MAP (K10) over the board; its Esc comes back.
+fn open_state_map(app: &mut App) {
+    let Some(view) = view_mut(app) else {
+        return;
+    };
+    let Some(root) = view.root.clone() else {
+        return;
+    };
+    let (repo, name) = (view.repo.clone(), view.name.clone());
+    crate::state_overlay::open(app, repo, name, root);
 }
 
 /// The pointer over the board: a click on a row is Enter on it, a
@@ -818,21 +832,105 @@ mod tests {
                 "Open lead",
                 "Review last verdict",
                 "Open top note",
+                "State map",
                 "Reload"
             ]
         );
-        assert_eq!(labels(Row::Dept("art-and-3d".into())), ["Expand", "Reload"]);
+        assert_eq!(
+            labels(Row::Dept("art-and-3d".into())),
+            ["Expand", "State map", "Reload"]
+        );
         assert_eq!(
             labels(Row::Session("audio".into(), AgentId("a1".into()))),
             [
                 "Open session",
                 "Review last verdict",
                 "Open top note",
+                "State map",
                 "Reload"
             ],
             "no Open lead on the lead itself"
         );
-        assert_eq!(labels(Row::Need(0)), ["Open session", "Reload"]);
+        assert_eq!(
+            labels(Row::Need(0)),
+            ["Open session", "State map", "Reload"]
+        );
+    }
+
+    #[test]
+    fn s_opens_the_repos_state_map_and_esc_comes_back() {
+        use nebula_core::state_map::{self, Edge, EdgeKind, Layer, Node, NodeKind};
+        let (dir, mut app) = fixture();
+        let node = |id: &str, kind, label: &str| Node {
+            id: id.into(),
+            kind,
+            label: label.into(),
+            status: String::new(),
+            owner: None,
+            changed_at: None,
+            questions: 0,
+            links: Vec::new(),
+        };
+        let owns = |from: &str, to: &str| Edge {
+            from: from.into(),
+            to: to.into(),
+            kind: EdgeKind::Owns,
+        };
+        let layer = Layer {
+            nodes: vec![
+                node("dept:audio", NodeKind::Department, "Audio"),
+                node("SYS-1", NodeKind::System, "Music"),
+                node("D-7", NodeKind::Decision, "Loudness"),
+            ],
+            // The e2e's shape: the decision sits under its system.
+            edges: vec![owns("dept:audio", "SYS-1"), owns("SYS-1", "D-7")],
+        };
+        let map = state_map::merge("demo", 0, layer, Layer::default());
+        state_map::write(dir.path(), &map).unwrap();
+
+        let screen = |app: &mut App| -> String {
+            let mut terminal = ratatui::Terminal::new(TestBackend::new(80, 24)).unwrap();
+            terminal
+                .draw(|f| crate::state_overlay::draw_live(f, app))
+                .unwrap();
+            terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|c| c.symbol())
+                .collect()
+        };
+        let press = |app: &mut App, code| {
+            let ev = KeyEvent {
+                code,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                state: KeyEventState::NONE,
+            };
+            crate::state_overlay::handle_key(app, ev);
+        };
+
+        key(&mut app, KeyCode::Char('s'));
+        assert!(matches!(app.modals.overlay, Some(Overlay::StateMap(_))));
+        // Roots open, the rest closed: the decision waits for its system.
+        let first = screen(&mut app);
+        assert!(first.contains("department dept:audio: Audio"));
+        assert!(first.contains("system SYS-1: Music"));
+        assert!(
+            !first.contains("decision D-7: Loudness"),
+            "D-7 drawn before SYS-1 opened"
+        );
+
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Char('l'));
+        assert!(
+            screen(&mut app).contains("decision D-7: Loudness"),
+            "l opens SYS-1"
+        );
+
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.modals.overlay, Some(Overlay::StudioBoard(_))));
     }
 
     #[test]

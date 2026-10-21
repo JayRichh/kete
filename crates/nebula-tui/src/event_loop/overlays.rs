@@ -53,6 +53,7 @@ pub(crate) fn handle_overlay_key(app: &mut App, key: KeyEvent, out: &mut Vec<Cli
         // 0.60: the board and gauntlet lanes'.
         Overlay::StudioBoard(_) => crate::studio_board::handle_key(app, key, out),
         Overlay::Gauntlet(_) => crate::gauntlet_view::handle_key(app, key, out),
+        Overlay::StateMap(_) => crate::state_overlay::handle_key(app, key),
         Overlay::ProjectPicker(_) => launcher::handle_picker_key(app, key),
         Overlay::Menu(_) => handle_menu_key(app, key, out),
         Overlay::Prompt(_) => handle_prompt_key(app, key, out),
