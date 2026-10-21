@@ -4,10 +4,12 @@ pub mod config;
 pub mod git;
 pub mod handoff;
 pub mod hooks;
+pub mod launch_overlay;
 pub mod lifecycle;
 pub mod metrics;
 pub mod open_files;
 pub mod orchestrator;
+pub mod orchestrator_renew;
 pub mod platform;
 pub mod pr_scope;
 pub mod prompt_history;
@@ -392,6 +394,9 @@ async fn serve(opts: DaemonOpts) -> Result<()> {
                         daemon.tick_status_machines();
                         daemon.reap_prewarmed();
                         daemon.sweep_subagents();
+                        // The studio queue runner (0.60): an idle note to an
+                        // idle orchestrator when a studio inbox has news.
+                        registry::studio_queue::tick(&daemon);
                     }
                 }
             }

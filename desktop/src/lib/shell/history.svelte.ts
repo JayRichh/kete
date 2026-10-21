@@ -4,20 +4,25 @@
 // the view as it was left. View state is also saved to ado.json, after a
 // pause, through whatever saver the app installs.
 
-export type View =
-  | 'overview'
-  | 'board'
-  | 'session'
-  | 'diff'
-  | 'files'
-  | 'tasks'
-  | 'branches'
-  | 'prs'
-  | 'settings'
-  | 'orchestrator'
-  | 'worktrees'
-  | 'accounts'
-  | 'whakaoho';
+/** Every view the window can be on. `place.item` on `gauntlet` is `<kind>/<id>`. */
+export const VIEWS = [
+  'overview',
+  'board',
+  'session',
+  'diff',
+  'files',
+  'tasks',
+  'branches',
+  'prs',
+  'settings',
+  'orchestrator',
+  'worktrees',
+  'accounts',
+  'whakaoho',
+  'studio',
+  'gauntlet',
+] as const;
+export type View = (typeof VIEWS)[number];
 export type Place = { view: View; repo?: string; item?: string };
 export type UiState = Record<string, unknown>;
 export type Saver = (view: string, repo: string, state: UiState) => void;

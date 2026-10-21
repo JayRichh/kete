@@ -303,6 +303,8 @@ pub(crate) fn menu_action(app: &App, action: Action, t: &Target) -> Option<MenuA
                     MenuAction::MakeOrchestrator(id)
                 }),
                 Action::PinOrchestrator => None,
+                // 0.60: only on the orchestrator itself.
+                Action::RenewOrchestrator => (local && a.role.is_orchestrator()).then(verb),
                 Action::Archive => Some(MenuAction::ArchiveAgent(id)),
                 Action::Unarchive => None,
                 Action::Delete => Some(MenuAction::DeleteAgent(id)),
@@ -480,6 +482,10 @@ pub(crate) fn menu_action(app: &App, action: Action, t: &Target) -> Option<MenuA
                 _ if editor => editor_act(app, action, t),
                 Action::MarkSeen => in_project(app, id, unread).then(verb),
                 Action::ArchiveDone => in_project(app, id, done).then(verb),
+                // 0.60: a studio repo's pages and autonomy, only on one.
+                Action::StudioBoard | Action::GauntletView | Action::StudioAutonomy => {
+                    is_studio_repo(app, id).then(verb)
+                }
                 _ => keyed(app),
             }
         }
@@ -519,10 +525,37 @@ pub(crate) fn menu_action(app: &App, action: Action, t: &Target) -> Option<MenuA
             Action::ToggleArchived => Some(MenuAction::ToggleArchived),
             Action::AddProject => Some(MenuAction::AddProject),
             Action::WakeSchedule => Some(verb()),
+            // 0.60: the studio pages once any repo is a studio repo, the
+            // triage line while an orchestrator or a triage desk runs, the
+            // usage export always.
+            Action::StudioBoard | Action::GauntletView => any_studio_repo(app).then(verb),
+            Action::TriageNote => triage_available(app).then(verb),
+            Action::UsageCsv => Some(verb()),
             // The app's own: its key, on nothing in particular.
             _ => Some(MenuAction::Run(action)),
         },
     }
+}
+
+/// Is `id` a studio repo: a manifest in its root, or a `studio` entry
+/// (`ipc_studio::StudioRepos`, read off the key path)?
+fn is_studio_repo(app: &App, id: &nebula_core::ProjectId) -> bool {
+    app.studio_repos.get(&app.tree.projects).contains(id)
+}
+
+/// Is any project a studio repo?
+fn any_studio_repo(app: &App) -> bool {
+    !app.studio_repos.get(&app.tree.projects).is_empty()
+}
+
+/// Is there someone for a triage note to go to: a live orchestrator, or a
+/// session holding the `triage` role card?
+pub(crate) fn triage_available(app: &App) -> bool {
+    app.tree
+        .agents
+        .iter()
+        .any(|a| !a.archived && a.role.is_orchestrator())
+        || app.session_roles.values().any(|r| r.card == "triage")
 }
 
 /// FOCUS HERE on a repo or a checkout, or — on the one the scope already
@@ -1424,6 +1457,29 @@ pub(crate) fn run_on_selection(app: &mut App, action: Action, out: &mut Vec<Clie
     }
 }
 
+/// A studio verb on a key (0.60): on the selection, its checkout or its
+/// project where it means something there, else on the app itself.
+pub(crate) fn run_studio_verb(app: &mut App, action: Action, out: &mut Vec<ClientRequest>) {
+    let mut targets = Vec::new();
+    if let Some(sel) = selection(app) {
+        targets.push(sel.clone());
+        if let Some(p) = project_of(app, &sel).filter(|_| !matches!(sel, Target::Repo(_))) {
+            targets.push(Target::Repo(p));
+        }
+    }
+    targets.push(Target::Global);
+    let found = targets
+        .iter()
+        .find_map(|t| match menu_action(app, action, t) {
+            Some(MenuAction::Run(_)) | None => None,
+            Some(m) => Some(m),
+        });
+    match found {
+        Some(m) => run_menu_action(app, m, out),
+        None => flash_nothing(app, action),
+    }
+}
+
 fn flash_nothing(app: &mut App, action: Action) {
     let label = crate::keymap::spec_of(action).map_or("that", |s| s.label);
     app.chrome.flash = Some(format!("{label}: not for what is under the cursor"));
@@ -1476,7 +1532,22 @@ pub(crate) fn run_verb(app: &mut App, action: Action, t: &Target, out: &mut Vec<
             Target::Account(key) => super::accounts::open_wake_tab_on(app, key),
             _ => super::accounts::open_wake_tab(app),
         },
+        // 0.60: each studio verb to its lane's module.
+        Action::StudioBoard => crate::studio_board::open(app, repo_of(t)),
+        Action::GauntletView => crate::gauntlet_view::open(app, repo_of(t)),
+        Action::TriageNote => crate::triage_strip::open(app),
+        Action::StudioAutonomy => crate::studio_queue_view::open_autonomy(app, repo_of(t)),
+        Action::RenewOrchestrator => crate::renew_view::open(app),
+        Action::UsageCsv => crate::ledger_export::run(app),
         _ => flash_nothing(app, action),
+    }
+}
+
+/// The repo a studio verb's row was on; None from the background.
+fn repo_of(t: &Target) -> Option<nebula_core::ProjectId> {
+    match t {
+        Target::Repo(id) => Some(id.clone()),
+        _ => None,
     }
 }
 

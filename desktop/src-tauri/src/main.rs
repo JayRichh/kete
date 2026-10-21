@@ -15,9 +15,11 @@ mod daemon;
 mod editors;
 mod files;
 mod fonts;
+mod gauntlet;
 mod git;
 mod launch;
 mod learn;
+mod ledger;
 mod look;
 mod orchestrator;
 mod order;
@@ -27,12 +29,20 @@ mod profiles;
 mod projects;
 #[cfg(windows)]
 mod quiet;
+mod renew;
+mod roles;
 mod sessions;
 mod settings;
 mod settings_io;
 mod ship;
+// 0.60: studio mode. `studio_common` is the foundation's; the rest are
+// one module per lane (placeholders from the foundation).
+mod studio_board;
+mod studio_common;
+mod studio_queue;
 mod subagents;
 mod tree;
+mod triage;
 mod update;
 mod wacup;
 mod wake;
@@ -193,6 +203,7 @@ async fn spawn_agent_with(
                 issue_url: None,
                 role: Default::default(),
                 profile: spec.profile.filter(|p| !p.is_empty()),
+                role_card: None,
             },
         )
         .await
@@ -920,6 +931,12 @@ fn main() {
             client.on_review(Box::new(move |r| {
                 let _ = reviews.emit("kete://review", r);
             }));
+            // 0.60: an orchestrator renewal (`Scheduled`, then `Done` or
+            // `Failed`), for the renew lane's notice.
+            let renewals = handle.clone();
+            client.on_renewal(Box::new(move |r| {
+                let _ = renewals.emit("orchestrator-renewal", r);
+            }));
             // Done / needs-you alerts and `kete open`.
             client.on_notice(Box::new(on_notice(handle.clone(), Arc::downgrade(&client))));
             tauri::async_runtime::spawn(update::run(handle.clone()));
@@ -1003,6 +1020,20 @@ fn main() {
             wake::wake_overview,
             wake::wake_now,
             wake::wake_set,
+            // 0.60: studio mode (studio_common.rs; the rest each lane's)
+            studio_common::studio_repos,
+            studio_queue::studio_queue,
+            studio_queue::studio_set,
+            studio_board::studio_board,
+            gauntlet::gauntlet_list,
+            gauntlet::gauntlet_evidence,
+            gauntlet::gauntlet_open_studio,
+            triage::triage_submit,
+            triage::triage_tail,
+            roles::roles_list,
+            renew::orchestrator_renew,
+            ledger::usage_ledger,
+            ledger::usage_export,
             accounts::account_switch,
             accounts::project_set_account,
             profiles::profile_duplicate,

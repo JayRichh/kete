@@ -12,13 +12,46 @@
 //! `cargo test -p nebula --test e2e_windows [-- <name filter>]`
 
 #[cfg(windows)]
+mod accounts;
+#[cfg(windows)]
 mod agent;
 #[cfg(windows)]
 mod flows;
 #[cfg(windows)]
 mod harness;
 #[cfg(windows)]
+mod ledger;
+#[cfg(windows)]
+mod queue;
+#[cfg(windows)]
+mod renew;
+#[cfg(windows)]
+mod roles;
+#[cfg(windows)]
+mod triage;
+#[cfg(windows)]
 mod upgrade;
+
+/// Every flow in the suite: the main thread's, then each 0.60 lane's
+/// (`accounts_*`, `queue_*`, `roles_*`, `renew_*`, `ledger_*`,
+/// `triage_*`), in that order. The filter, `--exact` and `--list` see
+/// all of them.
+#[cfg(windows)]
+fn all_tests() -> Vec<(&'static str, fn())> {
+    [
+        flows::TESTS,
+        accounts::TESTS,
+        queue::TESTS,
+        roles::TESTS,
+        renew::TESTS,
+        ledger::TESTS,
+        triage::TESTS,
+    ]
+    .into_iter()
+    .flatten()
+    .copied()
+    .collect()
+}
 
 #[cfg(not(windows))]
 fn main() {}
@@ -46,8 +79,9 @@ const TEST_LIMIT: std::time::Duration = std::time::Duration::from_secs(180);
 #[cfg(windows)]
 fn run_suite() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    let tests = all_tests();
     if args.iter().any(|a| a == "--list") {
-        for (name, _) in flows::TESTS {
+        for (name, _) in &tests {
             println!("{name}: test");
         }
         return;
@@ -76,7 +110,7 @@ fn run_suite() {
     }
     let filter = args.iter().find(|a| !a.starts_with('-')).cloned();
     let exact = args.iter().any(|a| a == "--exact");
-    let chosen: Vec<_> = flows::TESTS
+    let chosen: Vec<_> = tests
         .iter()
         .filter(|(name, _)| match &filter {
             Some(f) if exact => name == f,

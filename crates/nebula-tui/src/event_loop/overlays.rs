@@ -50,6 +50,9 @@ pub(crate) fn handle_overlay_key(app: &mut App, key: KeyEvent, out: &mut Vec<Cli
         Overlay::Ado(_) => ado::handle_key(app, key, out),
         Overlay::Ship(_) => ship::handle_key(app, key, out),
         Overlay::CritterLog(_) => crate::critters::log_key(app, &key),
+        // 0.60: the board and gauntlet lanes'.
+        Overlay::StudioBoard(_) => crate::studio_board::handle_key(app, key, out),
+        Overlay::Gauntlet(_) => crate::gauntlet_view::handle_key(app, key, out),
         Overlay::ProjectPicker(_) => launcher::handle_picker_key(app, key),
         Overlay::Menu(_) => handle_menu_key(app, key, out),
         Overlay::Prompt(_) => handle_prompt_key(app, key, out),

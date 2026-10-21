@@ -78,8 +78,10 @@
   "skip_session_naming": false,
   "source_control_graph": false,
   "ssh_sync_config": true,
+  "studio_idle_after": "45s",
   "subagent_retention": "1h",
   "theme": "kete-dark",
+  "usage_ledger": true,
   "usage_statusline": true,
   "worktree_base_branch": "",
   "worktree_layout": "cards"

@@ -51,8 +51,34 @@ pub(crate) fn handle_server_event(app: &mut App, event: ServerEvent, out: &mut V
                 app.chrome.dirty = true;
             }
         }
+        // 0.60 (a 66+ daemon): the role sessions, the whole list each time.
+        ServerEvent::SessionRoles { roles } => on_session_roles(app, roles),
+        // Today's spend, one session at a time.
+        ServerEvent::SessionSpend { rows } => on_session_spend(app, rows),
+        ServerEvent::OrchestratorRenewal {
+            req_id,
+            old,
+            new,
+            state,
+        } => crate::renew_view::on_renewal(app, req_id, old, new, state),
         _ => {}
     }
+}
+
+/// `ServerEvent::SessionRoles`: the map is replaced whole.
+pub(crate) fn on_session_roles(app: &mut App, roles: Vec<nebula_core::studio::wire::SessionRole>) {
+    app.session_roles = roles.into_iter().map(|r| (r.agent.clone(), r)).collect();
+    app.chrome.dirty = true;
+}
+
+/// `ServerEvent::SessionSpend`: each row upserted by agent.
+///
+/// Both 0.60 events land through [`handle_server_event`] like the rest.
+pub(crate) fn on_session_spend(app: &mut App, rows: Vec<nebula_core::studio::wire::SpendRow>) {
+    for row in rows {
+        app.session_spend.insert(row.agent.clone(), row);
+    }
+    app.chrome.dirty = true;
 }
 
 fn handle_snapshot_event(app: &mut App, event: ServerEvent, out: &mut Vec<ClientRequest>) {
@@ -766,5 +792,83 @@ fn handle_error_event(app: &mut App, event: ServerEvent, out: &mut Vec<ClientReq
             app.chrome.dirty = true;
         }
         _ => unreachable!("server event dispatcher passed the wrong event variant"),
+    }
+}
+
+#[cfg(test)]
+mod studio_event_tests {
+    use super::*;
+    use nebula_core::studio::wire::{SessionRole, SpendRow};
+    use nebula_core::AgentId;
+
+    fn role(agent: &str, card: &str) -> SessionRole {
+        SessionRole {
+            agent: AgentId(agent.into()),
+            card: card.into(),
+            label: card.into(),
+            tier: 3,
+            department: None,
+            permission: "allowlist".into(),
+            context_budget: None,
+        }
+    }
+
+    fn spend(agent: &str, turns: u32) -> SpendRow {
+        SpendRow {
+            agent: AgentId(agent.into()),
+            day: "2026-10-21".into(),
+            input_tokens: 10,
+            output_tokens: 1,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            cost_usd: 0.5,
+            tool_uses: 2,
+            turns,
+        }
+    }
+
+    /// A 66 daemon's `SessionRoles` replaces the map whole, and its
+    /// `SessionSpend` rows are upserted one by one.
+    #[test]
+    fn a_66_daemons_roles_and_spend_land_in_the_maps() {
+        let mut app = App::new();
+        let mut out = Vec::new();
+        handle_server_event(
+            &mut app,
+            ServerEvent::SessionRoles {
+                roles: vec![role("a", "runner"), role("b", "triage")],
+            },
+            &mut out,
+        );
+        assert_eq!(app.session_roles.len(), 2);
+        assert_eq!(app.session_roles[&AgentId("b".into())].card, "triage");
+        handle_server_event(
+            &mut app,
+            ServerEvent::SessionRoles {
+                roles: vec![role("a", "lead")],
+            },
+            &mut out,
+        );
+        assert_eq!(app.session_roles.len(), 1, "replaced whole");
+        assert_eq!(app.session_roles[&AgentId("a".into())].card, "lead");
+
+        handle_server_event(
+            &mut app,
+            ServerEvent::SessionSpend {
+                rows: vec![spend("a", 1), spend("b", 4)],
+            },
+            &mut out,
+        );
+        handle_server_event(
+            &mut app,
+            ServerEvent::SessionSpend {
+                rows: vec![spend("a", 2)],
+            },
+            &mut out,
+        );
+        assert_eq!(app.session_spend.len(), 2, "upserted, not replaced");
+        assert_eq!(app.session_spend[&AgentId("a".into())].turns, 2);
+        assert_eq!(app.session_spend[&AgentId("b".into())].turns, 4);
+        assert!(out.is_empty());
     }
 }

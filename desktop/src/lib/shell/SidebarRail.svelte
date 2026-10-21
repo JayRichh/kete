@@ -1,7 +1,8 @@
 <script lang="ts">
   // The sidebar folded: a 44 px column of section icons, each with a
   // tooltip. A click opens the sidebar again and goes to the section.
-  import { app, openSettings, setHome } from '../store.svelte';
+  import { app, openGauntlet, openSettings, openStudio, setHome } from '../store.svelte';
+  import { showStudioRail } from '../studio/types';
   import { nav } from './history.svelte';
   import { canProvision, descendantCounts, orchestratorOf, orchestratorTree } from '../orchestrator';
   import { askStartOrchestrator, openOrchestrator } from '../orch.svelte';
@@ -13,6 +14,7 @@
   const orch = $derived(orchestratorOf(app.model));
   const needs = $derived(descendantCounts(orchestratorTree(app.model)).needs ?? 0);
   const view = $derived(nav.current.view);
+  const studio = $derived(showStudioRail(app.studioRepos));
 
   /** Open the sidebar again, then go. */
   function go(then: () => void) {
@@ -85,6 +87,30 @@
         <path d="M3.5 10.5h9l-1.4 4H4.9zM4.2 12.5h7.6" fill="none" stroke="currentColor" stroke-width="1.2" />
       </svg>
     </button>
+    {#if studio}
+      <button
+        class="{tile} {on(view === 'studio')}"
+        data-rail="studio"
+        title="Studio: the board and the idle-note queue of the repos with studio mode"
+        aria-label="Studio"
+        onclick={() => go(() => openStudio(nav.current.repo))}
+      >
+        <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M2.5 2.5h3.2v11H2.5zM6.4 2.5h3.2v7H6.4zM10.3 2.5h3.2v9h-3.2z" fill="none" stroke="currentColor" stroke-width="1.3" />
+        </svg>
+      </button>
+      <button
+        class="{tile} {on(view === 'gauntlet')}"
+        data-rail="gauntlet"
+        title="Gauntlet: the sign-offs and verdicts of the repos with studio mode"
+        aria-label="Gauntlet"
+        onclick={() => go(() => openGauntlet(nav.current.repo))}
+      >
+        <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M2.5 8.5l3.2 3.2 7.8-7.8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" />
+        </svg>
+      </button>
+    {/if}
   </nav>
   <div class="flex flex-none flex-col gap-1 border-t border-rule py-2">
     <button

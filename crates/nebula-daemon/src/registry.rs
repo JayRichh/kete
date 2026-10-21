@@ -4,6 +4,7 @@
 use crate::claude_bg;
 use crate::git;
 use crate::hooks::{self, HookEnv};
+use crate::launch_overlay::LaunchOverlay;
 use crate::pty::{PtyEvent, PtySession, SpawnSpec, DEFAULT_COLS, DEFAULT_ROWS};
 use crate::status::{AgentStatusMachine, Effect, HookEvent};
 use crate::store::Store;
@@ -113,6 +114,14 @@ pub(crate) struct CreateAgentSpec {
     /// The session that asked for this one (`kete spawn`, an orchestrator
     /// spawn); persisted as the row's `parent`. None for a person's launch.
     pub parent: Option<AgentId>,
+    /// The ROLE CARD the session launches with (`.kete/roles.toml`, by id);
+    /// persisted with the row (migration 36), so every spawn and resume
+    /// re-applies it through [`Daemon::launch_overlay`].
+    pub role_card: Option<String>,
+    /// Who starts it: `Automation` for an orchestrator spawn and a
+    /// renewal, `Person` for the rest. A launch with a role card counts as
+    /// `Automation` whatever this says.
+    pub launcher: nebula_core::accounts::Launcher,
 }
 
 /// A pre-spawned agent CLI waiting to be adopted by the next CreateAgent for
@@ -263,20 +272,43 @@ pub struct Daemon {
     /// WHAKAOHO's hidden sessions in flight (`wake.rs`), by agent id;
     /// taken alone. Never in `sessions`.
     wakes: Mutex<HashMap<AgentId, wake::WakeSession>>,
+    /// When a client last typed into each agent session (`Input`), taken
+    /// alone: the studio queue runner holds its idle note while a person
+    /// is at the keyboard (`sessions.rs`, `last_input_at`).
+    last_input: Mutex<HashMap<AgentId, Instant>>,
+    // 0.60: one book per lane-owned daemon feature, each defined (and
+    // filled) in that lane's own module, taken alone. The foundation
+    // declares them here so no lane needs this file.
+    /// The studio queue runner's state (`studio_queue.rs`, queue lane).
+    #[allow(dead_code)]
+    studio_queue: Mutex<studio_queue::QueueBook>,
+    /// Parsed role cards per project (`roles.rs`, roles lane).
+    #[allow(dead_code)]
+    roles: Mutex<roles::RolesBook>,
+    /// Per-session ledger state (`ledger.rs`, ledger lane).
+    #[allow(dead_code)]
+    ledger: Mutex<ledger::LedgerBook>,
+    /// Renewals waiting on a turn end (`orchestrator_renew.rs`, renew lane).
+    #[allow(dead_code)]
+    pub(crate) renewals: Mutex<crate::orchestrator_renew::RenewBook>,
 }
 
 mod agent_repos;
 mod exit;
+mod ledger;
 mod lifecycle;
 mod order;
 mod ports;
 mod prewarm;
 mod projects;
+mod roles;
 mod sessions;
 mod snapshots;
 mod spawn;
 mod status;
 mod stops;
+mod studio_policy;
+pub mod studio_queue;
 mod subagents;
 mod terminals;
 mod usage;
@@ -316,6 +348,11 @@ impl Daemon {
             snapshots: snapshots::Snapshotter::default(),
             stops: Mutex::new(stops::StopBook::default()),
             wakes: Mutex::new(HashMap::new()),
+            last_input: Mutex::new(HashMap::new()),
+            studio_queue: Mutex::new(studio_queue::QueueBook::default()),
+            roles: Mutex::new(roles::RolesBook::default()),
+            ledger: Mutex::new(ledger::LedgerBook::default()),
+            renewals: Mutex::new(crate::orchestrator_renew::RenewBook::default()),
         })
     }
 
@@ -429,6 +466,7 @@ fn agent_spawn_command(
         None,
         None,
         true,
+        &LaunchOverlay::default(),
     )
 }
 
@@ -504,9 +542,10 @@ fn relocation_prompt(relocate: bool, worktree: &Worktree) -> Option<String> {
 #[cfg(test)]
 const TEST_CWD: &str = "/nebula-test/p-feat";
 
-// Nine positional knobs are two over clippy's line; the callers are the
+// Ten positional knobs are three over clippy's line; the callers are the
 // two thin wrappers above and the tests, so a builder would only add
-// ceremony. Every behavior comes off `harness` — the registry descriptor
+// ceremony. `overlay` is a role card's additions (`launch_overlay`): the
+// default adds nothing, and the argv is 0.59's byte for byte. Every behavior comes off `harness` — the registry descriptor
 // the launch resolved — never off the kind: a repointed program, a renamed
 // flag or a whole new CLI flows through here with no new arms.
 #[allow(clippy::too_many_arguments)]
@@ -520,6 +559,7 @@ fn agent_spawn_command_with(
     initial_prompt: Option<&str>,
     additional_system_prompt: Option<&str>,
     guidance: bool,
+    overlay: &LaunchOverlay,
 ) -> (String, Vec<String>, bool) {
     if let Some(cmd) = cmd_override {
         let mut parts = cmd.split_whitespace().map(String::from).collect::<Vec<_>>();
@@ -549,6 +589,10 @@ fn agent_spawn_command_with(
     if let Some(flag) = harness.permissions_flag.as_deref() {
         args.push(flag.to_string());
     }
+    // A role card's model and effort fill in only where the launch named
+    // none: an explicit `--model` on the launch wins.
+    let model = model.or(overlay.model.as_deref());
+    let effort = effort.or(overlay.effort.as_deref());
     // The model rides its flag — composed with the effort into one id for
     // Cursor's family-suffix shape (`claude-opus-5` + `high`: the TUI only
     // sends an effort the family ships; an effort without a family has
@@ -579,7 +623,18 @@ fn agent_spawn_command_with(
     // where prepend is, and is dropped where neither is.
     let mut initial_prompt = initial_prompt.map(str::to_string);
     if let Some(flag) = harness.system.append_flag.as_deref() {
-        push_system_prompt(&mut args, flag, guidance, additional_system_prompt);
+        // A role card's flags are Claude's, and only a harness with a
+        // system-prompt flag takes them: `--tools` is variadic, so the
+        // system prompt must follow it before any trailing task.
+        args.extend(overlay.middle_flags());
+        push_system_prompt(
+            &mut args,
+            flag,
+            guidance,
+            overlay.append_prompt.as_deref(),
+            additional_system_prompt,
+            overlay.tools.is_some(),
+        );
     } else if harness.system.prepend_to_first_prompt {
         let mut first = Vec::new();
         if guidance {
@@ -587,6 +642,9 @@ fn agent_spawn_command_with(
             first.push(crate::sibling::CLAUDE_SPAWN_GUIDANCE.to_string());
             first.push(crate::sibling::CLAUDE_SESSION_CONTEXT_GUIDANCE.to_string());
             first.push(crate::open_files::CLAUDE_OPEN_GUIDANCE.to_string());
+        }
+        if let Some(prompt) = overlay.append_prompt.as_deref() {
+            first.push(prompt.to_string());
         }
         if let Some(prompt) = additional_system_prompt {
             first.push(prompt.to_string());
@@ -637,12 +695,17 @@ pub(super) fn agent_launch_prompts(
 }
 
 /// One system-prompt flag carrying nebula's guidance (worktree, spawn,
-/// then open) and whatever else the launch adds (the PR scope).
+/// then open), a role card's prompt, and whatever else the launch adds
+/// (the orchestrator's guidance, the PR or issue scope), in that fixed
+/// order so the cached prefix stays stable. `always` emits the flag even
+/// when it carries nothing: it ends a variadic `--tools` list.
 fn push_system_prompt(
     args: &mut Vec<String>,
     flag: &str,
     guidance: bool,
+    role: Option<&str>,
     additional: Option<&str>,
+    always: bool,
 ) {
     let mut system_prompt = Vec::new();
     if guidance {
@@ -651,10 +714,13 @@ fn push_system_prompt(
         system_prompt.push(crate::sibling::CLAUDE_SESSION_CONTEXT_GUIDANCE);
         system_prompt.push(crate::open_files::CLAUDE_OPEN_GUIDANCE);
     }
+    if let Some(prompt) = role.filter(|p| !p.is_empty()) {
+        system_prompt.push(prompt);
+    }
     if let Some(prompt) = additional {
         system_prompt.push(prompt);
     }
-    if !system_prompt.is_empty() {
+    if always || !system_prompt.is_empty() {
         args.extend([flag.to_string(), system_prompt.join("\n\n")]);
     }
 }
@@ -752,6 +818,7 @@ fn claude_cloud_spawn_command(
         None,
         None,
         false,
+        &LaunchOverlay::default(),
     );
     if cmd_override.is_none() {
         args.insert(0, format!("--cloud={task}"));
@@ -1061,6 +1128,7 @@ fn resolve_profile_name(
     harness: &nebula_core::harness::HarnessDescriptor,
     asked: Option<&str>,
     repo: Option<&Path>,
+    launcher: nebula_core::accounts::Launcher,
 ) -> Result<Option<String>> {
     let config = crate::config::Config::load();
     let project_default = repo.and_then(|repo| config.project_default_profile(repo, &harness.id));
@@ -1069,6 +1137,7 @@ fn resolve_profile_name(
         &harness.id,
         asked,
         project_default,
+        launcher,
     )
     .map_err(anyhow::Error::msg)?;
     tracing::debug!(choice = %pick.describe(&harness.id), "account spread");
@@ -1089,7 +1158,13 @@ pub(crate) fn check_launch_profile(
         return Ok(());
     };
     let harness = resolve_harness(kind, custom_harness)?;
-    resolve_profile_name(&harness, Some(profile), None).map(|_| ())
+    resolve_profile_name(
+        &harness,
+        Some(profile),
+        None,
+        nebula_core::accounts::Launcher::Person,
+    )
+    .map(|_| ())
 }
 
 /// The PROFILE `agent` runs under, read fresh from the config: None for a
@@ -1194,6 +1269,363 @@ pub(crate) mod tests {
         );
         // Nothing readable: no verdict, so the resume is still tried.
         assert_eq!(claude_transcript_exists(&[missing], "sid-1"), None);
+    }
+
+    /// Kete's four guidance blocks, joined as the system-prompt flag
+    /// carries them, written out here rather than through [`guided`] so the
+    /// pin below does not lean on the code it pins.
+    fn guidance_0_59() -> String {
+        [
+            CLAUDE_WORKTREE_GUIDANCE,
+            crate::sibling::CLAUDE_SPAWN_GUIDANCE,
+            crate::sibling::CLAUDE_SESSION_CONTEXT_GUIDANCE,
+            crate::open_files::CLAUDE_OPEN_GUIDANCE,
+        ]
+        .join("\n\n")
+    }
+
+    /// The 0.59 argv for the four launches 0.60 must leave alone, byte for
+    /// byte: a plain Claude session, a resume with model, effort and a
+    /// trailing prompt, a PR launch, and an orchestrator start. Pinned
+    /// before the launch overlay existed.
+    #[test]
+    fn the_0_59_claude_argv_is_pinned() {
+        let all = test_registry();
+        let claude = test_harness(&all, AgentKind::Claude);
+        let cwd = Some(Path::new(TEST_CWD));
+        let s = |v: &[&str]| v.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+
+        let plain = agent_spawn_command_with(
+            &claude,
+            None,
+            cwd,
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+            &LaunchOverlay::default(),
+        );
+        assert_eq!(
+            plain,
+            (
+                "claude".to_string(),
+                vec!["--append-system-prompt".to_string(), guidance_0_59()],
+                false
+            )
+        );
+
+        let resume = agent_spawn_command_with(
+            &claude,
+            Some("sid-1"),
+            cwd,
+            Some("opus"),
+            Some("high"),
+            None,
+            Some("carry on"),
+            None,
+            true,
+            &LaunchOverlay::default(),
+        );
+        let mut want = s(&["--resume", "sid-1", "--model", "opus", "--effort", "high"]);
+        want.extend(["--append-system-prompt".to_string(), guidance_0_59()]);
+        want.push("carry on".into());
+        assert_eq!(resume, ("claude".to_string(), want, true));
+
+        let pr = agent_spawn_command_with(
+            &claude,
+            None,
+            cwd,
+            None,
+            None,
+            None,
+            None,
+            Some("PR RULE"),
+            true,
+            &LaunchOverlay::default(),
+        );
+        assert_eq!(
+            pr.1,
+            vec![
+                "--append-system-prompt".to_string(),
+                format!("{}\n\nPR RULE", guidance_0_59())
+            ]
+        );
+
+        let orchestrator = Agent {
+            parent: None,
+            profile: None,
+            id: AgentId("o".into()),
+            worktree_id: WorktreeId("w".into()),
+            name: "orchestrator".into(),
+            status: AgentStatus::Fresh,
+            archived: false,
+            archived_at: 0,
+            unseen: false,
+            kind: AgentKind::Claude,
+            custom_harness: None,
+            model: None,
+            effort: None,
+            session_id: None,
+            cloud_session_id: None,
+            sort_order: 0,
+            status_changed_at: 0,
+            alive: false,
+            issue_url: None,
+            role: nebula_core::AgentRole::Orchestrator,
+            recent_prompts: Vec::new(),
+        };
+        let prompts = agent_launch_prompts(&orchestrator, &claude, None, false, None);
+        let start = agent_spawn_command_with(
+            &claude,
+            None,
+            cwd,
+            None,
+            None,
+            None,
+            prompts.initial.as_deref(),
+            prompts.system.as_deref(),
+            true,
+            &LaunchOverlay::default(),
+        );
+        assert_eq!(
+            start.1,
+            vec![
+                "--append-system-prompt".to_string(),
+                format!(
+                    "{}\n\n{}",
+                    guidance_0_59(),
+                    crate::orchestrator::CLAUDE_ORCHESTRATOR_GUIDANCE
+                )
+            ]
+        );
+    }
+
+    /// A full overlay adds its flags in the documented order: resume,
+    /// model and effort (the overlay's, since the launch named none),
+    /// permission mode, strict MCP, the tool list, then the system prompt
+    /// with the role's prompt between Kete's guidance and the launch rule,
+    /// then the trailing task. The tool list is variadic, so the element
+    /// after it is the system-prompt flag and the task is the last element.
+    #[test]
+    fn a_full_overlay_adds_its_flags_in_the_documented_order() {
+        let all = test_registry();
+        let claude = test_harness(&all, AgentKind::Claude);
+        let overlay = LaunchOverlay {
+            append_prompt: Some("ROLE PROMPT".into()),
+            tools: Some(vec!["Read".into(), "Write".into(), "Bash".into()]),
+            permission_mode: Some("dontAsk".into()),
+            settings_path: Some(PathBuf::from("/d/sessions/a/claude-settings.json")),
+            strict_mcp: true,
+            model: Some("haiku".into()),
+            effort: Some("low".into()),
+        };
+        let (_, args, resumed) = agent_spawn_command_with(
+            &claude,
+            Some("sid-1"),
+            Some(Path::new(TEST_CWD)),
+            None,
+            None,
+            None,
+            Some("run the checks"),
+            Some("PR RULE"),
+            true,
+            &overlay,
+        );
+        assert!(resumed);
+        let mut want: Vec<String> = [
+            "--resume",
+            "sid-1",
+            "--model",
+            "haiku",
+            "--effort",
+            "low",
+            "--permission-mode",
+            "dontAsk",
+            "--strict-mcp-config",
+            "--tools",
+            "Read,Write,Bash",
+            "--append-system-prompt",
+        ]
+        .iter()
+        .map(|a| a.to_string())
+        .collect();
+        want.push(format!("{}\n\nROLE PROMPT\n\nPR RULE", guidance_0_59()));
+        want.push("run the checks".into());
+        assert_eq!(args, want);
+        let tools = args.iter().position(|a| a == "--tools").unwrap();
+        assert_eq!(args[tools + 2], "--append-system-prompt");
+        assert_eq!(args.last().map(String::as_str), Some("run the checks"));
+
+        // A model and effort the launch named win over the overlay's.
+        let (_, args, _) = agent_spawn_command_with(
+            &claude,
+            None,
+            Some(Path::new(TEST_CWD)),
+            Some("opus"),
+            Some("high"),
+            None,
+            None,
+            None,
+            true,
+            &overlay,
+        );
+        assert_eq!(&args[..4], ["--model", "opus", "--effort", "high"]);
+    }
+
+    /// With a tool list and nothing else to say, the system-prompt flag
+    /// still follows the list (empty), so a trailing task is never read as
+    /// one more tool.
+    #[test]
+    fn a_tool_list_is_always_closed_by_the_system_prompt_flag() {
+        let all = test_registry();
+        let claude = test_harness(&all, AgentKind::Claude);
+        let overlay = LaunchOverlay {
+            tools: Some(vec!["Read".into()]),
+            ..LaunchOverlay::default()
+        };
+        let (_, args, _) = agent_spawn_command_with(
+            &claude,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("task"),
+            None,
+            false,
+            &overlay,
+        );
+        assert_eq!(
+            args,
+            ["--tools", "Read", "--append-system-prompt", "", "task"]
+        );
+        // Without one, an empty system prompt is still left off.
+        let (_, args, _) = agent_spawn_command_with(
+            &claude,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("task"),
+            None,
+            false,
+            &LaunchOverlay::default(),
+        );
+        assert_eq!(args, ["task"]);
+    }
+
+    /// A harness with no system-prompt flag takes none of Claude's overlay
+    /// flags; where it prepends guidance to the first prompt, the role's
+    /// prompt follows the guidance there.
+    #[test]
+    fn an_overlay_on_a_prepending_harness_folds_its_prompt_into_the_first() {
+        let all = test_registry();
+        let mut codex = test_harness(&all, AgentKind::Codex);
+        assert!(codex.system.append_flag.is_none());
+        codex.system.prepend_to_first_prompt = true;
+        let overlay = LaunchOverlay {
+            append_prompt: Some("ROLE PROMPT".into()),
+            tools: Some(vec!["Read".into()]),
+            permission_mode: Some("dontAsk".into()),
+            strict_mcp: true,
+            ..LaunchOverlay::default()
+        };
+        let (_, args, _) = agent_spawn_command_with(
+            &codex,
+            None,
+            Some(Path::new(TEST_CWD)),
+            None,
+            None,
+            None,
+            Some("task"),
+            None,
+            true,
+            &overlay,
+        );
+        assert!(!args.iter().any(|a| a.starts_with("--tools")
+            || a == "--permission-mode"
+            || a == "--strict-mcp-config"));
+        let first = args.last().unwrap();
+        assert!(
+            first.contains("ROLE PROMPT") && first.ends_with("task"),
+            "{first}"
+        );
+    }
+
+    /// A role card given at create is stored with the row (migration 36)
+    /// before the CLI boots, announced to 66 peers, and read back by a
+    /// daemon on the same database after a restart.
+    #[tokio::test]
+    async fn a_role_card_is_stored_on_create_and_survives_a_restart() {
+        #[cfg(unix)]
+        let stand_in = "/bin/cat";
+        #[cfg(windows)]
+        let stand_in = "cmd.exe";
+        let data = tempfile::tempdir().unwrap();
+        let _env = EnvGuard::set_all(&[
+            (env::AGENT_CMD, stand_in),
+            (env::DATA_DIR, data.path().to_str().unwrap()),
+            (env::CONFIG_FILE, ""),
+        ]);
+        let db = data.path().join("nebula.db");
+        let daemon = Daemon::new(
+            Arc::new(Store::open(&db).unwrap()),
+            HookEnv {
+                port: 0,
+                token: String::new(),
+            },
+        );
+        let (dir, worktree) = run_worktree(&daemon);
+        let mut events = daemon.events.subscribe();
+        let spec = |card: Option<&str>| CreateAgentSpec {
+            parent: None,
+            worktree: worktree.id.clone(),
+            name: "runner".into(),
+            kind: AgentKind::Claude,
+            custom_harness: None,
+            model: None,
+            effort: None,
+            auto_title: false,
+            cloud_prompt: None,
+            starting_prompt: None,
+            pr_url: None,
+            issue_url: None,
+            profile: None,
+            role: nebula_core::AgentRole::Worker,
+            role_card: card.map(str::to_string),
+            launcher: nebula_core::accounts::Launcher::Person,
+        };
+        let bad = daemon
+            .create_agent(spec(Some("no spaces")))
+            .await
+            .unwrap_err();
+        assert!(bad.to_string().contains("not a role id"), "{bad}");
+        let EntityId::Agent(id) = daemon.create_agent(spec(Some(" runner "))).await.unwrap() else {
+            panic!("a create makes an agent");
+        };
+        assert_eq!(daemon.role_card_of(&id).as_deref(), Some("runner"));
+        let announced = std::iter::from_fn(|| events.try_recv().ok())
+            .any(|e| matches!(e, ServerEvent::SessionRoles { .. }));
+        assert!(announced, "a role session's create pushes SessionRoles");
+        daemon.kill_session(&SessionRef::Agent(id.clone()));
+        drop(daemon);
+
+        let reopened = Daemon::new(
+            Arc::new(Store::open(&db).unwrap()),
+            HookEnv {
+                port: 0,
+                token: String::new(),
+            },
+        );
+        assert_eq!(
+            reopened.store.agent_role_cards().unwrap(),
+            [(id.clone(), "runner".to_string())]
+        );
+        assert_eq!(reopened.role_card_of(&id).as_deref(), Some("runner"));
+        drop(dir);
     }
 
     #[test]
@@ -1488,6 +1920,7 @@ pub(crate) mod tests {
             Some("do it"),
             None,
             true,
+            &LaunchOverlay::default(),
         );
         assert_eq!(program, "agy");
         assert_eq!(args, vec!["--model", "big-1", "do it"]);
@@ -1509,6 +1942,7 @@ pub(crate) mod tests {
             None,
             None,
             true,
+            &LaunchOverlay::default(),
         );
         assert_eq!(args, vec!["-m", "flash"]);
     }
@@ -1561,6 +1995,7 @@ pub(crate) mod tests {
                 prompts.initial.as_deref(),
                 prompts.system.as_deref(),
                 true,
+                &LaunchOverlay::default(),
             )
             .1
         };
@@ -1642,6 +2077,7 @@ pub(crate) mod tests {
             Some("do it"),
             None,
             true,
+            &LaunchOverlay::default(),
         );
         assert_eq!(program, "agy");
         assert_eq!(
@@ -1687,6 +2123,7 @@ pub(crate) mod tests {
             Some("fix auth"),
             None,
             true,
+            &LaunchOverlay::default(),
         );
         assert_eq!(program, "grok");
         assert!(!resumed);
@@ -1711,6 +2148,7 @@ pub(crate) mod tests {
             None,
             None,
             false,
+            &LaunchOverlay::default(),
         );
         assert!(resumed);
         assert_eq!(args, vec!["--resume", "sid-9"]);
@@ -1771,7 +2209,18 @@ pub(crate) mod tests {
     fn grok_spawn_uses_verified_flags_and_preserves_prompt_boundaries() {
         let grok = nebula_core::harness::builtin("grok").unwrap();
         assert_eq!(
-            agent_spawn_command_with(&grok, None, None, None, None, None, None, None, false),
+            agent_spawn_command_with(
+                &grok,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                false,
+                &LaunchOverlay::default()
+            ),
             ("grok".into(), vec![], false)
         );
         let (program, args, resumed) = agent_spawn_command_with(
@@ -1784,6 +2233,7 @@ pub(crate) mod tests {
             Some("fix the bug; keep this as one argument"),
             Some("Review only PR #42"),
             false,
+            &LaunchOverlay::default(),
         );
         assert_eq!(program, "grok");
         assert!(resumed);
@@ -1809,7 +2259,18 @@ pub(crate) mod tests {
     fn copilot_spawn_rides_its_prompt_on_dash_i_and_resumes_by_flag() {
         let copilot = nebula_core::harness::builtin("copilot").unwrap();
         assert_eq!(
-            agent_spawn_command_with(&copilot, None, None, None, None, None, None, None, false),
+            agent_spawn_command_with(
+                &copilot,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                false,
+                &LaunchOverlay::default()
+            ),
             ("copilot".into(), vec![], false)
         );
         // Its positional is a subcommand: a trailing prompt would be read
@@ -1824,6 +2285,7 @@ pub(crate) mod tests {
             Some("fix the bug; keep this as one argument"),
             None,
             false,
+            &LaunchOverlay::default(),
         );
         assert_eq!(program, "copilot");
         assert!(resumed);
@@ -1861,6 +2323,7 @@ pub(crate) mod tests {
             Some("carry on"),
             None,
             true,
+            &LaunchOverlay::default(),
         );
         assert!(resumed);
         let mut expected = guided(
@@ -1881,6 +2344,7 @@ pub(crate) mod tests {
                 Some("carry on"),
                 None,
                 true,
+                &LaunchOverlay::default(),
             )
             .1,
             vec!["resume", "sid", "--cd", TEST_CWD, "--yolo", "carry on"]
@@ -1896,6 +2360,7 @@ pub(crate) mod tests {
                 Some("carry on"),
                 None,
                 true,
+                &LaunchOverlay::default(),
             )
             .1,
             vec!["--resume", "sid", "--force", "carry on"]
@@ -1918,6 +2383,7 @@ pub(crate) mod tests {
                 Some("fix auth"),
                 None,
                 true,
+                &LaunchOverlay::default(),
             )
             .1,
             expected
@@ -1933,6 +2399,7 @@ pub(crate) mod tests {
                 Some("fix auth"),
                 None,
                 true,
+                &LaunchOverlay::default(),
             )
             .1,
             vec![
@@ -1955,6 +2422,7 @@ pub(crate) mod tests {
                 Some("fix auth"),
                 None,
                 true,
+                &LaunchOverlay::default(),
             )
             .1,
             vec!["--force", "fix auth"]
@@ -1974,6 +2442,7 @@ pub(crate) mod tests {
                 Some("carry on"),
                 None,
                 true,
+                &LaunchOverlay::default(),
             )
             .1,
             expected
@@ -1990,6 +2459,7 @@ pub(crate) mod tests {
                 Some("carry on"),
                 None,
                 true,
+                &LaunchOverlay::default(),
             ),
             ("/bin/sh".into(), vec!["-i".to_string()], false)
         );
@@ -2013,6 +2483,7 @@ pub(crate) mod tests {
             Some("Fix auth"),
             None,
             true,
+            &LaunchOverlay::default(),
         );
         assert_eq!(program, "opencode");
         assert_eq!(
@@ -2034,6 +2505,7 @@ pub(crate) mod tests {
             Some("Fix auth"),
             None,
             false,
+            &LaunchOverlay::default(),
         );
         assert_eq!(args, vec!["Fix auth".to_string()]);
     }
@@ -2084,6 +2556,7 @@ pub(crate) mod tests {
             Some(&notice),
             None,
             true,
+            &LaunchOverlay::default(),
         );
         assert_eq!(program, "codex");
         assert!(resumed);
@@ -2121,6 +2594,7 @@ pub(crate) mod tests {
             None,
             Some(&pr_prompt),
             true,
+            &LaunchOverlay::default(),
         );
         assert!(resumed);
         let prompts = args
@@ -2609,20 +3083,39 @@ pub(crate) mod tests {
         let claude = resolve_harness(AgentKind::Claude, None).unwrap();
         let p = Some(Path::new("/tmp/p"));
         assert_eq!(
-            resolve_profile_name(&claude, None, p).unwrap().as_deref(),
+            resolve_profile_name(&claude, None, p, nebula_core::accounts::Launcher::Person)
+                .unwrap()
+                .as_deref(),
             Some("work")
         );
         assert_eq!(
-            resolve_profile_name(&claude, Some("home"), p)
-                .unwrap()
-                .as_deref(),
+            resolve_profile_name(
+                &claude,
+                Some("home"),
+                p,
+                nebula_core::accounts::Launcher::Person
+            )
+            .unwrap()
+            .as_deref(),
             Some("home")
         );
         assert_eq!(
-            resolve_profile_name(&claude, None, Some(Path::new("/tmp/q"))).unwrap(),
+            resolve_profile_name(
+                &claude,
+                None,
+                Some(Path::new("/tmp/q")),
+                nebula_core::accounts::Launcher::Person
+            )
+            .unwrap(),
             None
         );
-        assert!(resolve_profile_name(&claude, Some("gone"), p).is_err());
+        assert!(resolve_profile_name(
+            &claude,
+            Some("gone"),
+            p,
+            nebula_core::accounts::Launcher::Person
+        )
+        .is_err());
     }
 
     /// `nebula worktree <branch>` onto a row whose checkout is gone refuses
@@ -3101,6 +3594,8 @@ pub(crate) mod tests {
                 pr_url: None,
                 issue_url: None,
                 role: nebula_core::AgentRole::Worker,
+                role_card: None,
+                launcher: nebula_core::accounts::Launcher::Person,
             })
             .await
             .unwrap_err();
@@ -3122,6 +3617,8 @@ pub(crate) mod tests {
                 pr_url: None,
                 issue_url: None,
                 role: nebula_core::AgentRole::Worker,
+                role_card: None,
+                launcher: nebula_core::accounts::Launcher::Person,
             })
             .await
             .unwrap_err();
@@ -3143,6 +3640,8 @@ pub(crate) mod tests {
                 pr_url: None,
                 issue_url: None,
                 role: nebula_core::AgentRole::Worker,
+                role_card: None,
+                launcher: nebula_core::accounts::Launcher::Person,
             })
             .await
             .unwrap_err();
@@ -3164,6 +3663,8 @@ pub(crate) mod tests {
                 pr_url: None,
                 issue_url: None,
                 role: nebula_core::AgentRole::Worker,
+                role_card: None,
+                launcher: nebula_core::accounts::Launcher::Person,
             })
             .await
             .unwrap_err();
@@ -3188,6 +3689,8 @@ pub(crate) mod tests {
             pr_url: Some("https://github.com/o/r/pull/7".into()),
             issue_url: None,
             role: nebula_core::AgentRole::Worker,
+            role_card: None,
+            launcher: nebula_core::accounts::Launcher::Person,
         };
         for kind in AgentKind::ALL {
             if kind == AgentKind::Custom {
@@ -3358,6 +3861,8 @@ pub(crate) mod tests {
             pr_url: None,
             issue_url: Some("https://github.com/o/r/issues/15".into()),
             role: nebula_core::AgentRole::Worker,
+            role_card: None,
+            launcher: nebula_core::accounts::Launcher::Person,
         };
         for kind in AgentKind::ALL {
             if kind == AgentKind::Custom {
@@ -3408,6 +3913,8 @@ pub(crate) mod tests {
             pr_url: None,
             issue_url: None,
             role: nebula_core::AgentRole::Worker,
+            role_card: None,
+            launcher: nebula_core::accounts::Launcher::Person,
         };
         // Validation runs before the worktree lookup, so an unknown
         // worktree is fine here and every failure is the prompt's own.
@@ -3521,6 +4028,8 @@ pub(crate) mod tests {
             issue_url: None,
             profile: None,
             role: nebula_core::AgentRole::Worker,
+            role_card: None,
+            launcher: nebula_core::accounts::Launcher::Person,
         };
 
         let created = |mut events: broadcast::Receiver<ServerEvent>| {
@@ -3601,7 +4110,7 @@ pub(crate) mod tests {
 
         let events = daemon.events.subscribe();
         let EntityId::Agent(child) = daemon
-            .spawn_sibling_agent(&caller, None, None, "Write the tests", None)
+            .spawn_sibling_agent(&caller, None, None, "Write the tests", None, None)
             .await
             .unwrap()
         else {
@@ -3890,6 +4399,8 @@ pub(crate) mod tests {
                 issue_url: None,
                 profile: None,
                 role: nebula_core::AgentRole::Worker,
+                role_card: None,
+                launcher: nebula_core::accounts::Launcher::Person,
             })
             .await
             .unwrap()
@@ -4091,6 +4602,8 @@ pub(crate) mod tests {
                 issue_url: None,
                 profile: None,
                 role: nebula_core::AgentRole::Worker,
+                role_card: None,
+                launcher: nebula_core::accounts::Launcher::Person,
             })
             .await
             .unwrap()

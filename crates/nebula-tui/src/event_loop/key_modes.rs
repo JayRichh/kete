@@ -464,6 +464,15 @@ fn handle_global_action(
         | Action::OpenWithDefault
         // 0.56: a side question about the selected session.
         | Action::AskAside => super::verbs::run_on_selection(app, action, out),
+        // 0.60's studio verbs: on the selection where they mean
+        // something there (a studio repo, the orchestrator), else on the
+        // app (`verbs::run_studio_verb`).
+        Action::StudioBoard
+        | Action::GauntletView
+        | Action::TriageNote
+        | Action::StudioAutonomy
+        | Action::RenewOrchestrator
+        | Action::UsageCsv => super::verbs::run_studio_verb(app, action, out),
         // Wake up now: on the account the accounts overlay has picked, else
         // the overlay opens on its Wake view to pick one.
         Action::WakeAccount => accounts::wake_account_verb(app),

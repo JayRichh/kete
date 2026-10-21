@@ -18,7 +18,7 @@ use tokio::net::UnixStream;
 const ONE_SHOT_REQ_ID: u64 = 1;
 const SESSION_CONTEXT_PROTOCOL: u32 = 50;
 /// The daemon hung up mid-request — the message every one-shot client shows.
-const CLOSED_BEFORE_REPLY: &str = "daemon closed the connection before replying";
+pub(crate) const CLOSED_BEFORE_REPLY: &str = "daemon closed the connection before replying";
 /// How often the connect and shutdown waits re-check the daemon.
 const POLL_STEP: Duration = Duration::from_millis(50);
 
@@ -448,12 +448,59 @@ fn spawn_profile_too_old(daemon: u32, windows: bool) -> String {
     )
 }
 
+/// The request a sibling spawn sends a daemon that said `daemon` at
+/// Hello. Without a role it is `SpawnSiblingAgent`, 57's frame unless it
+/// names a profile (58); a role goes in `SpawnSiblingAgentWith` (66), so a
+/// daemon below 66 is never sent one, and is refused here instead.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn sibling_spawn_request(
+    daemon: u32,
+    req_id: u64,
+    id: AgentId,
+    kind: Option<AgentKind>,
+    task: String,
+    worktree: Option<String>,
+    base: Option<String>,
+    profile: Option<String>,
+    role_card: Option<String>,
+) -> Result<ClientRequest> {
+    if let Some(role_card) = role_card {
+        crate::ipc_studio::require_studio(daemon, "`kete spawn --role`")?;
+        return Ok(ClientRequest::SpawnSiblingAgentWith {
+            req_id,
+            id,
+            kind,
+            starting_prompt: task,
+            worktree,
+            base,
+            profile,
+            role_card,
+        });
+    }
+    // Without a profile the frame is 57's, which every daemon in range
+    // reads; one naming a profile would make an older daemon drop the
+    // connection, so it is refused here with the way out.
+    if profile.is_some() && daemon < nebula_core::SPAWN_PROFILE_PROTOCOL {
+        bail!(spawn_profile_too_old(daemon, cfg!(windows)));
+    }
+    Ok(ClientRequest::SpawnSiblingAgent {
+        req_id,
+        id,
+        kind,
+        starting_prompt: task,
+        worktree,
+        base,
+        profile,
+    })
+}
+
 pub async fn spawn_sibling_for_current_agent(
     task: &str,
     kind: Option<AgentKind>,
     worktree: Option<String>,
     base: Option<String>,
     profile: Option<String>,
+    role: Option<String>,
 ) -> Result<()> {
     let agent_id = current_agent_id("spawn")?;
     let task = task.trim();
@@ -479,31 +526,28 @@ pub async fn spawn_sibling_for_current_agent(
         Some("") => bail!("the profile is empty: `--profile <name>` needs an account's name"),
         other => other.map(str::to_string),
     };
+    let role = match role.as_deref().map(str::trim) {
+        Some("") => bail!("the role is empty: `--role <id>` needs a role from .kete/roles.toml"),
+        other => other.map(str::to_string),
+    };
     let sock = paths::socket_path();
     let Ok(stream) = try_connect(&sock).await else {
         bail!("no kete daemon is running, no session started");
     };
     let mut conn = handshake(stream).await?;
-    // Without a profile the frame is 57's, which every daemon in range
-    // reads; one naming a profile would make an older daemon drop the
-    // connection, so it is refused here with the way out.
-    if profile.is_some() && conn.protocol_version < nebula_core::SPAWN_PROFILE_PROTOCOL {
-        bail!(spawn_profile_too_old(conn.protocol_version, cfg!(windows)));
-    }
     let req_id = ONE_SHOT_REQ_ID;
-    write_frame(
-        &mut conn.stream,
-        &ClientRequest::SpawnSiblingAgent {
-            req_id,
-            id: AgentId(agent_id),
-            kind,
-            starting_prompt: task.to_string(),
-            worktree: worktree.clone(),
-            base,
-            profile: profile.clone(),
-        },
-    )
-    .await?;
+    let request = sibling_spawn_request(
+        conn.protocol_version,
+        req_id,
+        AgentId(agent_id),
+        kind,
+        task.to_string(),
+        worktree.clone(),
+        base,
+        profile.clone(),
+        role,
+    )?;
+    write_frame(&mut conn.stream, &request).await?;
     await_ack(&mut conn, req_id).await?;
     let harness = kind.map(|k| format!("{} ", k.as_str())).unwrap_or_default();
     let account = profile
@@ -1134,6 +1178,65 @@ pub struct SpawnArgs<'a> {
     pub effort: Option<String>,
     pub profile: Option<String>,
     pub task: &'a str,
+    /// `--role <id>`: the role card the worker launches with. Sent only to
+    /// a 66 daemon (`STUDIO_PROTOCOL`).
+    pub role_card: Option<String>,
+}
+
+/// The request an orchestrator spawn sends a daemon that said `daemon`
+/// at Hello: `OrchestratorSpawnWith` from 54, carrying a role card only
+/// to a 66 daemon (an older one is refused here, never sent the longer
+/// frame), else `OrchestratorSpawn`.
+pub(crate) fn orchestrator_spawn_request(
+    daemon: u32,
+    req_id: u64,
+    caller: AgentId,
+    project: ProjectId,
+    worktree: Option<WorktreeId>,
+    branch: Option<String>,
+    args: SpawnArgs<'_>,
+) -> Result<ClientRequest> {
+    if args.role_card.is_some() {
+        crate::ipc_studio::require_studio(daemon, "`kete orchestrator spawn --role`")?;
+    }
+    let name = args.name.unwrap_or_default();
+    if daemon >= ORCHESTRATOR_PROTOCOL {
+        return Ok(ClientRequest::OrchestratorSpawnWith {
+            req_id,
+            caller,
+            project,
+            worktree,
+            branch,
+            base: args.base,
+            name,
+            kind: args.kind,
+            custom_harness: None,
+            model: args.model,
+            effort: args.effort,
+            profile: args.profile,
+            starting_prompt: args.task.to_string(),
+            role_card: args.role_card,
+        });
+    }
+    if args.profile.is_some() {
+        bail!(
+            "`kete orchestrator spawn --profile` needs daemon protocol v{ORCHESTRATOR_PROTOCOL}, but the running daemon speaks v{daemon}: run `kete kill` and relaunch"
+        );
+    }
+    Ok(ClientRequest::OrchestratorSpawn {
+        req_id,
+        caller,
+        project,
+        worktree,
+        branch,
+        base: args.base,
+        name,
+        kind: args.kind,
+        custom_harness: None,
+        model: args.model,
+        effort: args.effort,
+        starting_prompt: args.task.to_string(),
+    })
 }
 
 pub async fn orchestrator_spawn(args: SpawnArgs<'_>) -> Result<()> {
@@ -1145,51 +1248,25 @@ pub async fn orchestrator_spawn(args: SpawnArgs<'_>) -> Result<()> {
         None => (None, None),
     };
     let req_id = ONE_SHOT_REQ_ID + 1;
-    let name = args.name.unwrap_or_default();
-    let request = if conn.protocol_version >= ORCHESTRATOR_PROTOCOL {
-        ClientRequest::OrchestratorSpawnWith {
-            req_id,
-            caller,
-            project: project_id,
-            worktree: worktree_id,
-            branch,
-            base: args.base,
-            name,
-            kind: args.kind,
-            custom_harness: None,
-            model: args.model,
-            effort: args.effort,
-            profile: args.profile,
-            starting_prompt: args.task.to_string(),
-        }
-    } else {
-        if args.profile.is_some() {
-            require_protocol(&conn, ORCHESTRATOR_PROTOCOL, "orchestrator spawn --profile")?;
-        }
-        ClientRequest::OrchestratorSpawn {
-            req_id,
-            caller,
-            project: project_id,
-            worktree: worktree_id,
-            branch,
-            base: args.base,
-            name,
-            kind: args.kind,
-            custom_harness: None,
-            model: args.model,
-            effort: args.effort,
-            starting_prompt: args.task.to_string(),
-        }
-    };
+    let kind = args.kind;
+    let request = orchestrator_spawn_request(
+        conn.protocol_version,
+        req_id,
+        caller,
+        project_id,
+        worktree_id,
+        branch,
+        args,
+    )?;
     write_frame(&mut conn.stream, &request).await?;
     match await_created(&mut conn, req_id).await? {
         Some(EntityId::Agent(id)) => {
             println!(
                 "started {id}, a new {} session for that task",
-                args.kind.as_str()
+                kind.as_str()
             )
         }
-        _ => println!("started a new {} session for that task", args.kind.as_str()),
+        _ => println!("started a new {} session for that task", kind.as_str()),
     }
     Ok(())
 }
@@ -1399,6 +1476,34 @@ pub struct StartArgs {
     pub project: Option<String>,
     pub name: Option<String>,
     pub replace: bool,
+    /// `--role <id>`: the role card the orchestrator launches with. Sent
+    /// only to a 66 daemon (`STUDIO_PROTOCOL`).
+    pub role_card: Option<String>,
+}
+
+/// The `StartOrchestrator` a start sends a daemon that said `daemon` at
+/// Hello: a role card only to a 66 daemon, an older one refused here.
+pub(crate) fn start_orchestrator_request(
+    daemon: u32,
+    req_id: u64,
+    args: &StartArgs,
+    project: Option<ProjectId>,
+) -> Result<ClientRequest> {
+    if args.role_card.is_some() {
+        crate::ipc_studio::require_studio(daemon, "`kete orchestrator start --role`")?;
+    }
+    Ok(ClientRequest::StartOrchestrator {
+        req_id,
+        kind: args.kind,
+        custom_harness: None,
+        model: args.model.clone(),
+        effort: args.effort.clone(),
+        profile: args.profile.clone(),
+        project,
+        name: args.name.clone(),
+        replace: args.replace,
+        role_card: args.role_card.clone(),
+    })
 }
 
 /// `kete orchestrator start`: start the machine's one orchestrator, in
@@ -1424,21 +1529,8 @@ pub async fn orchestrator_start(args: StartArgs) -> Result<()> {
         None => None,
     };
     let req_id = ONE_SHOT_REQ_ID + 1;
-    write_frame(
-        &mut conn.stream,
-        &ClientRequest::StartOrchestrator {
-            req_id,
-            kind: args.kind,
-            custom_harness: None,
-            model: args.model,
-            effort: args.effort,
-            profile: args.profile,
-            project,
-            name: args.name,
-            replace: args.replace,
-        },
-    )
-    .await?;
+    let request = start_orchestrator_request(conn.protocol_version, req_id, &args, project)?;
+    write_frame(&mut conn.stream, &request).await?;
     match await_created(&mut conn, req_id).await? {
         Some(EntityId::Agent(id)) => println!(
             "started the orchestrator {id} ({}); press F10 in kete to open it",
@@ -1874,6 +1966,107 @@ mod tests {
         assert!(!windows.contains("kete reload"), "{windows}");
         assert!(windows.contains("`kete kill`") && windows.contains("stops every session"));
         assert!(windows.contains("without --profile"));
+    }
+
+    /// 66 widens three requests by a trailing `role_card` and adds
+    /// `SpawnSiblingAgentWith`: a launch without a role is the frame an
+    /// older daemon reads, and a 65 daemon is never sent a role card.
+    #[test]
+    fn a_65_daemon_is_never_sent_a_role_card() {
+        let old = nebula_core::STUDIO_PROTOCOL - 1;
+        let new = nebula_core::STUDIO_PROTOCOL;
+        let sibling = |daemon: u32, profile: Option<&str>, role: Option<&str>| {
+            sibling_spawn_request(
+                daemon,
+                1,
+                AgentId("a1".into()),
+                None,
+                "task".into(),
+                None,
+                None,
+                profile.map(str::to_string),
+                role.map(str::to_string),
+            )
+        };
+        assert!(matches!(
+            sibling(old, Some("work"), None).unwrap(),
+            ClientRequest::SpawnSiblingAgent {
+                profile: Some(_),
+                ..
+            }
+        ));
+        let refused = sibling(old, None, Some("runner")).unwrap_err().to_string();
+        assert!(refused.contains("needs the 0.60 daemon"), "{refused}");
+        let ClientRequest::SpawnSiblingAgentWith {
+            role_card, profile, ..
+        } = sibling(new, None, Some("runner")).unwrap()
+        else {
+            panic!("a role goes in SpawnSiblingAgentWith");
+        };
+        assert_eq!((role_card.as_str(), profile), ("runner", None));
+        assert!(matches!(
+            sibling(new, None, None).unwrap(),
+            ClientRequest::SpawnSiblingAgent { .. }
+        ));
+
+        let spawn = |daemon: u32, role: Option<&str>| {
+            orchestrator_spawn_request(
+                daemon,
+                2,
+                AgentId("o".into()),
+                ProjectId("p".into()),
+                None,
+                None,
+                SpawnArgs {
+                    project: "p",
+                    worktree: None,
+                    base: None,
+                    kind: AgentKind::Claude,
+                    name: None,
+                    model: None,
+                    effort: None,
+                    profile: None,
+                    task: "task",
+                    role_card: role.map(str::to_string),
+                },
+            )
+        };
+        let ClientRequest::OrchestratorSpawnWith { role_card, .. } = spawn(old, None).unwrap()
+        else {
+            panic!("a 54+ daemon takes OrchestratorSpawnWith");
+        };
+        assert_eq!(role_card, None, "the 65 frame");
+        assert!(spawn(old, Some("runner")).is_err());
+        let ClientRequest::OrchestratorSpawnWith { role_card, .. } =
+            spawn(new, Some("runner")).unwrap()
+        else {
+            panic!("not an OrchestratorSpawnWith");
+        };
+        assert_eq!(role_card.as_deref(), Some("runner"));
+
+        let start = |role: Option<&str>| StartArgs {
+            kind: AgentKind::Claude,
+            model: None,
+            effort: None,
+            profile: None,
+            project: None,
+            name: None,
+            replace: false,
+            role_card: role.map(str::to_string),
+        };
+        let ClientRequest::StartOrchestrator { role_card, .. } =
+            start_orchestrator_request(old, 3, &start(None), None).unwrap()
+        else {
+            panic!("not a StartOrchestrator");
+        };
+        assert_eq!(role_card, None);
+        assert!(start_orchestrator_request(old, 3, &start(Some("manager")), None).is_err());
+        let ClientRequest::StartOrchestrator { role_card, .. } =
+            start_orchestrator_request(new, 3, &start(Some("manager")), None).unwrap()
+        else {
+            panic!("not a StartOrchestrator");
+        };
+        assert_eq!(role_card.as_deref(), Some("manager"));
     }
 
     #[test]

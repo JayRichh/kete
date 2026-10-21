@@ -44,6 +44,11 @@
   import FilesToggle from './lib/files/FilesToggle.svelte';
   import AccountsView from './lib/accounts/AccountsView.svelte';
   import WakeView from './lib/wake/WakeView.svelte';
+  import StudioView from './lib/studio/StudioView.svelte';
+  import GauntletView from './lib/gauntlet/GauntletView.svelte';
+  import TriageStrip from './lib/triage/TriageStrip.svelte';
+  import RenewNotice from './lib/orchestrator/RenewNotice.svelte';
+  import { onRenewal } from './lib/orchestrator/renew';
   import AddAccount from './lib/accounts/AddAccount.svelte';
   import WorktreesView from './lib/worktrees/WorktreesView.svelte';
   import { loadCollapsed } from './lib/worktrees/rows.svelte';
@@ -175,6 +180,8 @@
   });
 
   let body: HTMLDivElement;
+  /** The triage strip's height under the orchestrator's session. */
+  let triageH = $state(0);
   function startResize(e: PointerEvent) {
     const handle = e.currentTarget as HTMLElement;
     handle.setPointerCapture(e.pointerId);
@@ -290,6 +297,7 @@
     installEditorMenus();
     const stopEditors = startEditors();
     api.onReview(onReviewOpened).catch(() => {});
+    api.onRenewal(onRenewal).catch(() => {});
     listenAlerts().catch(() => {});
     boot();
     applyStartup();
@@ -320,7 +328,7 @@
       <UsageMeter window={usageHead?.window} />
       <ScopeChip compact={narrow} />
       {#if !narrow}<AttentionStrip tight={split} />{/if}
-      {#if app.home === 'overview' && !adoView && view !== 'settings' && view !== 'worktrees' && view !== 'accounts' && view !== 'whakaoho' && !orchView}
+      {#if app.home === 'overview' && !adoView && view !== 'settings' && view !== 'worktrees' && view !== 'accounts' && view !== 'whakaoho' && view !== 'studio' && view !== 'gauntlet' && !orchView}
         <button
           class="h-6 flex-none border px-2 text-[12px] {app.showArchived ? 'border-ink bg-ink text-bg' : 'border-rule bg-transparent text-muted hover:text-ink'}"
           aria-pressed={app.showArchived}
@@ -400,6 +408,10 @@
         <AccountsView />
       {:else if view === 'whakaoho'}
         <WakeView />
+      {:else if view === 'studio'}
+        <StudioView />
+      {:else if view === 'gauntlet'}
+        <GauntletView item={nav.current.item} />
       {:else if orchView && !orch}
         <StartOrchestrator inline />
       {:else if adoView}
@@ -442,12 +454,21 @@
           style={full || narrow ? undefined : `width: ${rightWidth}`}
         >
           {#if sessionEverOpened}
-            <div class="absolute inset-0 {view === 'session' || orchView ? 'z-10' : 'hidden'}"><Session /></div>
+            <div
+              class="absolute inset-x-0 top-0 {view === 'session' || orchView ? 'z-10' : 'hidden'}"
+              style="bottom: {orchView ? triageH : 0}px"
+            >
+              <Session />
+            </div>
           {/if}
           {#if diffEverOpened}
             <div class="absolute inset-0 {view === 'diff' ? 'z-10' : 'hidden'}"><Diff /></div>
           {/if}
           {#if view === 'files'}<div class="absolute inset-0 z-10"><FilesView /></div>{/if}
+          <!-- The triage strip, under the orchestrator's session. -->
+          {#if orchView}
+            <div class="absolute inset-x-0 bottom-0 z-10" bind:clientHeight={triageH}><TriageStrip /></div>
+          {/if}
         </div>
       {/if}
     </div>
@@ -478,6 +499,7 @@
 <ReviewSheet />
 <BranchSwitch />
 <ReviewNotices />
+<RenewNotice />
 <FileSheet />
 <AddAccount />
 <ShipSheet />

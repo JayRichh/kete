@@ -75,6 +75,26 @@ pub fn subagent_retention_ms(word: &str) -> Option<i64> {
     }
 }
 
+/// What **Idle note after** (`studio_idle_after`, Settings, General,
+/// Studio) cycles through: how long the orchestrator must sit idle before
+/// the studio queue runner hands it an idle note.
+pub const STUDIO_IDLE_AFTERS: &[&str] = &["30s", "45s", "60s", "120s"];
+
+/// `studio_idle_after`'s default, and the fallback for a word off the list.
+pub const DEFAULT_STUDIO_IDLE_AFTER: &str = "45s";
+
+/// `studio_idle_after` as a duration. A word off [`STUDIO_IDLE_AFTERS`]
+/// reads as [`DEFAULT_STUDIO_IDLE_AFTER`].
+pub fn studio_idle_after(word: &str) -> Duration {
+    let known = STUDIO_IDLE_AFTERS
+        .iter()
+        .copied()
+        .find(|w| w.eq_ignore_ascii_case(word.trim()))
+        .unwrap_or(DEFAULT_STUDIO_IDLE_AFTER);
+    let secs = known.trim_end_matches('s').parse::<u64>().unwrap_or(45);
+    Duration::from_secs(secs)
+}
+
 pub fn load<T: DeserializeOwned + Default>(config: &Path, local: &Path) -> Loaded<T> {
     let mut problems = Vec::new();
     let mut merged = read_layer(config, &mut problems);

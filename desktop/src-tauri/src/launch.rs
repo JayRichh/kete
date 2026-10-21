@@ -83,6 +83,7 @@ pub fn spread_pick_for(
         harness,
         project_default,
         policy,
+        nebula_core::accounts::Launcher::Person,
         now_secs,
         usage,
     );
@@ -435,6 +436,7 @@ mod tests {
             default,
             use_default: false,
             disabled: false,
+            reserved: false,
         };
         let mut cfg = Config::default();
         assert_eq!(
@@ -520,6 +522,7 @@ mod tests {
             default,
             use_default: false,
             disabled,
+            reserved: false,
         };
         let shown = |all: &[Profile]| -> Vec<(String, bool, bool)> {
             launch_profiles(all)
