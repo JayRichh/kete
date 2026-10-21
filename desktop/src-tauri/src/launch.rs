@@ -32,6 +32,9 @@ pub struct QuickLaunch {
     /// An agent preset whose text wraps the task.
     #[serde(default)]
     pub preset: Option<String>,
+    /// A role card of the project's `.kete/roles.toml`; needs a 66 daemon.
+    #[serde(default)]
+    pub role: Option<String>,
 }
 
 /// What started, for the window to open.
@@ -83,6 +86,7 @@ pub fn spread_pick_for(
         harness,
         project_default,
         policy,
+        nebula_core::accounts::Launcher::Person,
         now_secs,
         usage,
     );
@@ -220,6 +224,45 @@ pub fn prompt_for(store: &std::path::Path, preset: Option<&str>, task: &str) -> 
     }
 }
 
+/// `spawn_agent_with` for a launch that names a role: the same
+/// `CreateAgent`, with the card (`spawn_agent_with` sends none).
+async fn spawn_role_agent(
+    client: &Client,
+    cfg: &Config,
+    spec: NewAgent,
+    role: String,
+) -> Res<String> {
+    let launch = crate::settings::launch_args(cfg, spec.kind.trim(), spec.model, spec.effort)?;
+    let name = crate::default_agent_name(&client.snapshot());
+    let req_id = client.req_id();
+    let created = client
+        .rpc(
+            req_id,
+            nebula_core::ClientRequest::CreateAgent {
+                req_id,
+                worktree: nebula_core::WorktreeId(spec.worktree),
+                name,
+                kind: launch.kind,
+                custom_harness: launch.custom,
+                model: launch.model,
+                effort: launch.effort,
+                auto_title: true,
+                cloud_prompt: None,
+                starting_prompt: spec
+                    .prompt
+                    .map(|p| p.trim().to_string())
+                    .filter(|p| !p.is_empty()),
+                issue_url: None,
+                role: Default::default(),
+                profile: spec.profile.filter(|p| !p.is_empty()),
+                role_card: Some(role),
+            },
+        )
+        .await
+        .map_err(crate::err)?;
+    Ok(crate::created_id(created))
+}
+
 pub async fn quick_launch_in(
     client: &Client,
     cfg: &Config,
@@ -227,6 +270,11 @@ pub async fn quick_launch_in(
     spec: QuickLaunch,
 ) -> Res<Launched> {
     let prompt = prompt_for(store, spec.preset.as_deref(), &spec.prompt)?;
+    // A terminal has no role. Refuse before a worktree is cut for it.
+    let role = crate::roles::role_of(spec.role.clone()).filter(|_| spec.kind != TERMINAL);
+    if role.is_some() {
+        crate::roles::require_roles(client)?;
+    }
     let worktree = if spec.new_worktree {
         crate::projects::create_worktree_in(client, spec.project.clone(), String::new(), None)
             .await?
@@ -260,19 +308,18 @@ pub async fn quick_launch_in(
             picked = Some(why);
         }
     }
-    let agent = crate::spawn_agent_with(
-        client,
-        cfg,
-        NewAgent {
-            worktree: worktree.clone(),
-            kind: spec.kind,
-            profile,
-            prompt: Some(prompt),
-            model: spec.model.filter(|m| !m.trim().is_empty()),
-            effort: spec.effort.filter(|e| !e.trim().is_empty()),
-        },
-    )
-    .await?;
+    let new = NewAgent {
+        worktree: worktree.clone(),
+        kind: spec.kind,
+        profile,
+        prompt: Some(prompt),
+        model: spec.model.filter(|m| !m.trim().is_empty()),
+        effort: spec.effort.filter(|e| !e.trim().is_empty()),
+    };
+    let agent = match role {
+        Some(role) => spawn_role_agent(client, cfg, new, role).await?,
+        None => crate::spawn_agent_with(client, cfg, new).await?,
+    };
     Ok(Launched {
         worktree,
         agent: Some(agent),
@@ -310,6 +357,7 @@ mod tests {
             model: Some("sonnet".into()),
             effort: None,
             preset: None,
+            role: None,
         }
     }
 
@@ -435,6 +483,7 @@ mod tests {
             default,
             use_default: false,
             disabled: false,
+            reserved: false,
         };
         let mut cfg = Config::default();
         assert_eq!(
@@ -520,6 +569,7 @@ mod tests {
             default,
             use_default: false,
             disabled,
+            reserved: false,
         };
         let shown = |all: &[Profile]| -> Vec<(String, bool, bool)> {
             launch_profiles(all)

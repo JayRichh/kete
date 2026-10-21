@@ -119,6 +119,11 @@ pub(crate) fn open_prompt(app: &mut App, kind: PromptKind) {
                 .into(),
             String::new(),
         ),
+        PromptKind::RenewNote => (
+            "Renew orchestrator".into(),
+            "the handover note a fresh orchestrator starts on, once this one's turn ends".into(),
+            String::new(),
+        ),
         PromptKind::PrComment { label, .. } => (
             format!("Comment on {label}").into(),
             "posted on the pull request as you, through gh: markdown".into(),

@@ -64,6 +64,17 @@ impl Overlay {
                     live.area = view.area;
                 }
             }
+            // 0.60: the board and gauntlet lanes' (`ui::studio_board`,
+            // `ui::gauntlet_view`), drawn over the whole frame.
+            Overlay::StudioBoard(_) => {
+                let area = f.area();
+                super::studio_board::draw(f, app, area);
+            }
+            Overlay::Gauntlet(_) => {
+                let area = f.area();
+                super::gauntlet_view::draw(f, app, area);
+            }
+            Overlay::StateMap(_) => crate::state_overlay::draw_live(f, app),
         }
     }
 }

@@ -321,6 +321,7 @@ impl ClientConnection {
                 issue_url,
                 role,
                 profile,
+                role_card,
             } => {
                 self.handle_create_agent(
                     req_id,
@@ -336,6 +337,7 @@ impl ClientConnection {
                     issue_url,
                     role,
                     profile,
+                    role_card,
                 )
                 .await;
                 Ok(true)
@@ -423,6 +425,7 @@ impl ClientConnection {
                     worktree,
                     base,
                     profile,
+                    None,
                 )
                 .await;
                 Ok(true)
@@ -508,6 +511,10 @@ impl ClientConnection {
                 effort,
                 starting_prompt,
             } => {
+                if let Err(e) = self.studio_gate(project.clone()).await {
+                    reply_done(&self.out_tx, req_id, Err(e)).await;
+                    return Ok(true);
+                }
                 let daemon = self.daemon.clone();
                 let out_tx = self.out_tx.clone();
                 tokio::spawn(async move {
@@ -526,6 +533,7 @@ impl ClientConnection {
                                 effort,
                                 profile: None,
                                 starting_prompt,
+                                role_card: None,
                             },
                         )
                         .await;
@@ -800,6 +808,7 @@ impl ClientConnection {
                 project,
                 name,
                 replace,
+                role_card,
             } => {
                 if let Err(e) = self.check_provisioning_peer().await {
                     reply_done(&self.out_tx, req_id, Err(e)).await;
@@ -818,6 +827,8 @@ impl ClientConnection {
                             project,
                             name,
                             replace,
+                            role_card,
+                            starting_prompt: None,
                         })
                         .await;
                     reply(&out_tx, req_id, result.map(Some)).await;
@@ -922,7 +933,12 @@ impl ClientConnection {
                 effort,
                 profile,
                 starting_prompt,
+                role_card,
             } => {
+                if let Err(e) = self.studio_gate(project.clone()).await {
+                    reply_done(&self.out_tx, req_id, Err(e)).await;
+                    return Ok(true);
+                }
                 let daemon = self.daemon.clone();
                 let out_tx = self.out_tx.clone();
                 tokio::spawn(async move {
@@ -941,6 +957,7 @@ impl ClientConnection {
                                 effort,
                                 profile,
                                 starting_prompt,
+                                role_card,
                             },
                         )
                         .await;
@@ -948,7 +965,176 @@ impl ClientConnection {
                 });
                 Ok(true)
             }
+            // -- protocol 66 (`STUDIO_PROTOCOL`). --
+            ClientRequest::SetStudio {
+                req_id,
+                project,
+                studio,
+            } => {
+                // Only a person changes what a studio may do.
+                let result = match self.check_studio_peer().await {
+                    Ok(()) => {
+                        self.blocking_daemon(move |daemon| {
+                            daemon
+                                .studio_set(&project, studio)
+                                .map_err(anyhow::Error::msg)
+                        })
+                        .await
+                    }
+                    Err(e) => Err(e),
+                };
+                reply_done(&self.out_tx, req_id, result).await;
+                Ok(true)
+            }
+            ClientRequest::StudioQueue {
+                req_id,
+                project,
+                run,
+            } => {
+                let result = self
+                    .blocking_daemon(move |daemon| {
+                        daemon
+                            .studio_queue(project.as_ref(), run)
+                            .map_err(anyhow::Error::msg)
+                    })
+                    .await;
+                match result {
+                    Ok(rows) => {
+                        self.send(ServerEvent::StudioQueueState { req_id, rows })
+                            .await
+                    }
+                    Err(err) => reply_done(&self.out_tx, req_id, Err(err)).await,
+                }
+                Ok(true)
+            }
+            ClientRequest::RenewOrchestrator {
+                req_id,
+                caller,
+                note,
+                profile,
+                model,
+                keep_old,
+                now,
+            } => {
+                // The orchestrator renewing itself passed the caller check
+                // above; anyone else is a person, never another session.
+                if caller.is_none() {
+                    if let Err(e) = self.check_provisioning_peer().await {
+                        reply_done(&self.out_tx, req_id, Err(e)).await;
+                        return Ok(true);
+                    }
+                }
+                let result = self
+                    .blocking_daemon(move |daemon| {
+                        let old = match &caller {
+                            Some(id) => Some(id.clone()),
+                            None => daemon.store.orchestrator()?.map(|a| a.id),
+                        };
+                        let state = daemon
+                            .renew_orchestrator(crate::orchestrator_renew::RenewRequest {
+                                caller,
+                                note,
+                                profile,
+                                model,
+                                keep_old,
+                                now,
+                            })
+                            .map_err(anyhow::Error::msg)?;
+                        let old = old.context("there is no orchestrator to renew")?;
+                        Ok((old, state))
+                    })
+                    .await;
+                match result {
+                    Ok((old, state)) => {
+                        self.send(ServerEvent::OrchestratorRenewal {
+                            req_id: Some(req_id),
+                            old,
+                            new: None,
+                            state,
+                        })
+                        .await
+                    }
+                    Err(err) => reply_done(&self.out_tx, req_id, Err(err)).await,
+                }
+                Ok(true)
+            }
+            ClientRequest::UsageLedger {
+                req_id,
+                since,
+                until,
+                project,
+            } => {
+                let result = self
+                    .blocking_daemon(move |daemon| {
+                        daemon
+                            .usage_ledger(since.as_deref(), until.as_deref(), project.as_ref())
+                            .map_err(anyhow::Error::msg)
+                    })
+                    .await;
+                match result {
+                    Ok(rows) => {
+                        self.send(ServerEvent::UsageLedgerRows { req_id, rows })
+                            .await
+                    }
+                    Err(err) => reply_done(&self.out_tx, req_id, Err(err)).await,
+                }
+                Ok(true)
+            }
+            ClientRequest::SpawnSiblingAgentWith {
+                req_id,
+                id,
+                kind,
+                starting_prompt,
+                worktree,
+                base,
+                profile,
+                role_card,
+            } => {
+                self.handle_spawn_sibling(
+                    req_id,
+                    id,
+                    kind,
+                    starting_prompt,
+                    worktree,
+                    base,
+                    profile,
+                    Some(role_card),
+                )
+                .await;
+                Ok(true)
+            }
         }
+    }
+
+    /// A0 (Hold) refuses new sessions in a studio repo
+    /// (`Daemon::studio_check_spawn`): asked before an orchestrator or
+    /// sibling spawn starts anything.
+    async fn studio_gate(&self, project: nebula_core::ProjectId) -> Result<()> {
+        self.blocking_daemon(move |daemon| {
+            daemon
+                .studio_check_spawn(&project)
+                .map_err(anyhow::Error::msg)
+        })
+        .await
+    }
+
+    /// [`Self::studio_gate`] on the project of the session asking for a
+    /// sibling. An unknown caller passes: the spawn refuses it itself.
+    async fn studio_gate_for_agent(&self, id: nebula_core::AgentId) -> Result<()> {
+        self.blocking_daemon(move |daemon| {
+            let project = daemon
+                .store
+                .get_agent(&id)?
+                .and_then(|agent| daemon.store.get_worktree(&agent.worktree_id).ok().flatten())
+                .map(|worktree| worktree.project_id);
+            match project {
+                Some(project) => daemon
+                    .studio_check_spawn(&project)
+                    .map_err(anyhow::Error::msg),
+                None => Ok(()),
+            }
+        })
+        .await
     }
 
     /// Orchestrator provisioning (start, set, clear) is the user's call,
@@ -957,6 +1143,25 @@ impl ClientConnection {
     /// the peer check is defence in depth over the same-user socket, not
     /// the trust boundary itself.
     async fn check_provisioning_peer(&self) -> Result<()> {
+        self.refuse_inside_session(
+            "orchestrator provisioning is refused from inside an agent session; start or \
+             pin the orchestrator from kete itself (F10) or your own shell",
+        )
+        .await
+    }
+
+    /// What a studio may do (`SetStudio`) is a person's call, refused the
+    /// same way as orchestrator provisioning.
+    async fn check_studio_peer(&self) -> Result<()> {
+        self.refuse_inside_session(
+            "studio settings are refused from inside an agent session: only you change a \
+             studio's autonomy, from your own shell or the apps",
+        )
+        .await
+    }
+
+    /// `refusal` when the client process runs inside a live agent session.
+    async fn refuse_inside_session(&self, refusal: &'static str) -> Result<()> {
         let Some(pid) = self.peer_pid else {
             return Ok(());
         };
@@ -964,10 +1169,7 @@ impl ClientConnection {
             .blocking_daemon(move |daemon| Ok(daemon.pid_inside_agent_session(pid)))
             .await?;
         if inside {
-            anyhow::bail!(
-                "orchestrator provisioning is refused from inside an agent session; start or \
-                 pin the orchestrator from kete itself (F10) or your own shell"
-            );
+            anyhow::bail!("{refusal}");
         }
         Ok(())
     }
@@ -1006,13 +1208,15 @@ impl ClientConnection {
             ports: self.daemon.worktree_ports(),
         })
         .await;
-        // RECORDED BASES, ACCOUNT USAGE, SESSION CONTEXT and STOP NOTES
-        // too, to a peer that reads them.
+        // RECORDED BASES, ACCOUNT USAGE, SESSION CONTEXT, STOP NOTES,
+        // ROLES and TODAY'S SPEND too, to a peer that reads them.
         for ev in base_events(&self.daemon, self.peer_protocol)
             .await
             .into_iter()
             .chain(usage_events(&self.daemon, self.peer_protocol).await)
             .chain(stop_events(&self.daemon, self.peer_protocol))
+            .chain(role_events(&self.daemon, self.peer_protocol))
+            .chain(spend_events(&self.daemon, self.peer_protocol).await)
         {
             self.send(ev).await;
         }
@@ -1100,6 +1304,7 @@ impl ClientConnection {
     async fn handle_input(&self, session: SessionRef, data: Vec<u8>) {
         let result = self
             .blocking_daemon(move |daemon| {
+                daemon.note_input(&session);
                 if let Some(s) = daemon.session(&session) {
                     if let Err(e) = s.write_input(&data) {
                         tracing::warn!(error = %e, "pty write failed");
@@ -1178,6 +1383,7 @@ impl ClientConnection {
         issue_url: Option<String>,
         role: nebula_core::AgentRole,
         profile: Option<String>,
+        role_card: Option<String>,
     ) {
         // The ORCHESTRATOR role is granted only by StartOrchestrator and
         // SetOrchestrator, which keep it to one per machine and refuse a
@@ -1214,6 +1420,8 @@ impl ClientConnection {
                 pr_url: None,
                 issue_url,
                 role,
+                role_card,
+                launcher: nebula_core::accounts::Launcher::Person,
             })
             .await;
         if let Some(launch_mode) = launch_mode {
@@ -1363,7 +1571,12 @@ impl ClientConnection {
         worktree: Option<String>,
         base: Option<String>,
         profile: Option<String>,
+        role_card: Option<String>,
     ) {
+        if let Err(e) = self.studio_gate_for_agent(id.clone()).await {
+            reply_done(&self.out_tx, req_id, Err(e)).await;
+            return;
+        }
         // Logged by mode only — never the prompt text.
         let worktree = worktree
             .as_deref()
@@ -1373,7 +1586,14 @@ impl ClientConnection {
             });
         let result = self
             .daemon
-            .spawn_sibling_agent(&id, kind, worktree, &starting_prompt, profile.as_deref())
+            .spawn_sibling_agent(
+                &id,
+                kind,
+                worktree,
+                &starting_prompt,
+                profile.as_deref(),
+                role_card.as_deref(),
+            )
             .await;
         match &result {
             Ok(nebula_core::EntityId::Agent(agent)) => tracing::info!(
@@ -1565,6 +1785,34 @@ fn stop_events(daemon: &Daemon, peer: u32) -> Vec<ServerEvent> {
     }]
 }
 
+/// The role sessions a subscriber at `peer` gets beside the Snapshot (the
+/// whole list): none for a peer older than `STUDIO_PROTOCOL`.
+fn role_events(daemon: &Daemon, peer: u32) -> Vec<ServerEvent> {
+    if peer < nebula_core::STUDIO_PROTOCOL {
+        return Vec::new();
+    }
+    vec![ServerEvent::SessionRoles {
+        roles: daemon.session_roles(),
+    }]
+}
+
+/// Today's spend row for every session, beside the Snapshot, so a client
+/// that connects after turns ran shows them before the next turn ends:
+/// none for a peer older than `STUDIO_PROTOCOL`, or when no row exists.
+async fn spend_events(daemon: &Arc<Daemon>, peer: u32) -> Vec<ServerEvent> {
+    if peer < nebula_core::STUDIO_PROTOCOL {
+        return Vec::new();
+    }
+    let daemon = daemon.clone();
+    let rows = tokio::task::spawn_blocking(move || daemon.today_spend())
+        .await
+        .unwrap_or_default();
+    if rows.is_empty() {
+        return Vec::new();
+    }
+    vec![ServerEvent::SessionSpend { rows }]
+}
+
 /// The recorded worktree bases a subscriber at `peer` gets beside the
 /// Snapshot: none for a peer older than `RECORDED_BASE_PROTOCOL`.
 async fn base_events(daemon: &Arc<Daemon>, peer: u32) -> Vec<ServerEvent> {
@@ -1598,6 +1846,8 @@ async fn send_snapshot(daemon: &Arc<Daemon>, tx: &mpsc::Sender<ServerEvent>, pee
         .into_iter()
         .chain(usage_events(daemon, peer).await)
         .chain(stop_events(daemon, peer))
+        .chain(role_events(daemon, peer))
+        .chain(spend_events(daemon, peer).await)
     {
         if tx.send(ev).await.is_err() {
             return false;
@@ -1649,6 +1899,13 @@ fn privileged_caller(req: &ClientRequest) -> Option<(u64, nebula_core::AgentId)>
         | R::OrchestratorTell { req_id, caller, .. }
         | R::OrchestratorReadSession { req_id, caller, .. }
         | R::OrchestratorSpawnWith { req_id, caller, .. } => Some((*req_id, caller.clone())),
+        // The orchestrator renewing itself; a renewal with no caller is a
+        // person's, gated on the provisioning check instead.
+        R::RenewOrchestrator {
+            req_id,
+            caller: Some(caller),
+            ..
+        } => Some((*req_id, caller.clone())),
         _ => None,
     }
 }
@@ -1754,6 +2011,153 @@ mod tests {
             );
             assert!(got.iter().all(|ev| ev.decodable_by(peer)));
         }
+    }
+
+    /// The role sessions ride beside a Snapshot to a 66 subscriber and
+    /// never to a 65 one, whose decoder would drop the connection on them.
+    #[tokio::test]
+    async fn session_roles_follow_a_snapshot_only_to_peers_that_decode_them() {
+        for (peer, expect) in [(65u32, false), (66, true)] {
+            let daemon = test_daemon();
+            let (tx, mut out) = mpsc::channel(16);
+            assert!(send_snapshot(&daemon, &tx, peer).await);
+            drop(tx);
+            let mut got = Vec::new();
+            while let Some(ev) = out.recv().await {
+                got.push(ev);
+            }
+            assert!(matches!(got.first(), Some(ServerEvent::Snapshot { .. })));
+            assert_eq!(
+                got.iter()
+                    .any(|ev| matches!(ev, ServerEvent::SessionRoles { .. })),
+                expect,
+                "peer {peer}: {got:?}"
+            );
+            assert!(got.iter().all(|ev| ev.decodable_by(peer)));
+        }
+    }
+
+    /// One session's spend delta for `day`: 1,200 input tokens, one turn.
+    fn spent(agent: &str, day: &str) -> crate::store::SpendDelta {
+        crate::store::SpendDelta {
+            agent: nebula_core::AgentId(agent.into()),
+            day: day.into(),
+            project: None,
+            branch: None,
+            session: None,
+            model: None,
+            profile: None,
+            role_card: None,
+            input_tokens: 1200,
+            output_tokens: 300,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            cost_usd: 0.04,
+            tool_uses: 2,
+            turns: 1,
+            at: 1,
+        }
+    }
+
+    fn today() -> String {
+        nebula_core::usage_ledger::local_day(nebula_core::clock::now_secs() as i64)
+    }
+
+    /// A client that connects and subscribes after a session spent gets
+    /// that session's SessionSpend once, on its first subscribe.
+    #[tokio::test]
+    async fn a_client_that_subscribes_after_a_turn_gets_its_spend_once() {
+        let daemon = test_daemon();
+        daemon.store.add_spend(&spent("ran", &today())).unwrap();
+        let (tx, mut rx) = mpsc::channel(64);
+        let mut client = ClientConnection::new(daemon, tx);
+        let hello = ClientRequest::Hello {
+            protocol_version: PROTOCOL_VERSION,
+        };
+        assert!(client.handle_request(hello).await.unwrap());
+        assert!(client
+            .handle_request(ClientRequest::Subscribe)
+            .await
+            .unwrap());
+        client.subscription.take().unwrap().abort();
+        // Everything the subscribe sends is queued before it returns.
+        let mut spend = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            if let ServerEvent::SessionSpend { rows } = ev {
+                spend.push(rows);
+            }
+        }
+        assert_eq!(spend.len(), 1, "{spend:?}");
+        assert_eq!(spend[0].len(), 1, "{spend:?}");
+        assert_eq!(spend[0][0].agent.0, "ran");
+        assert_eq!(spend[0][0].input_tokens, 1200);
+    }
+
+    /// Today's spend rides beside a Snapshot to a 66 subscriber that
+    /// connects after a turn ran, and never to a 65 one.
+    #[tokio::test]
+    async fn todays_spend_follows_a_snapshot_only_to_peers_that_decode_them() {
+        for (peer, expect) in [(65u32, false), (66, true)] {
+            let daemon = test_daemon();
+            daemon.store.add_spend(&spent("ran", &today())).unwrap();
+            daemon.store.add_spend(&spent("old", "2000-01-01")).unwrap();
+            let (tx, mut out) = mpsc::channel(16);
+            assert!(send_snapshot(&daemon, &tx, peer).await);
+            drop(tx);
+            let mut got = Vec::new();
+            while let Some(ev) = out.recv().await {
+                got.push(ev);
+            }
+            let spend: Vec<_> = got
+                .iter()
+                .filter_map(|ev| match ev {
+                    ServerEvent::SessionSpend { rows } => Some(rows),
+                    _ => None,
+                })
+                .collect();
+            if expect {
+                assert_eq!(spend.len(), 1, "peer {peer}: {got:?}");
+                let ids: Vec<_> = spend[0].iter().map(|r| r.agent.0.as_str()).collect();
+                assert_eq!(ids, ["ran"], "only today's row");
+                assert_eq!(spend[0][0].input_tokens, 1200);
+            } else {
+                assert!(spend.is_empty(), "peer {peer}: {got:?}");
+            }
+            assert!(got.iter().all(|ev| ev.decodable_by(peer)));
+        }
+    }
+
+    /// No row today sends no SessionSpend at all.
+    #[tokio::test]
+    async fn no_spend_today_sends_no_spend_event() {
+        let daemon = test_daemon();
+        let (tx, mut out) = mpsc::channel(16);
+        assert!(send_snapshot(&daemon, &tx, nebula_core::STUDIO_PROTOCOL).await);
+        drop(tx);
+        while let Some(ev) = out.recv().await {
+            assert!(!matches!(ev, ServerEvent::SessionSpend { .. }), "{ev:?}");
+        }
+    }
+
+    /// The orchestrator renewing itself is checked as its caller; a renewal
+    /// with no caller is a person's and takes the provisioning check.
+    #[test]
+    fn a_renewal_is_privileged_only_when_it_names_a_caller() {
+        let renew = |caller| ClientRequest::RenewOrchestrator {
+            req_id: 9,
+            caller,
+            note: std::path::PathBuf::from("handover.md"),
+            profile: None,
+            model: None,
+            keep_old: false,
+            now: false,
+        };
+        let orch = nebula_core::AgentId("orch".into());
+        assert_eq!(
+            privileged_caller(&renew(Some(orch.clone()))),
+            Some((9, orch))
+        );
+        assert_eq!(privileged_caller(&renew(None)), None);
     }
 
     /// Usage events reach a 55 subscriber and never a 54 one, whose
@@ -1865,6 +2269,7 @@ mod tests {
                 issue_url: None,
                 role: nebula_core::AgentRole::Orchestrator,
                 profile: None,
+                role_card: None,
             })
             .await
             .unwrap();
@@ -2075,6 +2480,29 @@ mod tests {
                     project: None,
                     name: None,
                     replace: true,
+                    role_card: None,
+                },
+            ),
+            // 0.60: what a studio may do, and a renewal no session asked
+            // for, are a person's calls too.
+            (
+                5,
+                ClientRequest::SetStudio {
+                    req_id: 5,
+                    project: nebula_core::ProjectId("p".into()),
+                    studio: Some(nebula_core::studio::StudioSettings::default()),
+                },
+            ),
+            (
+                6,
+                ClientRequest::RenewOrchestrator {
+                    req_id: 6,
+                    caller: None,
+                    note: std::path::PathBuf::from("handover.md"),
+                    profile: None,
+                    model: None,
+                    keep_old: false,
+                    now: true,
                 },
             ),
         ] {
@@ -2083,6 +2511,25 @@ mod tests {
             assert!(err.contains("inside an agent session"), "{err}");
         }
         assert!(daemon.store.orchestrator().unwrap().is_none());
+        // From outside every session the studio request reaches the daemon
+        // (whose queue lane answers it).
+        client.peer_pid = Some(std::process::id());
+        client
+            .handle_request(ClientRequest::SetStudio {
+                req_id: 7,
+                project: nebula_core::ProjectId("p".into()),
+                studio: None,
+            })
+            .await
+            .unwrap();
+        let reached = error_for(&mut rx, 7).await;
+        assert!(
+            !reached
+                .as_deref()
+                .is_some_and(|e| e.contains("inside an agent session")),
+            "{reached:?}"
+        );
+        client.peer_pid = Some(root);
 
         // From outside every session: allowed.
         client.peer_pid = Some(std::process::id());

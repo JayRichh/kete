@@ -6,6 +6,7 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { WacupControl, WacupState } from './shell/wacup';
 import type { WakeNowResult, WakeOverview, WakeSchedule } from './wake/types';
+import type { LedgerRow, RenewEvent, RenewState, RoleRow, SessionRole, SpendRow, StudioQueueRow, StudioRepo, StudioSettings } from './studio/types';
 
 export type AgentStatus =
   | 'fresh'
@@ -181,6 +182,8 @@ export interface AccountRow {
   /** Flagged default, on or off: a flagged one that is off keeps a dim star. */
   flaggedDefault?: boolean;
   disabled: boolean;
+  /** Kept for the person: automation never picks it. */
+  reserved?: boolean;
   useDefault: boolean;
   /** Credentials found or not; not proof that they still work. */
   login: 'logged_in' | 'needs_login' | 'unknown';
@@ -268,6 +271,10 @@ export interface Model {
   hidden: Record<Lane, number>;
   /** The scope the lanes are narrowed to. */
   scope: Scope;
+  /** Role cards by agent id (a 66+ daemon pushes it). */
+  roles?: Record<string, SessionRole>;
+  /** Today's spend by agent id (a 66+ daemon pushes it). */
+  spend?: Record<string, SpendRow>;
 }
 
 /** `SessionRef` exactly as serde spells it: externally tagged. */
@@ -715,6 +722,7 @@ export const api = {
   /** Wake an account now, whatever its schedule (`kete wake <account> --force`). */
   wakeNow: (account: string) => invoke<WakeNowResult[]>('wake_now', { account }),
   profileSetEnabled: (name: string, enabled: boolean) => invoke<null>('profile_set_enabled', { name, enabled }),
+  profileSetReserved: (name: string, reserved: boolean) => invoke<null>('profile_set_reserved', { name, reserved }),
   /** A new terminal in `worktree` running the account's login command; its id. */
   accountLoginRun: (worktree: string, key: string) => invoke<string>('account_login_run', { worktree, key }),
   /** What "auto" would pick on a harness now (in `project`, an id, when
@@ -786,6 +794,22 @@ export const api = {
   clearOrchestrator: () => invoke<void>('clear_orchestrator'),
   readSession: (agent: string) => invoke<string>('read_session', { agent }),
   onReview: (f: (r: ReviewOpened) => void) => listen<ReviewOpened>('kete://review', (e) => f(e.payload)),
+  // Studio mode
+  studioRepos: () => invoke<StudioRepo[]>('studio_repos'),
+  studioQueue: (repo: string | null, run: boolean) => invoke<StudioQueueRow[]>('studio_queue', { repo, run }),
+  studioSet: (repo: string, studio: StudioSettings | null) => invoke<void>('studio_set', { repo, studio }),
+  studioBoard: (repo: string) => invoke<unknown>('studio_board', { repo }),
+  gauntletList: (repo: string) => invoke<unknown>('gauntlet_list', { repo }),
+  gauntletEvidence: (repo: string, ev: string) => invoke<unknown>('gauntlet_evidence', { repo, ev }),
+  gauntletOpenStudio: (repo: string, kind: string, id: string) => invoke<void>('gauntlet_open_studio', { repo, kind, id }),
+  triageSubmit: (repo: string, text: string, target: string | null) => invoke<unknown>('triage_submit', { repo, text, target }),
+  triageTail: (repo: string) => invoke<unknown>('triage_tail', { repo }),
+  rolesList: (repo: string) => invoke<RoleRow[]>('roles_list', { repo }),
+  orchestratorRenew: (note: string, profile: string | null, keepOld: boolean, now: boolean) =>
+    invoke<RenewState>('orchestrator_renew', { note, profile, keepOld, now }),
+  usageLedger: (since: string | null, until: string | null, repo: string | null) => invoke<LedgerRow[]>('usage_ledger', { since, until, repo }),
+  usageExport: () => invoke<string>('usage_export'),
+  onRenewal: (f: (e: RenewEvent) => void) => listen<RenewEvent>('orchestrator-renewal', (e) => f(e.payload)),
 };
 
 export interface StartOrchestrator {

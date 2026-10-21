@@ -4,10 +4,12 @@ pub mod config;
 pub mod git;
 pub mod handoff;
 pub mod hooks;
+pub mod launch_overlay;
 pub mod lifecycle;
 pub mod metrics;
 pub mod open_files;
 pub mod orchestrator;
+pub mod orchestrator_renew;
 pub mod platform;
 pub mod pr_scope;
 pub mod prompt_history;
@@ -18,6 +20,7 @@ pub mod session_context;
 pub mod session_model;
 pub mod session_title;
 pub mod sibling;
+pub mod state_map;
 pub mod status;
 pub mod store;
 pub mod worktree_hooks;
@@ -392,11 +395,18 @@ async fn serve(opts: DaemonOpts) -> Result<()> {
                         daemon.tick_status_machines();
                         daemon.reap_prewarmed();
                         daemon.sweep_subagents();
+                        // The studio queue runner (0.60): an idle note to an
+                        // idle orchestrator when a studio inbox has news.
+                        registry::studio_queue::tick(&daemon);
                     }
                 }
             }
         });
     }
+
+    // STATE MAP (0.60, K10): each studio repo's `.kete/state-map.json`,
+    // rebuilt on session events and every minute.
+    state_map::spawn(daemon.clone());
 
     // WORKTREE PORTS watcher: which ports each worktree's sessions listen
     // on, re-read every few seconds and broadcast when it changes — a dev

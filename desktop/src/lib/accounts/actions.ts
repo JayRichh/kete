@@ -14,6 +14,7 @@ import { keysOf, withKey } from '../shortcuts';
 import { copyText } from '../menus/clipboard';
 import { sessionHarness } from './usage';
 import { removeWarning } from './pick';
+import { setReserved, type ReservableRow } from './reserve';
 import {
   canSwitch,
   nameProblem,
@@ -150,6 +151,17 @@ export async function setAccountEnabled(r: AccountRow) {
   try {
     await api.profileSetEnabled(r.name, r.disabled);
     toast(r.disabled ? `${r.name} is on.` : `${r.name} is off: launches that pick no account skip it.`);
+    refreshLaunchables();
+  } catch (e) {
+    toast(String(e));
+  }
+}
+
+/** Reserve a profile for the person's own sessions, or give it back. */
+export async function setAccountReserved(r: ReservableRow) {
+  try {
+    await setReserved(r.name, !r.reserved);
+    toast(r.reserved ? `${r.name} is no longer reserved.` : `${r.name} is reserved: the orchestrator and scripts never pick it.`);
     refreshLaunchables();
   } catch (e) {
     toast(String(e));

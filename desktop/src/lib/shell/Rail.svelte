@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { app, openSettings, revealRepo, setThemePref, toast } from '../store.svelte';
+  import { app, openGauntlet, openSettings, openStudio, revealRepo, setThemePref, toast } from '../store.svelte';
   import { nextTheme, themeLabel } from '../look';
   import { look } from '../look.svelte';
   import { api } from '../api';
@@ -12,6 +12,7 @@
   import AccountsSection from '../accounts/AccountsSection.svelte';
   import { openAccounts } from '../accounts/actions';
   import { openWake } from '../wake/state.svelte';
+  import { showStudioRail } from '../studio/types';
   import VersionPlate from './VersionPlate.svelte';
   import { drag, dropProject, endDrag, leftFor, moveOnto, offsetIn, rootOf, startDrag } from '../reorder.svelte';
   import { dropZone, type Zone } from '../order';
@@ -31,6 +32,11 @@
   const here = $derived(nav.current.repo);
   const inSettings = $derived(nav.current.view === 'settings');
   const inWake = $derived(nav.current.view === 'whakaoho');
+  const inStudio = $derived(nav.current.view === 'studio');
+  const inGauntlet = $derived(nav.current.view === 'gauntlet');
+  const studio = $derived(showStudioRail(app.studioRepos));
+  const STUDIO_TITLE = 'Studio: the board and the idle-note queue of the repos with studio mode';
+  const GAUNTLET_TITLE = 'Gauntlet: the sign-offs and verdicts of the repos with studio mode';
   /** Whakaoho, a middle dot, Wake-up (the dot is built, not typed: sources stay ASCII). */
   const WAKE_TITLE = `Whakaoho ${String.fromCharCode(0xb7)} Wake-up: start each account's 5-hour window earlier`;
   let adding = $state(false);
@@ -197,6 +203,28 @@
     </nav>
     <div class="flex flex-none flex-col gap-1 border-t border-rule py-2">
       <!-- The rail's Accounts section has no room here: its view does. -->
+      {#if studio}
+        <button
+          class="{tile} text-[11px] {inStudio ? 'bg-surface text-ink' : 'bg-transparent text-muted hover:text-ink'}"
+          data-rail="studio"
+          onclick={() => openStudio(nav.current.repo)}
+          title={STUDIO_TITLE}
+          aria-label="Studio"
+          aria-current={inStudio ? 'page' : undefined}
+        >
+          <span aria-hidden="true">St</span>
+        </button>
+        <button
+          class="{tile} text-[11px] {inGauntlet ? 'bg-surface text-ink' : 'bg-transparent text-muted hover:text-ink'}"
+          data-rail="gauntlet"
+          onclick={() => openGauntlet(nav.current.repo)}
+          title={GAUNTLET_TITLE}
+          aria-label="Gauntlet"
+          aria-current={inGauntlet ? 'page' : undefined}
+        >
+          <span aria-hidden="true">Ga</span>
+        </button>
+      {/if}
       <button
         class="{tile} text-[11px] {nav.current.view === 'accounts' ? 'bg-surface text-ink' : 'bg-transparent text-muted hover:text-ink'}"
         onclick={openAccounts}
@@ -379,6 +407,26 @@
         {@render sunrise()}
         <span class="min-w-0 flex-1 truncate">Whakaoho</span>
       </button>
+      {#if studio}
+        <button
+          class="{item} text-[13px] {inStudio ? 'bg-surface text-ink' : 'bg-transparent text-muted hover:text-ink'}"
+          data-rail="studio"
+          onclick={() => openStudio(nav.current.repo)}
+          title={STUDIO_TITLE}
+          aria-current={inStudio ? 'page' : undefined}
+        >
+          <span class="min-w-0 flex-1 truncate">Studio</span>
+        </button>
+        <button
+          class="{item} text-[13px] {inGauntlet ? 'bg-surface text-ink' : 'bg-transparent text-muted hover:text-ink'}"
+          data-rail="gauntlet"
+          onclick={() => openGauntlet(nav.current.repo)}
+          title={GAUNTLET_TITLE}
+          aria-current={inGauntlet ? 'page' : undefined}
+        >
+          <span class="min-w-0 flex-1 truncate">Gauntlet</span>
+        </button>
+      {/if}
     </div>
   </nav>
 

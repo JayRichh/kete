@@ -386,6 +386,7 @@ pub fn auto_pick<'a>(
         harness,
         project_default,
         policy,
+        nebula_core::accounts::Launcher::Person,
         nebula_core::clock::now_secs() as i64,
         |key| readings.iter().find(|u| u.account == key).cloned(),
     )
@@ -1749,6 +1750,7 @@ mod tests {
             default,
             use_default: false,
             disabled,
+            reserved: false,
         };
         let cfg = Config {
             profiles: vec![
@@ -1813,6 +1815,7 @@ mod tests {
             default,
             use_default: false,
             disabled: false,
+            reserved: false,
         };
         let cfg = Config {
             profiles: vec![

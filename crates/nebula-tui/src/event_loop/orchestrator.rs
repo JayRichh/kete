@@ -201,6 +201,7 @@ fn start_orchestrator(app: &mut App, start: &StartView, out: &mut Vec<ClientRequ
             project: start.project_id(),
             name: start.name_value(),
             replace: false,
+            role_card: None,
         }
     });
 }
@@ -212,10 +213,17 @@ pub(crate) fn handle_view_key(app: &mut App, key: KeyEvent, out: &mut Vec<Client
     if !view::active(app) || app.pane.term_locked || app.modals.overlay.is_some() {
         return false;
     }
+    // The TRIAGE STRIP (0.60) takes the keys while its line is open.
+    if crate::triage_strip::handle_key(app, key) {
+        app.chrome.dirty = true;
+        return true;
+    }
     let chips = view::chips(app);
     let chord = crate::keymap::KeyChord::from_event(&key);
     match key.code {
         _ if chord == HARDWIRED_UNLOCK => leave_view(app),
+        // `t`: one line for the studio's triage desk (`triage_strip`).
+        KeyCode::Char('t') => crate::triage_strip::open(app),
         KeyCode::Left | KeyCode::Char('h') if !chips.is_empty() => {
             app.orch.chip = (app.orch.chip + chips.len() - 1) % chips.len();
         }

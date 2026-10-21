@@ -1282,6 +1282,9 @@ pub enum PromptKind {
     AskAside {
         id: AgentId,
     },
+    /// The handover note a renewed orchestrator starts on (0.60, the
+    /// `renew_orchestrator` verb; `renew_view::submit` takes the Enter).
+    RenewNote,
     /// A comment to post on the pull request under the cursor — a
     /// PROJECT OPEN PRS GROUP row or the Sessions panel's PR ROW — with
     /// `gh pr comment` (`y`, or **Comment…** from the row's menu).
@@ -3021,6 +3024,12 @@ pub enum Overlay {
     Ship(crate::ship_view::ShipView),
     /// The CRITTER LOG: every species, seen or a silhouette.
     CritterLog(crate::critters::LogView),
+    /// The STUDIO BOARD (0.60, the board lane's `studio_board`).
+    StudioBoard(crate::studio_board::BoardView),
+    /// The GAUNTLET VIEW (0.60, the gauntlet lane's `gauntlet_view`).
+    Gauntlet(crate::gauntlet_view::GauntletView),
+    /// The STATE MAP (0.60, K10's `state_overlay`), `s` on the studio board.
+    StateMap(crate::state_overlay::StateMapView),
 }
 
 /// Rows optimistically removed for an in-flight DeleteWorktree, kept so an
@@ -5335,7 +5344,18 @@ pub struct App {
     pub learn: crate::learn::Learn,
     /// The CRITTERS overlay (an easter egg; `crate::critters`).
     pub critters: crate::critters::Critters,
+    /// Every live role session's role (`ServerEvent::SessionRoles`, a 66+
+    /// daemon), replaced whole by each push.
+    pub session_roles: std::collections::HashMap<nebula_core::AgentId, SessionRole>,
+    /// Today's spend per session (`ServerEvent::SessionSpend`), folded in
+    /// by agent id.
+    pub session_spend: std::collections::HashMap<nebula_core::AgentId, SpendRow>,
+    /// Which projects are studio repos, for the menus' studio rows
+    /// (`ipc_studio::StudioRepos`: read off the key path).
+    pub studio_repos: crate::ipc_studio::StudioRepos,
 }
+
+use nebula_core::studio::wire::{SessionRole, SpendRow};
 
 impl Default for App {
     fn default() -> Self {
@@ -5359,6 +5379,9 @@ impl App {
             desk: crate::desk::DeskState::default(),
             learn: crate::learn::Learn::default(),
             critters: crate::critters::Critters::new(),
+            session_roles: Default::default(),
+            session_spend: Default::default(),
+            studio_repos: Default::default(),
         };
         app.launcher.columns_recent_prompts_count = 3;
         app

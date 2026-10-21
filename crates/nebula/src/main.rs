@@ -3,21 +3,29 @@ mod browser;
 mod cli;
 mod desktop;
 mod editors;
+mod guard;
 mod hook;
+mod orchestrator_renew;
 mod profile;
+mod roles;
 mod setup;
 mod ship;
 mod ssh;
+mod state;
 mod statusline;
+mod studio;
+mod studio_note;
 mod tunnel;
 mod upgrade;
+mod usage;
 mod wake;
 
 use anyhow::Result;
 use cli::{
     Command, ConfigCommand, EditorsCommand, OrchestratorCommand, ProfileCommand, SessionCommand,
-    SetupCommand, WakeAction,
+    SetupCommand, StudioCommand, WakeAction,
 };
+
 use std::path::Path;
 
 fn main() -> Result<()> {
@@ -67,7 +75,20 @@ fn main() -> Result<()> {
             ConfigCommand::Harnesses => nebula_tui::ConfigOp::Harnesses,
         }),
         Some(Command::Profile { command }) => profile::run_profile(match command {
-            ProfileCommand::List => profile::ProfileOp::List,
+            ProfileCommand::List { json } => profile::ProfileOp::List { json },
+            ProfileCommand::Pick {
+                harness,
+                project,
+                dry_run,
+                json,
+            } => profile::ProfileOp::Pick {
+                harness,
+                project,
+                dry_run,
+                json,
+            },
+            ProfileCommand::Reserve { name } => profile::ProfileOp::Reserve(name),
+            ProfileCommand::Unreserve { name } => profile::ProfileOp::Unreserve(name),
             ProfileCommand::Add {
                 name,
                 harness,
@@ -185,7 +206,46 @@ fn main() -> Result<()> {
             worktree,
             base,
             profile,
-        }) => nebula_tui::run_spawn(task.join(" "), kind, worktree, base, profile),
+            role,
+        }) => nebula_tui::run_spawn(task.join(" "), kind, worktree, base, profile, role),
+        // 0.60: studio mode, roles and the usage ledger, each dispatched to
+        // its lane's file.
+        Some(Command::Studio { command }) => match command {
+            StudioCommand::Note {
+                text,
+                project,
+                to,
+                about,
+                priority,
+                triage,
+                json,
+            } => studio_note::run(studio_note::NoteArgs {
+                text: text.join(" "),
+                project,
+                to,
+                about,
+                priority,
+                triage,
+                json,
+            }),
+            other => studio::run(other),
+        },
+        Some(Command::Roles { command }) => roles::run(command),
+        Some(Command::State { repo, slice, json }) => state::run(repo, slice, json),
+        Some(Command::Usage {
+            since,
+            until,
+            project,
+            by,
+            csv,
+        }) => usage::run(usage::UsageArgs {
+            since,
+            until,
+            project,
+            by,
+            csv,
+        }),
+        Some(Command::Guard { session }) => std::process::exit(guard::run(session)),
         Some(Command::Open { files }) => nebula_tui::run_open(files),
         Some(Command::Sessions { json }) => nebula_tui::run_sessions(json),
         Some(Command::Session { command }) => match command {
@@ -212,6 +272,7 @@ fn main() -> Result<()> {
                 project,
                 name,
                 replace,
+                role,
             } => nebula_tui::run_orchestrator_start(nebula_tui::ipc::StartArgs {
                 kind,
                 model,
@@ -220,6 +281,7 @@ fn main() -> Result<()> {
                 project,
                 name,
                 replace,
+                role_card: role,
             }),
             OrchestratorCommand::Status { json } => nebula_tui::run_orchestrator_status(json),
             OrchestratorCommand::Clear => nebula_tui::run_orchestrator_clear(),
@@ -243,6 +305,7 @@ fn main() -> Result<()> {
                 model,
                 effort,
                 profile,
+                role,
                 task,
             } => {
                 let task = task.join(" ");
@@ -256,8 +319,26 @@ fn main() -> Result<()> {
                     effort,
                     profile,
                     task: &task,
+                    role_card: role,
                 })
             }
+            OrchestratorCommand::Renew {
+                from,
+                profile,
+                pick,
+                model,
+                keep_old,
+                now,
+                json,
+            } => orchestrator_renew::run(orchestrator_renew::RenewArgs {
+                from,
+                profile,
+                pick,
+                model,
+                keep_old,
+                now,
+                json,
+            }),
             OrchestratorCommand::Review { sessions, tabs } => {
                 nebula_tui::run_orchestrator_review(&sessions, tabs)
             }
@@ -408,6 +489,9 @@ fn opens_state(command: &Option<Command>) -> bool {
                 | Command::Setup { .. }
                 | Command::Desktop { .. }
                 | Command::Hook { .. }
+                // Runs on every shell command a role session makes: it
+                // reads its settings and the studio map, nothing to carry.
+                | Command::Guard { .. }
                 | Command::ProtocolVersion
                 | Command::ProtocolMinCompatibleVersion
                 | Command::RestartVersion

@@ -40,7 +40,13 @@ impl Daemon {
             .flatten()
             .map(|p| p.repo_path);
         let profile = match resolve_harness(kind, None) {
-            Ok(harness) => resolve_profile_name(&harness, None, repo.as_deref()).unwrap_or(None),
+            Ok(harness) => resolve_profile_name(
+                &harness,
+                None,
+                repo.as_deref(),
+                nebula_core::accounts::Launcher::Person,
+            )
+            .unwrap_or(None),
             Err(_) => None,
         };
         let stale = {

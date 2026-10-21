@@ -302,6 +302,9 @@ impl Daemon {
         }
         let now = nebula_core::clock::now_ms();
         let reading = usage::claude_statusline(body);
+        // The USAGE LEDGER keeps the latest cost estimate per session
+        // (`ledger.rs`), from the parsed reading and the raw JSON.
+        self.ledger_on_statusline(agent_id, &reading, body);
         if let Some(level) = &reading.effort {
             self.adopt_claude_effort(agent_id, level);
         }

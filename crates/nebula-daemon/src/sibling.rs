@@ -158,6 +158,8 @@ impl Daemon {
             pr_url: None,
             issue_url: None,
             role: nebula_core::AgentRole::Worker,
+            role_card: None,
+            launcher: nebula_core::accounts::Launcher::Person,
         })
     }
 
@@ -166,8 +168,10 @@ impl Daemon {
     /// prompt — in the caller's worktree, or with `worktree` in the
     /// caller's PROJECT's worktree on that branch, cut first when there is
     /// none. `profile` is the account it runs on (`--profile`), None for
-    /// the usual pick. Returns the new row's id; a created worktree and the
-    /// agent reach every client through the ordinary create paths.
+    /// the usual pick; `role_card` the role it launches with (`--role`,
+    /// `SpawnSiblingAgentWith`). Returns the new row's id; a created
+    /// worktree and the agent reach every client through the ordinary
+    /// create paths.
     pub async fn spawn_sibling_agent(
         self: &Arc<Self>,
         id: &AgentId,
@@ -175,6 +179,7 @@ impl Daemon {
         worktree: Option<SiblingWorktree<'_>>,
         starting_prompt: &str,
         profile: Option<&str>,
+        role_card: Option<&str>,
     ) -> Result<EntityId> {
         let caller = self.spawning_caller(id)?;
         let target = match worktree {
@@ -209,7 +214,8 @@ impl Daemon {
                     .id
             }
         };
-        let spec = self.sibling_spec(&caller, kind, &target, starting_prompt, profile)?;
+        let mut spec = self.sibling_spec(&caller, kind, &target, starting_prompt, profile)?;
+        spec.role_card = role_card.map(str::to_string);
         self.create_agent(spec).await
     }
 }
@@ -400,7 +406,7 @@ mod tests {
             .insert_agent(&agent("agent-1", "feat", AgentKind::Claude, None))
             .unwrap();
         let err = daemon
-            .spawn_sibling_agent(&AgentId("agent-1".into()), None, None, " \n ", None)
+            .spawn_sibling_agent(&AgentId("agent-1".into()), None, None, " \n ", None, None)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("is empty"), "{err}");
@@ -472,19 +478,26 @@ mod tests {
             base: None,
         };
         let err = daemon
-            .spawn_sibling_agent(&caller, None, Some(blank_branch), "Fix it", None)
+            .spawn_sibling_agent(&caller, None, Some(blank_branch), "Fix it", None, None)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("branch name is empty"), "{err}");
 
         let err = daemon
-            .spawn_sibling_agent(&caller, None, Some(fresh), " \n ", None)
+            .spawn_sibling_agent(&caller, None, Some(fresh), " \n ", None, None)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("is empty"), "{err}");
 
         let err = daemon
-            .spawn_sibling_agent(&AgentId("nope".into()), None, Some(fresh), "Fix it", None)
+            .spawn_sibling_agent(
+                &AgentId("nope".into()),
+                None,
+                Some(fresh),
+                "Fix it",
+                None,
+                None,
+            )
             .await
             .unwrap_err();
         assert!(err.to_string().contains("agent not found"), "{err}");
@@ -501,6 +514,7 @@ mod tests {
                 None,
                 Some(fresh),
                 "Fix it",
+                None,
                 None,
             )
             .await
@@ -522,7 +536,7 @@ mod tests {
             ]);
             for profile in ["gone", "gpt"] {
                 let err = daemon
-                    .spawn_sibling_agent(&caller, None, Some(fresh), "Fix it", Some(profile))
+                    .spawn_sibling_agent(&caller, None, Some(fresh), "Fix it", Some(profile), None)
                     .await
                     .unwrap_err();
                 assert!(err.to_string().contains(profile), "{profile}: {err}");

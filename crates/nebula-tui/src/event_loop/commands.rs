@@ -262,6 +262,8 @@ fn dispatch_prompt(
             }
         }
         PromptKind::AskAside { id } => ask_aside(app, id, value, out),
+        // 0.60: the renew lane's (`renew_view`).
+        PromptKind::RenewNote => crate::renew_view::submit(app, value),
         PromptKind::RenameAgent { id } => optimistic::rename_agent(app, id, value, out),
         PromptKind::RenameTerminal { id } => optimistic::rename_terminal(app, id, value, out),
         PromptKind::CritterName { id } => crate::critters::rename(app, id, &value),

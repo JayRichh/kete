@@ -286,7 +286,7 @@ pub fn a_048_data_dir_upgrades_in_place() {
     let version: i64 = db
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 35);
+    assert_eq!(version, 37);
     let ns: String = db
         .query_row("SELECT daemon_id FROM daemon_identity", [], |r| r.get(0))
         .unwrap();

@@ -26,6 +26,10 @@ kete read <session>       read recent context from another session    (agents ru
 kete ask <session> <q>    ask another session and print its answer    (agents run this)
 kete orchestrator <cmd>   start the one orchestrator; its own verbs   (see Orchestrator)
 kete ado <cmd>            Azure DevOps tasks, task worktrees, PRs     (see Azure DevOps)
+kete studio <cmd>         studio mode: inbox, autonomy, queue, notes  (see Studio mode)
+kete roles <cmd>          what each role card gets; bypass acceptance (see Studio mode)
+kete usage                tokens, estimated cost and turns per session per day
+kete state                a studio repo's state map: the tree, a slice   (agents run this)
 kete config <cmd>         back up, restore or locate this machine's settings
 kete profile <cmd>        several accounts per harness: add, sign in, rename, spread, remove
 kete wake <cmd>           start accounts' 5-hour windows early at an hour you pick (Whakaoho)
@@ -81,7 +85,7 @@ kete worktree [name] [--base <ref>]  # move the current session into a worktree 
                           # but is ignored when the branch already exists; without it the
                           # worktree_base_branch setting applies, else origin's default)
 kete spawn <task> [--kind <claude|codex|cursor|pi|muse|grok|opencode|copilot>] [--worktree <branch> [--base <ref>]]
-           [--profile <name>]
+           [--profile <name>] [--role <id>]
                           # start a new agent session beside the current one, in the same worktree,
                           # opening on <task> (agents run this when you ask for a new kete session;
                           # --kind defaults to this session's harness; custom harnesses launch from
@@ -91,7 +95,10 @@ kete spawn <task> [--kind <claude|codex|cursor|pi|muse|grok|opencode|copilot>] [
                           # branch already exists), and leaves this session where it is;
                           # --profile runs it on that account (one for its harness; default:
                           # this session's account on this harness, else the harness's default;
-                          # needs daemon protocol 58, an older daemon is asked to update)
+                          # needs daemon protocol 58, an older daemon is asked to update);
+                          # --role launches it with a role card from the repo's
+                          # .kete/roles.toml: its model, tools, prompt and permissions (needs
+                          # daemon protocol 66; see Studio mode)
 kete open <file>…       # show the files in this kete's FILE TABS, a modal with one tab per
                           # file, the focused one previewed, Enter editing it (agents run this only
                           # when you ask to see a file, image, mockup or diagram; text files,
@@ -109,15 +116,31 @@ kete ask <session> "<question>" [--timeout S] [--no-wait]
                           # to finish, and print the answer. A busy target is queued until idle by
                           # default; --no-wait fails fast instead.
 kete orchestrator start [--kind K] [--model M] [--effort E] [--profile P] [--project X]
-                        [--name N] [--replace]
+                        [--name N] [--replace] [--role R]
                           # start the machine's one orchestrator (F10 in kete does the same),
                           # in its own workspace under the data dir unless --project names one.
+                          # --role launches it with a role card from that project's
+                          # .kete/roles.toml (needs daemon protocol 66).
 kete orchestrator status [--json]
                           # which session is the orchestrator, where it runs, what it is doing.
 kete orchestrator clear   # unpin it; the session keeps running as a worker.
 kete orchestrator list|read|send|spawn|review
                           # the orchestrator session's own verbs, refused for every other caller.
                           # See docs/orchestrator.md.
+kete orchestrator spawn --project P [--worktree W] [--base R] [--kind K] [--name N] [--model M]
+                        [--effort E] [--profile P] [--role R] <task>
+                          # --role launches the worker with a role card from the project's
+                          # .kete/roles.toml (needs daemon protocol 66). In a repo with studio
+                          # mode on, autonomy A0 refuses the spawn.
+kete orchestrator renew --from <note> [--profile P | --pick] [--model M] [--keep-old] [--now] [--json]
+                          # hand the orchestrator over to a fresh session. The new one starts on
+                          # the handover <note> (a file in the orchestrator's workspace or a
+                          # registered project) as its first prompt once the current turn ends,
+                          # takes the role, and the old one is archived. --profile or --pick
+                          # (kete's pick, as `kete profile pick`) chooses the account, --model
+                          # the model; both default to the old session's. --keep-old leaves the
+                          # old session running as a worker. --now swaps at once. Run by the
+                          # orchestrator itself, or by you from your own shell.
 ```
 
 ## Azure DevOps
@@ -213,7 +236,20 @@ kete profile add <name> --harness <h> [--use-default] [--default] [--env K=V]…
 kete profile login <name> [-- <args>]
                                 # run the harness's sign-in here under the profile:
                                 # claude auth login --claudeai, codex login, copilot login
-kete profile list             # accounts: 5h and weekly usage bars, defaults, login state
+kete profile list [--json]    # accounts: 5h and weekly usage bars, defaults, login state;
+                                # --json adds each account's windows, live sessions and holds,
+                                # and whether it is reserved
+kete profile pick [--harness H] [--project P] [--dry-run] [--json]
+                                # the account a scripted launch should take, and why: prints its
+                                # name (--json: the name, the reason and every candidate).
+                                # Reserved and switched-off accounts are never candidates, and
+                                # the spread `manual` counts as `least_used`. It holds the
+                                # account for 10 minutes so the next pick spreads;
+                                # --dry-run shows the candidates and holds nothing. --harness
+                                # defaults to claude. Exits 3 when no account is eligible
+kete profile reserve <name>   # keep it for your own sessions: still the default for launches
+                                # you start, never picked for ones the orchestrator or a script starts
+kete profile unreserve <name> # let scripts pick it again
 kete profile default <name>   # launches that pick no profile take it
 kete profile enable <name>    # pickable again by launches that name no profile
 kete profile disable <name>   # never picked unless named
@@ -231,6 +267,57 @@ kete session move-account <session> [<profile> | --own-login]
 ```
 
 See [Profiles](profiles.md).
+
+## Studio mode
+
+A repo opts in with `.kete/studio.toml` and you switch it on per machine. `<project>` is a project's name or id. Only you change the autonomy level or the studio settings: the daemon refuses `enable`, `disable`, `autonomy`, `exclude` and `include` from inside an agent session. See [Studio mode](studio.md).
+
+```sh
+kete studio enable <project> [--inbox DIR]
+                                # switch studio mode on for the repo at autonomy A1 (Plan); the
+                                # inbox is the manifest's `inbox` unless --inbox (relative to
+                                # the repo root) names one
+kete studio disable <project> # switch it off; the repo's entry is removed
+kete studio status [--json]   # every studio repo: autonomy, inbox, open notes and notes for
+                                # you, the next notes, why the runner is holding, the last idle note
+kete studio autonomy <project> [A0|A1|A2|A3]
+                                # print the level, or set it: A0 Hold, A1 Plan (default),
+                                # A2 Deliver, A3 Release
+kete studio exclude <project> <id-or-about>
+                                # leave a note (by id) or every note with that `about` out of the queue
+kete studio include <project> <id-or-about>
+                                # hand it back
+kete studio queue [--project P] [--now] [--json]
+                                # what the queue runner would send the orchestrator now;
+                                # --now sends it if every condition for an idle note holds
+kete studio note <text>… [--project P] [--to R] [--about A] [--priority high|normal|low]
+                         [--triage] [--json]
+                                # file one inbox note; the id is the date and the first words.
+                                # --to is a recipient, a department slug or jay (default: triage),
+                                # --triage hands the note to the triage desk to route.
+                                # Exits 3 when an open note already says the same
+```
+
+```sh
+kete roles check [--project P] [--role R] [--json]
+                                # what each role in the repo's committed .kete/roles.toml gets:
+                                # the flags and the settings file, as a launch would apply them
+                                # (--project defaults to the project you are in)
+kete roles accept-bypass <profile>
+                                # run Claude in bypass mode under that account, here, so you answer
+                                # its one-time dialog; roles marked `unattended` run only on
+                                # accounts that did. Refused inside a kete session
+kete usage [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--project P] [--by session|day|role] [--csv]
+                                # the usage ledger: tokens, estimated cost, tool uses and turns,
+                                # one row per session per local day. Today by session unless told
+                                # otherwise; both dates are inclusive; --csv prints every row as CSV
+kete state [<repo>] [--slice <node>] [--json]
+                                # the state map the daemon keeps in .kete/state-map.json: the tree,
+                                # or one node's slice (under 2 KB) an agent reads; --json prints the
+                                # map, or the node and its edges. <repo> defaults to where you are
+```
+
+`--role <id>` is also a flag of `kete spawn`, `kete orchestrator spawn` and `kete orchestrator start`, and `kete orchestrator renew` hands the orchestrator over (see [What agents run for you](#what-agents-run-for-you)). More: [Studio queue](studio-queue.md), [Roles](roles.md), [Usage ledger](usage-ledger.md), [Triage](triage.md), [State map](state-map.md).
 
 ## Wake-up (Whakaoho)
 

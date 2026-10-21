@@ -158,6 +158,7 @@ fn spread_note(
         harness,
         project_default,
         policy,
+        nebula_core::accounts::Launcher::Person,
         nebula_core::clock::now_secs() as i64,
         nebula_core::usage::read_account,
     );

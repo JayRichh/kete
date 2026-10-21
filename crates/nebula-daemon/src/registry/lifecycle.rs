@@ -419,12 +419,19 @@ impl Daemon {
         self.kill_session(&SessionRef::Agent(id.clone()));
         self.store.set_agent_archived(id, true)?;
         self.broadcast_agent(id)?;
+        // A role session leaving (0.60): every 66 peer's role list follows.
+        if self.role_card_of(id).is_some() {
+            self.broadcast_session_roles();
+        }
         Ok(())
     }
 
     pub fn unarchive_agent(self: &Arc<Self>, id: &AgentId) -> Result<()> {
         self.store.set_agent_archived(id, false)?;
         self.broadcast_agent(id)?;
+        if self.role_card_of(id).is_some() {
+            self.broadcast_session_roles();
+        }
         Ok(())
     }
 

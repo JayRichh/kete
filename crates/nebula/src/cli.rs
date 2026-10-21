@@ -220,6 +220,11 @@ pub(crate) enum Command {
         /// else the harness's default account. Needs daemon protocol 58.
         #[arg(long, value_name = "NAME")]
         profile: Option<String>,
+        /// The role card (an id in the repo's `.kete/roles.toml`) the new
+        /// session launches with: its model, tools, prompt and permissions.
+        /// Needs daemon protocol 66.
+        #[arg(long, value_name = "ROLE")]
+        role: Option<String>,
     },
     /// Show files to the user inside this kete.
     ///
@@ -565,6 +570,79 @@ pub(crate) enum Command {
     /// reads, so a daemon asked to restart onto it knows it can.
     #[command(hide = true, name = "_restart-version")]
     RestartVersion,
+    /// Studio mode: a repo's inbox, autonomy and queue.
+    ///
+    /// A repo describes itself in `.kete/studio.toml` (its inbox folder,
+    /// departments and verdict folders); what this machine allows it (the
+    /// inbox the queue reads, the autonomy level A0 to A3, notes to leave
+    /// alone) lives in `config.local.json` and only you change it, never a
+    /// session. While the orchestrator sits idle, kete hands it a short note
+    /// naming new inbox notes.
+    #[command(after_help = STUDIO_EXAMPLES)]
+    Studio {
+        #[command(subcommand)]
+        command: StudioCommand,
+    },
+    /// Role cards: what each role gets, and bypass acceptance.
+    ///
+    /// A repo's `.kete/roles.toml` (read from its committed HEAD) names
+    /// roles with a model, effort, tool set, prompt and permission profile.
+    /// `--role <id>` on a spawn applies one.
+    #[command(after_help = ROLES_EXAMPLES)]
+    Roles {
+        #[command(subcommand)]
+        command: RolesCommand,
+    },
+    /// Tokens, cost and turns per session per day.
+    ///
+    /// The usage ledger: input, output and cache tokens, Claude Code's
+    /// estimated cost (a list-price figure, not a bill), tool uses and
+    /// turns, one row per session per local day. Today by session unless
+    /// told otherwise; `--csv` prints the rows as CSV.
+    #[command(after_help = USAGE_EXAMPLES)]
+    Usage {
+        /// First local date to include, YYYY-MM-DD.
+        #[arg(long, value_name = "DATE")]
+        since: Option<String>,
+        /// Last local date to include, YYYY-MM-DD.
+        #[arg(long, value_name = "DATE")]
+        until: Option<String>,
+        /// One project only (id or name).
+        #[arg(long)]
+        project: Option<String>,
+        /// Group the table by session (default), day or role.
+        #[arg(long, value_name = "WHAT", value_parser = ["session", "day", "role"])]
+        by: Option<String>,
+        /// Print every row as CSV instead of a table.
+        #[arg(long)]
+        csv: bool,
+    },
+    /// The state map: what a studio repo holds and who is on it.
+    ///
+    /// Reads `.kete/state-map.json`, which the daemon rebuilds for a repo in
+    /// studio mode: departments, systems, decisions, lanes, pull requests
+    /// and agents. Prints the tree, or with --slice the short text (under
+    /// 2 KB) an agent reads about one node.
+    #[command(after_help = STATE_EXAMPLES)]
+    State {
+        /// The repo, or any checkout of it (default: the current folder).
+        repo: Option<std::path::PathBuf>,
+        /// One node's slice instead of the tree.
+        #[arg(long, value_name = "NODE")]
+        slice: Option<String>,
+        /// Print JSON: the whole map, or with --slice the node and its edges.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Role sessions' PreToolUse guard: refuse a force push and what the
+    /// repo's autonomy denies. Reads the hook payload on stdin; exits 2
+    /// with the reason to refuse, 0 to let the command run.
+    #[command(hide = true, name = "_guard")]
+    Guard {
+        /// The session the hook runs for.
+        #[arg(long)]
+        session: String,
+    },
     /// Agent-CLI hook (the Windows hook command): POST the hook payload on
     /// stdin to the daemon's hook receiver, as the unix `curl` one-liner
     /// does. Inert outside a kete agent session; always exits 0.
@@ -612,6 +690,10 @@ pub(crate) enum OrchestratorCommand {
         /// Replace a running orchestrator; it keeps running as a worker.
         #[arg(long)]
         replace: bool,
+        /// Role card (an id in the project's `.kete/roles.toml`) to launch
+        /// it with. Needs daemon protocol 66.
+        #[arg(long, value_name = "ROLE")]
+        role: Option<String>,
     },
     /// Show which session is the orchestrator and what it is doing.
     Status {
@@ -690,9 +772,43 @@ pub(crate) enum OrchestratorCommand {
         /// PROFILE (account) to run under.
         #[arg(long)]
         profile: Option<String>,
+        /// Role card (an id in the project's `.kete/roles.toml`) the worker
+        /// launches with. Needs daemon protocol 66.
+        #[arg(long, value_name = "ROLE")]
+        role: Option<String>,
         /// Prompt text; multiple words need no quotes.
         #[arg(required = true, num_args = 1..)]
         task: Vec<String>,
+    },
+    /// Hand the orchestrator over to a fresh session.
+    ///
+    /// The new orchestrator starts on the handover note as its first
+    /// prompt once the current turn ends (`--now`: at once), takes the
+    /// role, and the old one is archived (`--keep-old` keeps it as a
+    /// worker). Run by the orchestrator itself, or by you.
+    Renew {
+        /// The handover note: a file in the orchestrator's workspace or a
+        /// registered project.
+        #[arg(long = "from", value_name = "NOTE")]
+        from: std::path::PathBuf,
+        /// The account the new orchestrator runs on (default: the old one's).
+        #[arg(long, conflicts_with = "pick")]
+        profile: Option<String>,
+        /// Let kete pick the account, as `kete profile pick` would.
+        #[arg(long)]
+        pick: bool,
+        /// The model it runs (default: the old one's).
+        #[arg(long)]
+        model: Option<String>,
+        /// Keep the old session running as a worker.
+        #[arg(long)]
+        keep_old: bool,
+        /// Swap now instead of at the end of the current turn.
+        #[arg(long)]
+        now: bool,
+        /// Print JSON instead of a line.
+        #[arg(long)]
+        json: bool,
     },
     /// Open the tabbed review modal in every attached TUI.
     Review {
@@ -1017,6 +1133,33 @@ Examples (the orchestrator session's):
   kete orchestrator spawn --project kete --worktree fix-auth --name auth \"fix the login redirect\"
   kete orchestrator review fix-login agent-2 --tab diff --tab terminal";
 
+const STUDIO_EXAMPLES: &str = "\
+Examples:
+  kete studio enable my-game        studio mode on, at A1 (Plan)
+  kete studio status               each studio repo: autonomy, inbox, counts
+  kete studio autonomy my-game A2   let it deliver: pushes and pull requests
+  kete studio exclude my-game library-sweep-2
+  kete studio queue --now          send the idle note now, if it holds
+  kete studio note \"the storm sky bands at dusk\" --project my-game";
+
+const ROLES_EXAMPLES: &str = "\
+Examples:
+  kete roles check --project my-game       what every role gets
+  kete roles check --role runner --json
+  kete roles accept-bypass max2           answer Claude's bypass dialog";
+
+const USAGE_EXAMPLES: &str = "\
+Examples:
+  kete usage                       today, by session
+  kete usage --since 2026-10-21 --by role
+  kete usage --csv --since 2026-10-21 > ledger.csv";
+
+const STATE_EXAMPLES: &str = "\
+Examples:
+  kete state                       the tree of the repo you are in
+  kete state --slice D-012         what an agent reads about one node
+  kete state ../game --json        the whole map as JSON";
+
 const BROWSER_EXAMPLES: &str = "\
 Examples:
   kete browser                   serve on 127.0.0.1:7681, open a tab
@@ -1182,7 +1325,39 @@ pub(crate) enum EditorsCommand {
 pub(crate) enum ProfileCommand {
     /// List the accounts: harness, default and off flags, 5h and weekly
     /// usage bars, and whether each is signed in.
-    List,
+    List {
+        /// Print JSON: every account with its windows, live sessions and
+        /// holds.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Name the account a scripted launch should take, and why.
+    ///
+    /// The pick for automation: reserved and switched-off accounts are
+    /// never candidates. It holds the account for 10 minutes so the next
+    /// pick spreads; `--dry-run` shows every candidate and holds nothing.
+    /// Exits 3 when no account is eligible.
+    Pick {
+        /// The harness to pick for (default: claude).
+        #[arg(long)]
+        harness: Option<String>,
+        /// The project whose default account counts (id or name).
+        #[arg(long)]
+        project: Option<String>,
+        /// Show the candidates; hold nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Print JSON instead of the name.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Keep an account for your own sessions.
+    ///
+    /// A reserved account stays the default for the sessions you start and
+    /// is never picked for one the orchestrator or a script starts.
+    Reserve { name: String },
+    /// Let scripts pick an account you reserved again.
+    Unreserve { name: String },
     /// Add a profile.
     ///
     /// Without --use-default it gets a home of its own, empty until
@@ -1311,6 +1486,131 @@ pub(crate) enum ProfileCommand {
         /// Extra arguments for the harness's sign-in.
         #[arg(last = true, value_name = "ARGS")]
         args: Vec<String>,
+    },
+}
+
+/// `kete studio`'s subcommands (0.60, the queue lane's; `note` is the
+/// triage lane's).
+#[derive(Subcommand)]
+pub(crate) enum StudioCommand {
+    /// Turn studio mode on for a repo, at autonomy A1 (Plan).
+    ///
+    /// Writes the repo's entry in this machine's `config.local.json`: the
+    /// inbox folder (the manifest's `inbox` unless `--inbox` names one)
+    /// and autonomy A1.
+    Enable {
+        /// The project (id or name).
+        project: String,
+        /// The inbox folder, relative to the repo root.
+        #[arg(long, value_name = "DIR")]
+        inbox: Option<String>,
+    },
+    /// Turn studio mode off for a repo.
+    Disable {
+        /// The project (id or name).
+        project: String,
+    },
+    /// Each studio repo's autonomy, inbox, counts and queue state.
+    Status {
+        /// Print JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print a repo's autonomy level, or set it.
+    ///
+    /// A0 Hold refuses new sessions in the repo; A1 Plan (the default)
+    /// denies pushes, pull requests, ships and tags; A2 Deliver denies tags
+    /// and releases; A3 Release denies nothing. Only you change it, from
+    /// your own shell or the apps.
+    Autonomy {
+        /// The project (id or name).
+        project: String,
+        /// A0, A1, A2 or A3; left out, the current level is printed.
+        level: Option<String>,
+    },
+    /// Leave inbox notes alone, by id or `about` value.
+    Exclude {
+        /// The project (id or name).
+        project: String,
+        /// A note's id, or an `about` value.
+        value: String,
+    },
+    /// Hand excluded notes back to the queue.
+    Include {
+        /// The project (id or name).
+        project: String,
+        /// A note's id, or an `about` value.
+        value: String,
+    },
+    /// What the queue runner would send the orchestrator now.
+    ///
+    /// `--now` sends it, when every condition for an idle note holds.
+    Queue {
+        /// One project only (id or name).
+        #[arg(long)]
+        project: Option<String>,
+        /// Send the idle note now, if the conditions hold.
+        #[arg(long)]
+        now: bool,
+        /// Print JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// File one inbox note, and hand it to the triage desk.
+    ///
+    /// The note's id is the date and the first words; a note that repeats
+    /// an open one is refused (exit 3).
+    Note {
+        /// The note; multiple words need no quotes.
+        #[arg(required = true, num_args = 1..)]
+        text: Vec<String>,
+        /// The project whose inbox it goes in (id or name).
+        #[arg(long)]
+        project: Option<String>,
+        /// Who it is for: a recipient, a department slug, or jay.
+        #[arg(long)]
+        to: Option<String>,
+        /// What it is about.
+        #[arg(long)]
+        about: Option<String>,
+        /// high, normal (default) or low.
+        #[arg(long, value_parser = ["high", "normal", "low"])]
+        priority: Option<String>,
+        /// Send it to the triage desk to route.
+        #[arg(long)]
+        triage: bool,
+        /// Print JSON instead of a line.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// `kete roles`'s subcommands (0.60, the roles lane's).
+#[derive(Subcommand)]
+pub(crate) enum RolesCommand {
+    /// What each role gets: its flags and settings file.
+    ///
+    /// Read from the repo's committed `.kete/roles.toml`, exactly as a
+    /// launch would apply it.
+    Check {
+        /// The project (id or name; default: the one you are in).
+        #[arg(long)]
+        project: Option<String>,
+        /// One role only.
+        #[arg(long)]
+        role: Option<String>,
+        /// Print JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Answer Claude's bypass-mode dialog for an account, yourself.
+    ///
+    /// Runs Claude in bypass mode under the account, here, so you accept
+    /// its one-time dialog; unattended roles run only on accounts that did.
+    /// Refused inside a kete session.
+    AcceptBypass {
+        /// The account (a PROFILE's name).
+        profile: String,
     },
 }
 

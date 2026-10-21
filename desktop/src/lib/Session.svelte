@@ -5,6 +5,7 @@
   import StopBadge from './StopBadge.svelte';
   import Terminal from './Terminal.svelte';
   import OrchBadge from './orchestrator/OrchBadge.svelte';
+  import RoleChip from './roles/RoleChip.svelte';
   import ContextBar from './accounts/ContextBar.svelte';
   import SessionRail from './SessionRail.svelte';
   import SessionSubagents from './SessionSubagents.svelte';
@@ -90,6 +91,7 @@
           >{agent?.name ?? terminal?.name}</span
         >
         {#if agent?.role === 'orchestrator'}<OrchBadge />{/if}
+        {#if agent}<RoleChip agent={agent.id} />{/if}
         <Status {tone} />
         <!-- A usage limit it waits out, or why it stopped: "running, resumes 3:45pm".
              Off in a narrow header, where it would squeeze the name away: the

@@ -10,7 +10,7 @@ use std::path::PathBuf;
 ///
 /// Bump on every protocol change. Additive changes keep
 /// [`MIN_COMPATIBLE_PROTOCOL`] where it is; breaking changes bump both.
-pub const PROTOCOL_VERSION: u32 = 65;
+pub const PROTOCOL_VERSION: u32 = 66;
 
 /// Oldest IPC protocol this build can safely talk to.
 ///
@@ -64,6 +64,11 @@ impl ServerEvent {
             }
             ServerEvent::SessionStops { .. } => peer_version >= LIMITS_PROTOCOL,
             ServerEvent::SubagentsRemoved { .. } => peer_version >= SUBAGENT_CLEANUP_PROTOCOL,
+            ServerEvent::StudioQueueState { .. }
+            | ServerEvent::OrchestratorRenewal { .. }
+            | ServerEvent::SessionRoles { .. }
+            | ServerEvent::SessionSpend { .. }
+            | ServerEvent::UsageLedgerRows { .. } => peer_version >= STUDIO_PROTOCOL,
             _ => true,
         }
     }
@@ -173,6 +178,21 @@ pub const SUBAGENT_MODEL_PROTOCOL: u32 = 64;
 /// the guess is dropped, so the frame is the shape it knows and it never
 /// takes a guess for a reported reset.
 pub const USAGE_ESTIMATE_PROTOCOL: u32 = 65;
+
+/// The first protocol whose daemon takes the 0.60 studio requests and the
+/// trailing `role_card` fields, and whose peers decode the 0.60 events.
+///
+/// Additive: [`MIN_COMPATIBLE_PROTOCOL`] stays 53. The requests
+/// ([`ClientRequest::SetStudio`], `StudioQueue`, `RenewOrchestrator`,
+/// `UsageLedger`, `SpawnSiblingAgentWith`) are appended, and a client
+/// sends one only to a daemon that said this or later at Hello. The
+/// `role_card` on `CreateAgent`, `StartOrchestrator` and
+/// `OrchestratorSpawnWith` is left off the frame when None, so a launch
+/// without one is the 65 frame byte for byte, and one with a role goes
+/// only to a 66 daemon. The events (`StudioQueueState`,
+/// `OrchestratorRenewal`, `SessionRoles`, `SessionSpend`,
+/// `UsageLedgerRows`) go only to a 66 peer (`ServerEvent::decodable_by`).
+pub const STUDIO_PROTOCOL: u32 = 66;
 
 /// Max IPC frame size (length prefix sanity bound).
 pub const MAX_FRAME_LEN: u32 = 4 * 1024 * 1024;
@@ -345,6 +365,12 @@ pub enum ClientRequest {
         /// profile (or none). Resolved and persisted with the row.
         #[serde(default)]
         profile: Option<String>,
+        /// The ROLE CARD (`<repo>/.kete/roles.toml`) the session launches
+        /// with, by id; persisted with the row (migration 36). Protocol 66:
+        /// left off the frame when None, so a create without one is the 65
+        /// frame byte for byte; one with a role goes only to a 66 daemon.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        role_card: Option<String>,
     },
     /// Create a local AGENT of any kind from an OPEN PRS row — a PR
     /// SESSION. It never runs in the ROOT WORKTREE: the daemon finds the
@@ -706,6 +732,10 @@ pub enum ClientRequest {
         project: Option<ProjectId>,
         name: Option<String>,
         replace: bool,
+        /// The ROLE CARD the orchestrator launches with. Protocol 66, left
+        /// off the frame when None (see `CreateAgent::role_card`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        role_card: Option<String>,
     },
     /// Pin an existing agent as the ORCHESTRATOR, demoting any other row
     /// that held the role. Refused from inside an agent session.
@@ -762,6 +792,10 @@ pub enum ClientRequest {
         effort: Option<String>,
         profile: Option<String>,
         starting_prompt: String,
+        /// The ROLE CARD the worker launches with. Protocol 66, left off
+        /// the frame when None (see `CreateAgent::role_card`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        role_card: Option<String>,
     },
 
     // -- protocol 56, appended so every older variant keeps its place; sent
@@ -847,6 +881,64 @@ pub enum ClientRequest {
     ClearEndedSubagents {
         req_id: u64,
         parent: Option<AgentId>,
+    },
+
+    // -- protocol 66, appended after 63's; each sent only to a 66+ daemon
+    // (`STUDIO_PROTOCOL`). --
+    /// Set what this machine allows a studio repo (`studio` in
+    /// `config.local.json`, keyed by the project's root): its inbox
+    /// folder, autonomy level and exclusions. None switches the repo's
+    /// studio off. Refused from inside an agent session: only a person
+    /// changes autonomy. Answered with `Ack`.
+    SetStudio {
+        req_id: u64,
+        project: ProjectId,
+        studio: Option<crate::studio::StudioSettings>,
+    },
+    /// What the studio queue runner would do now, for `project` or every
+    /// studio repo: `run: false` reports and changes nothing, `run: true`
+    /// runs one tick at once. Answered by `ServerEvent::StudioQueueState`.
+    StudioQueue {
+        req_id: u64,
+        project: Option<ProjectId>,
+        run: bool,
+    },
+    /// Start a fresh orchestrator with the handover note at `note` as its
+    /// first prompt, once the current one's turn ends (`now`: at once),
+    /// moving the role to it and archiving the old one (unless
+    /// `keep_old`). `caller: Some` is the orchestrator renewing itself;
+    /// None is a person, refused from inside an agent session. Answered by
+    /// `ServerEvent::OrchestratorRenewal` with `Scheduled`.
+    RenewOrchestrator {
+        req_id: u64,
+        caller: Option<AgentId>,
+        note: PathBuf,
+        profile: Option<String>,
+        model: Option<String>,
+        keep_old: bool,
+        now: bool,
+    },
+    /// The usage ledger's rows: `since` and `until` are local dates,
+    /// `YYYY-MM-DD`, inclusive. Answered by `ServerEvent::UsageLedgerRows`.
+    UsageLedger {
+        req_id: u64,
+        since: Option<String>,
+        until: Option<String>,
+        project: Option<ProjectId>,
+    },
+    /// `SpawnSiblingAgent` with a ROLE CARD. Every field is always on the
+    /// frame: `SpawnSiblingAgent`'s last field is left off when None, so a
+    /// trailing `role_card` there could be read as the profile. Sent only
+    /// to a 66 daemon and only when a role is named.
+    SpawnSiblingAgentWith {
+        req_id: u64,
+        id: AgentId,
+        kind: Option<AgentKind>,
+        starting_prompt: String,
+        worktree: Option<String>,
+        base: Option<String>,
+        profile: Option<String>,
+        role_card: String,
     },
 }
 
@@ -1219,6 +1311,36 @@ pub enum ServerEvent {
     SubagentsRemoved {
         parent: AgentId,
         ids: Vec<String>,
+    },
+    // -- protocol 66, appended; sent only to 66+ peers
+    // (`ServerEvent::decodable_by`, `STUDIO_PROTOCOL`). --
+    /// Reply to `ClientRequest::StudioQueue`.
+    StudioQueueState {
+        req_id: u64,
+        rows: Vec<crate::studio::wire::StudioQueueRow>,
+    },
+    /// Answers `RenewOrchestrator` with `Scheduled`, then is broadcast
+    /// with `req_id: None` when the swap is `Done` or `Failed`.
+    OrchestratorRenewal {
+        req_id: Option<u64>,
+        old: AgentId,
+        new: Option<AgentId>,
+        state: crate::studio::wire::RenewState,
+    },
+    /// Every live session's role: after the Snapshot, and again whenever a
+    /// role session is created or archived. The whole list each time.
+    SessionRoles {
+        roles: Vec<crate::studio::wire::SessionRole>,
+    },
+    /// Today's spend for the sessions named, pushed at each of their turn
+    /// ends. Folded in by agent id.
+    SessionSpend {
+        rows: Vec<crate::studio::wire::SpendRow>,
+    },
+    /// Reply to `ClientRequest::UsageLedger`.
+    UsageLedgerRows {
+        req_id: u64,
+        rows: Vec<crate::studio::wire::LedgerRow>,
     },
 }
 
@@ -1692,6 +1814,7 @@ mod tests {
             project: None,
             name: None,
             replace: true,
+            role_card: None,
         };
         let back: ClientRequest = rmp_serde::from_slice(&encode(&start)).unwrap();
         let ClientRequest::StartOrchestrator {
@@ -2255,5 +2378,504 @@ mod tests {
         assert_eq!(agents[0].parent, None);
         assert_eq!(agents[0].name, "agent-2");
         assert_eq!(ui_state.as_deref(), Some("{}"));
+    }
+
+    /// The three requests 66 widens, as protocol 65 knew them: what a 65
+    /// daemon decodes, field for field.
+    mod v65 {
+        use super::*;
+        #[derive(Debug, Serialize, Deserialize)]
+        pub enum ClientRequest {
+            CreateAgent {
+                req_id: u64,
+                worktree: WorktreeId,
+                name: String,
+                kind: AgentKind,
+                #[serde(default)]
+                custom_harness: Option<String>,
+                model: Option<String>,
+                effort: Option<String>,
+                auto_title: bool,
+                #[serde(default)]
+                cloud_prompt: Option<String>,
+                #[serde(default)]
+                starting_prompt: Option<String>,
+                #[serde(default)]
+                issue_url: Option<String>,
+                #[serde(default)]
+                role: AgentRole,
+                #[serde(default)]
+                profile: Option<String>,
+            },
+            StartOrchestrator {
+                req_id: u64,
+                kind: AgentKind,
+                custom_harness: Option<String>,
+                model: Option<String>,
+                effort: Option<String>,
+                profile: Option<String>,
+                project: Option<ProjectId>,
+                name: Option<String>,
+                replace: bool,
+            },
+            OrchestratorSpawnWith {
+                req_id: u64,
+                caller: AgentId,
+                project: ProjectId,
+                worktree: Option<WorktreeId>,
+                branch: Option<String>,
+                base: Option<String>,
+                name: String,
+                kind: AgentKind,
+                custom_harness: Option<String>,
+                model: Option<String>,
+                effort: Option<String>,
+                profile: Option<String>,
+                starting_prompt: String,
+            },
+            SpawnSiblingAgent {
+                req_id: u64,
+                id: AgentId,
+                kind: Option<AgentKind>,
+                starting_prompt: String,
+                #[serde(default)]
+                worktree: Option<String>,
+                #[serde(default)]
+                base: Option<String>,
+                #[serde(default, skip_serializing_if = "Option::is_none")]
+                profile: Option<String>,
+            },
+        }
+    }
+
+    /// `Some` with a value naming the slot, or None, per bit of `mask`.
+    fn slot(mask: u32, bit: u32, name: &str) -> Option<String> {
+        (mask & (1 << bit) != 0).then(|| format!("{name}-{bit}"))
+    }
+
+    fn create_agent(mask: u32) -> ClientRequest {
+        ClientRequest::CreateAgent {
+            req_id: 7,
+            worktree: WorktreeId("w".into()),
+            name: "agent-1".into(),
+            kind: AgentKind::Claude,
+            custom_harness: slot(mask, 0, "harness"),
+            model: slot(mask, 1, "model"),
+            effort: slot(mask, 2, "effort"),
+            auto_title: mask.is_multiple_of(3),
+            cloud_prompt: slot(mask, 3, "cloud"),
+            starting_prompt: slot(mask, 4, "start"),
+            issue_url: slot(mask, 5, "issue"),
+            role: AgentRole::Worker,
+            profile: slot(mask, 6, "profile"),
+            role_card: slot(mask, 7, "card"),
+        }
+    }
+
+    fn start_orchestrator(mask: u32) -> ClientRequest {
+        ClientRequest::StartOrchestrator {
+            req_id: 8,
+            kind: AgentKind::Claude,
+            custom_harness: slot(mask, 0, "harness"),
+            model: slot(mask, 1, "model"),
+            effort: slot(mask, 2, "effort"),
+            profile: slot(mask, 3, "profile"),
+            project: slot(mask, 4, "project").map(ProjectId),
+            name: slot(mask, 5, "name"),
+            replace: mask.is_multiple_of(2),
+            role_card: slot(mask, 6, "card"),
+        }
+    }
+
+    fn orchestrator_spawn_with(mask: u32) -> ClientRequest {
+        ClientRequest::OrchestratorSpawnWith {
+            req_id: 9,
+            caller: AgentId("o".into()),
+            project: ProjectId("p".into()),
+            worktree: slot(mask, 0, "worktree").map(WorktreeId),
+            branch: slot(mask, 1, "branch"),
+            base: slot(mask, 2, "base"),
+            name: "worker".into(),
+            kind: AgentKind::Codex,
+            custom_harness: slot(mask, 3, "harness"),
+            model: slot(mask, 4, "model"),
+            effort: slot(mask, 5, "effort"),
+            profile: slot(mask, 6, "profile"),
+            starting_prompt: "fix it".into(),
+            role_card: slot(mask, 7, "card"),
+        }
+    }
+
+    /// Every mix of None and Some across a widened request's optional
+    /// fields, `role_card` included, comes back as it went: no value can
+    /// land in another field's slot.
+    #[test]
+    fn protocol_66_widened_requests_round_trip_every_mix_of_options() {
+        for (build, fields) in [
+            (create_agent as fn(u32) -> ClientRequest, 8),
+            (start_orchestrator, 7),
+            (orchestrator_spawn_with, 8),
+        ] {
+            for mask in 0..(1u32 << fields) {
+                let req = build(mask);
+                let back: ClientRequest = rmp_serde::from_slice(&encode(&req)).unwrap();
+                assert_eq!(format!("{back:?}"), format!("{req:?}"), "mask {mask:#b}");
+            }
+        }
+    }
+
+    /// Without a role card each widened request is the 65 frame byte for
+    /// byte (so a 65 daemon reads it), and a 65 frame reads here as no
+    /// role card. One that names a card is refused by a 65 decoder, which
+    /// is why clients send it only to a 66 daemon.
+    #[test]
+    fn protocol_66_role_card_is_invisible_to_65_peers() {
+        const { assert!(STUDIO_PROTOCOL <= PROTOCOL_VERSION) };
+        assert_eq!(STUDIO_PROTOCOL, 66);
+        assert_eq!(MIN_COMPATIBLE_PROTOCOL, 53, "66 is additive");
+        assert!(protocol_compatible_with(65));
+        assert!(protocol_ranges_overlap(
+            MIN_COMPATIBLE_PROTOCOL,
+            PROTOCOL_VERSION,
+            53,
+            65
+        ));
+        let no_card = |mask: u32| mask & 0x7f;
+        for mask in [0u32, 0x7f, 0b1010101] {
+            let mask = no_card(mask);
+            let req = create_agent(mask);
+            let ClientRequest::CreateAgent {
+                req_id,
+                worktree,
+                name,
+                kind,
+                custom_harness,
+                model,
+                effort,
+                auto_title,
+                cloud_prompt,
+                starting_prompt,
+                issue_url,
+                role,
+                profile,
+                role_card: None,
+            } = req.clone()
+            else {
+                panic!("not a CreateAgent");
+            };
+            let old = v65::ClientRequest::CreateAgent {
+                req_id,
+                worktree,
+                name,
+                kind,
+                custom_harness,
+                model,
+                effort,
+                auto_title,
+                cloud_prompt,
+                starting_prompt,
+                issue_url,
+                role,
+                profile,
+            };
+            assert_eq!(encode(&req), encode(&old), "mask {mask:#b}");
+            let ClientRequest::CreateAgent { role_card, .. } =
+                rmp_serde::from_slice(&encode(&old)).unwrap()
+            else {
+                panic!("not a CreateAgent");
+            };
+            assert_eq!(role_card, None);
+        }
+        let with_card = create_agent(1 << 7);
+        assert!(rmp_serde::from_slice::<v65::ClientRequest>(&encode(&with_card)).is_err());
+
+        let req = start_orchestrator(0b11_1111);
+        let ClientRequest::StartOrchestrator {
+            req_id,
+            kind,
+            custom_harness,
+            model,
+            effort,
+            profile,
+            project,
+            name,
+            replace,
+            role_card: None,
+        } = req.clone()
+        else {
+            panic!("not a StartOrchestrator");
+        };
+        let old = v65::ClientRequest::StartOrchestrator {
+            req_id,
+            kind,
+            custom_harness,
+            model,
+            effort,
+            profile,
+            project,
+            name,
+            replace,
+        };
+        assert_eq!(encode(&req), encode(&old));
+        let ClientRequest::StartOrchestrator { role_card, .. } =
+            rmp_serde::from_slice(&encode(&old)).unwrap()
+        else {
+            panic!("not a StartOrchestrator");
+        };
+        assert_eq!(role_card, None);
+        assert!(
+            rmp_serde::from_slice::<v65::ClientRequest>(&encode(&start_orchestrator(1 << 6)))
+                .is_err()
+        );
+
+        let req = orchestrator_spawn_with(0x7f);
+        let ClientRequest::OrchestratorSpawnWith {
+            req_id,
+            caller,
+            project,
+            worktree,
+            branch,
+            base,
+            name,
+            kind,
+            custom_harness,
+            model,
+            effort,
+            profile,
+            starting_prompt,
+            role_card: None,
+        } = req.clone()
+        else {
+            panic!("not an OrchestratorSpawnWith");
+        };
+        let old = v65::ClientRequest::OrchestratorSpawnWith {
+            req_id,
+            caller,
+            project,
+            worktree,
+            branch,
+            base,
+            name,
+            kind,
+            custom_harness,
+            model,
+            effort,
+            profile,
+            starting_prompt,
+        };
+        assert_eq!(encode(&req), encode(&old));
+        let ClientRequest::OrchestratorSpawnWith { role_card, .. } =
+            rmp_serde::from_slice(&encode(&old)).unwrap()
+        else {
+            panic!("not an OrchestratorSpawnWith");
+        };
+        assert_eq!(role_card, None);
+        assert!(
+            rmp_serde::from_slice::<v65::ClientRequest>(&encode(&orchestrator_spawn_with(1 << 7)))
+                .is_err()
+        );
+    }
+
+    /// `SpawnSiblingAgent` keeps its 58 shape: with and without a profile
+    /// it encodes as 58 (and 65) did. A role goes in `SpawnSiblingAgentWith`,
+    /// whose every field is on the frame, so with no profile the role card
+    /// still lands in its own slot.
+    #[test]
+    fn protocol_66_sibling_spawns_keep_their_shape_and_the_role_its_slot() {
+        for profile in [None, Some("work".to_string())] {
+            let new = ClientRequest::SpawnSiblingAgent {
+                req_id: 4,
+                id: AgentId("a1".into()),
+                kind: Some(AgentKind::Codex),
+                starting_prompt: "fix it".into(),
+                worktree: Some("fix-login".into()),
+                base: None,
+                profile: profile.clone(),
+            };
+            let old = v65::ClientRequest::SpawnSiblingAgent {
+                req_id: 4,
+                id: AgentId("a1".into()),
+                kind: Some(AgentKind::Codex),
+                starting_prompt: "fix it".into(),
+                worktree: Some("fix-login".into()),
+                base: None,
+                profile,
+            };
+            assert_eq!(encode(&new), encode(&old));
+        }
+        for profile in [None, Some("work".to_string())] {
+            let with = ClientRequest::SpawnSiblingAgentWith {
+                req_id: 5,
+                id: AgentId("a1".into()),
+                kind: None,
+                starting_prompt: "run the checks".into(),
+                worktree: None,
+                base: None,
+                profile: profile.clone(),
+                role_card: "runner".into(),
+            };
+            let back: ClientRequest = rmp_serde::from_slice(&encode(&with)).unwrap();
+            let ClientRequest::SpawnSiblingAgentWith {
+                profile: got,
+                role_card,
+                starting_prompt,
+                ..
+            } = back
+            else {
+                panic!("not a SpawnSiblingAgentWith");
+            };
+            assert_eq!(
+                (got, role_card.as_str(), starting_prompt.as_str()),
+                (profile, "runner", "run the checks")
+            );
+        }
+    }
+
+    /// The new requests round-trip, and a 65 daemon's decoder (the enum
+    /// as it ended at `ClearEndedSubagents`) refuses each, which is why
+    /// clients gate them.
+    #[test]
+    fn protocol_66_studio_requests_round_trip() {
+        use crate::studio::{Autonomy, StudioSettings};
+        #[derive(Debug, Deserialize)]
+        #[allow(dead_code)]
+        enum V65Tail {
+            ClearEndedSubagents {
+                req_id: u64,
+                parent: Option<AgentId>,
+            },
+        }
+        let studio = StudioSettings {
+            studio_inbox: "notes/inbox".into(),
+            autonomy: Autonomy::A2,
+            queue_exclude: vec!["x".into()],
+        };
+        let reqs = [
+            ClientRequest::SetStudio {
+                req_id: 1,
+                project: ProjectId("p".into()),
+                studio: Some(studio),
+            },
+            ClientRequest::SetStudio {
+                req_id: 2,
+                project: ProjectId("p".into()),
+                studio: None,
+            },
+            ClientRequest::StudioQueue {
+                req_id: 3,
+                project: None,
+                run: true,
+            },
+            ClientRequest::RenewOrchestrator {
+                req_id: 4,
+                caller: Some(AgentId("o".into())),
+                note: PathBuf::from("/w/handover.md"),
+                profile: None,
+                model: Some("opus".into()),
+                keep_old: true,
+                now: false,
+            },
+            ClientRequest::UsageLedger {
+                req_id: 5,
+                since: Some("2026-10-21".into()),
+                until: None,
+                project: Some(ProjectId("p".into())),
+            },
+        ];
+        for req in reqs {
+            let back: ClientRequest = rmp_serde::from_slice(&encode(&req)).unwrap();
+            assert_eq!(format!("{back:?}"), format!("{req:?}"));
+            assert!(rmp_serde::from_slice::<V65Tail>(&encode(&req)).is_err());
+        }
+    }
+
+    /// Every 66 event round-trips, and none is ever sent to a 65 peer.
+    #[test]
+    fn protocol_66_events_round_trip_and_are_held_back_from_65_peers() {
+        use crate::studio::wire::{
+            LedgerRow, QueueNote, RenewState, SessionRole, SpendRow, StudioQueueRow,
+        };
+        use crate::studio::Autonomy;
+        let spend = SpendRow {
+            agent: AgentId("a".into()),
+            day: "2026-10-21".into(),
+            input_tokens: 1,
+            output_tokens: 2,
+            cache_read_tokens: 3,
+            cache_write_tokens: 4,
+            cost_usd: 0.25,
+            tool_uses: 5,
+            turns: 6,
+        };
+        let events = [
+            ServerEvent::StudioQueueState {
+                req_id: 1,
+                rows: vec![StudioQueueRow {
+                    project: ProjectId("p".into()),
+                    name: "my-game".into(),
+                    autonomy: Autonomy::A2,
+                    inbox: "notes/inbox".into(),
+                    open: 3,
+                    to_jay: 1,
+                    unannounced: 2,
+                    next: vec![QueueNote {
+                        id: "n1".into(),
+                        title: "Storm sky".into(),
+                        to: "orchestrator".into(),
+                        priority: "high".into(),
+                        path: "notes/inbox/n1.md".into(),
+                    }],
+                    held: Some("you typed 40 s ago".into()),
+                    last_note_at: Some(9),
+                }],
+            },
+            ServerEvent::OrchestratorRenewal {
+                req_id: None,
+                old: AgentId("o".into()),
+                new: Some(AgentId("n".into())),
+                state: RenewState::Failed {
+                    reason: "no hook".into(),
+                },
+            },
+            ServerEvent::SessionRoles {
+                roles: vec![SessionRole {
+                    agent: AgentId("a".into()),
+                    card: "runner".into(),
+                    label: "Runner".into(),
+                    tier: 3,
+                    department: Some("audio".into()),
+                    permission: "allowlist".into(),
+                    context_budget: Some(100_000),
+                }],
+            },
+            ServerEvent::SessionSpend {
+                rows: vec![spend.clone()],
+            },
+            ServerEvent::UsageLedgerRows {
+                req_id: 2,
+                rows: vec![LedgerRow {
+                    spend,
+                    session: "agent-1".into(),
+                    project: "my-game".into(),
+                    branch: Some("main".into()),
+                    role_card: None,
+                    profile: Some("max2".into()),
+                    model: None,
+                    status: AgentStatus::Finished,
+                    pr_url: None,
+                }],
+            },
+        ];
+        for ev in events {
+            assert!(ev.decodable_by(STUDIO_PROTOCOL), "{ev:?}");
+            assert!(!ev.decodable_by(STUDIO_PROTOCOL - 1), "{ev:?}");
+            let back: ServerEvent = rmp_serde::from_slice(&encode(&ev)).unwrap();
+            assert_eq!(format!("{back:?}"), format!("{ev:?}"));
+        }
+        assert!(ServerEvent::Ack {
+            req_id: 1,
+            created: None
+        }
+        .decodable_by(53));
     }
 }

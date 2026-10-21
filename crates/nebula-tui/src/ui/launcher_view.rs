@@ -1642,7 +1642,7 @@ fn draw_list_band(
         let (name, runs) = match &band.cards[i] {
             crate::launcher::Card::Session(row) => (
                 row.agent.name.chars().count(),
-                runs_on_line(&row.agent, cfg).chars().count(),
+                runs_on_with_role(app, &row.agent, cfg).chars().count(),
             ),
             crate::launcher::Card::Terminal(t) => (
                 t.name.chars().count(),
@@ -1746,7 +1746,7 @@ fn draw_list_row(
                 name: a.name.clone(),
                 name_style: look.name_style,
                 ramp: look.ramp,
-                runs: runs_on_line(a, cfg),
+                runs: runs_on_with_role(app, a, cfg),
                 runs_style: Style::default().fg(quiet_or(th.dim)),
                 text_mark: "› ",
                 text: crate::launcher::last_prompt(a)
@@ -2527,7 +2527,7 @@ fn draw_card(
     // said once for every card in the checkout rather than on each. The
     // project is not on the card either: the grid is one project's,
     // named in the header.
-    let harness = runs_on_line(a, cfg);
+    let harness = runs_on_with_role(app, a, cfg);
     let mut second = if harness.is_empty() {
         Vec::new()
     } else {
@@ -3178,6 +3178,21 @@ fn runs_on_line(a: &nebula_core::Agent, cfg: &mut Option<crate::config::Config>)
     out
 }
 
+/// [`runs_on_line`] led by the role a session launched under, so a role
+/// session says so on its card and pane header: `Runner · claude haiku`.
+fn runs_on_with_role(
+    app: &App,
+    a: &nebula_core::Agent,
+    cfg: &mut Option<crate::config::Config>,
+) -> String {
+    let runs = runs_on_line(a, cfg);
+    match crate::launcher::role_chip(app, &a.id) {
+        Some(role) if runs.is_empty() => role,
+        Some(role) => format!("{role} · {runs}"),
+        None => runs,
+    }
+}
+
 /// Smallest GRID the welcome turns a nebula in: under it the sky would be
 /// a few smudges of dust, so the words stand alone, centered.
 const SKY_MIN_W: u16 = 30;
@@ -3579,7 +3594,7 @@ fn pane_facts(app: &App, row: &LauncherRow, is_main: bool, now_ms: i64) -> PaneF
             crate::ui::rows::status_color(Some(a.status), a.unseen, th),
         ),
         stop,
-        runs_on: runs_on_line(a, &mut None),
+        runs_on: runs_on_with_role(app, a, &mut None),
         place: (glyph, format!("{} / {}", row.project, row.branch), scope),
         ctx,
         pr,

@@ -17,7 +17,21 @@ use std::path::{Path, PathBuf};
 
 /// What `kete profile` was asked to do.
 pub enum ProfileOp {
-    List,
+    /// `--json`: every account with its windows, live sessions and holds.
+    List {
+        json: bool,
+    },
+    /// The account a scripted launch takes (the automation pick), held
+    /// for 10 minutes unless `dry_run`.
+    Pick {
+        harness: Option<String>,
+        project: Option<String>,
+        dry_run: bool,
+        json: bool,
+    },
+    /// Keep an account for the person's own launches.
+    Reserve(String),
+    Unreserve(String),
     Add {
         name: String,
         harness: String,
@@ -84,7 +98,10 @@ pub fn run_profile(op: ProfileOp) -> Result<()> {
     let _lock = match &op {
         // A project default edits the `projects` key: its own layer.
         // A rename and a spread take the settings locks themselves.
-        ProfileOp::List
+        ProfileOp::List { .. }
+        | ProfileOp::Pick { .. }
+        | ProfileOp::Reserve(_)
+        | ProfileOp::Unreserve(_)
         | ProfileOp::Login { .. }
         | ProfileOp::SetProject { .. }
         | ProfileOp::Rename { .. }
@@ -96,7 +113,36 @@ pub fn run_profile(op: ProfileOp) -> Result<()> {
         _ => None,
     };
     match op {
-        ProfileOp::List => list(),
+        ProfileOp::List { json: false } => list(),
+        ProfileOp::List { json: true } => list_json(),
+        ProfileOp::Pick {
+            harness,
+            project,
+            dry_run,
+            json,
+        } => pick_account(
+            harness.as_deref().unwrap_or("claude"),
+            project.as_deref(),
+            dry_run,
+            json,
+        ),
+        // `set_reserved` takes the layer's locks itself.
+        ProfileOp::Reserve(name) => {
+            profiles::set_reserved(&name, true).map_err(anyhow::Error::msg)?;
+            println!(
+                "`{}` is reserved: the default for your own sessions, never picked by the orchestrator or scripts",
+                name.trim()
+            );
+            Ok(())
+        }
+        ProfileOp::Unreserve(name) => {
+            profiles::set_reserved(&name, false).map_err(anyhow::Error::msg)?;
+            println!(
+                "`{}` is no longer reserved: the orchestrator and scripts may pick it",
+                name.trim()
+            );
+            Ok(())
+        }
         ProfileOp::Add {
             name,
             harness,
@@ -113,6 +159,7 @@ pub fn run_profile(op: ProfileOp) -> Result<()> {
                 default,
                 use_default,
                 disabled: false,
+                reserved: false,
             };
             profiles::add_to_file(&config, &profile).map_err(anyhow::Error::msg)?;
             match profile.home() {
@@ -629,6 +676,333 @@ fn normal_path(p: &Path) -> String {
     }
 }
 
+/// What a running daemon says, for `list --json` and `pick`: live agent
+/// sessions per account (`usage::account_key`), the harnesses with one
+/// on their own login, and with `with_tree` its projects for `--project`.
+/// No daemon: nothing, and none is started.
+#[derive(Default)]
+struct Live {
+    sessions: BTreeMap<String, u32>,
+    own_logins: Vec<String>,
+    tree: Option<(Vec<nebula_core::Project>, Vec<nebula_core::Worktree>)>,
+}
+
+fn live(with_tree: bool) -> Live {
+    let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    else {
+        return Live::default();
+    };
+    rt.block_on(async {
+        let ask = async {
+            let Ok(Some(mut conn)) = nebula_tui::ipc::connect_existing().await else {
+                return Live::default();
+            };
+            let mut out = Live::default();
+            for s in live_sessions(&mut conn).await.unwrap_or_default() {
+                if !s.alive || !matches!(s.session, nebula_core::SessionRef::Agent(_)) {
+                    continue;
+                }
+                let key = nebula_core::usage::account_key(s.profile.as_deref(), &s.harness);
+                if nebula_core::usage::default_login_harness(&key).is_some() {
+                    out.own_logins.push(s.harness.clone());
+                }
+                *out.sessions.entry(key).or_insert(0) += 1;
+            }
+            if with_tree {
+                out.tree = snapshot_tree(&mut conn).await.ok();
+            }
+            out
+        };
+        // A daemon that does not answer counts as none.
+        tokio::time::timeout(std::time::Duration::from_secs(5), ask)
+            .await
+            .unwrap_or_default()
+    })
+}
+
+/// Live agent sessions per account, the load `kete orchestrator renew
+/// --pick` spreads over as `pick` does.
+pub(crate) fn live_sessions_per_account() -> BTreeMap<String, u32> {
+    live(false).sessions
+}
+
+/// The daemon's `ListSessions` answer.
+async fn live_sessions(
+    conn: &mut nebula_tui::ipc::Connection,
+) -> Result<Vec<nebula_core::SessionSummary>> {
+    use nebula_core::codec::{read_frame, write_frame};
+    use nebula_core::{ClientRequest, ServerEvent};
+    const REQ_ID: u64 = 1;
+    write_frame(
+        &mut conn.stream,
+        &ClientRequest::ListSessions { req_id: REQ_ID },
+    )
+    .await?;
+    loop {
+        match read_frame::<ServerEvent, _>(&mut conn.stream).await? {
+            Some(ServerEvent::SessionList { req_id, sessions }) if req_id == REQ_ID => {
+                return Ok(sessions)
+            }
+            Some(ServerEvent::Error {
+                req_id: Some(REQ_ID),
+                message,
+            }) => bail!(message),
+            Some(_) => continue,
+            None => bail!("the daemon closed the connection before answering"),
+        }
+    }
+}
+
+/// The daemon's projects and worktrees from one snapshot.
+async fn snapshot_tree(
+    conn: &mut nebula_tui::ipc::Connection,
+) -> Result<(Vec<nebula_core::Project>, Vec<nebula_core::Worktree>)> {
+    use nebula_core::codec::{read_frame, write_frame};
+    use nebula_core::{ClientRequest, ServerEvent};
+    write_frame(&mut conn.stream, &ClientRequest::Subscribe).await?;
+    loop {
+        match read_frame::<ServerEvent, _>(&mut conn.stream).await? {
+            Some(ServerEvent::Snapshot {
+                projects,
+                worktrees,
+                ..
+            }) => return Ok((projects, worktrees)),
+            Some(_) => continue,
+            None => bail!("the daemon closed the connection before sending its projects"),
+        }
+    }
+}
+
+/// The default account for `harness` of the project `query` names: found
+/// in the daemon's tree when one runs, else `query` read as a checkout
+/// path (or a path inside one).
+fn project_default_for(
+    query: &str,
+    harness: &str,
+    tree: Option<&(Vec<nebula_core::Project>, Vec<nebula_core::Worktree>)>,
+) -> Result<Option<String>> {
+    let want = match tree {
+        Some((projects, worktrees)) => {
+            normal_path(&find_project(projects, worktrees, query)?.repo_path)
+        }
+        None => normal_path(Path::new(query.trim())),
+    };
+    Ok(profiles::load_project_defaults()
+        .into_iter()
+        .find(|(repo, _)| {
+            let repo = normal_path(Path::new(repo));
+            want == repo || want.starts_with(&format!("{repo}/"))
+        })
+        .and_then(|(_, defaults)| defaults.get(harness.trim()).cloned()))
+}
+
+/// `Reason` as `kete profile pick --json` spells it.
+fn reason_word(reason: &nebula_core::accounts::Reason) -> &'static str {
+    use nebula_core::accounts::Reason;
+    match reason {
+        Reason::Named => "named",
+        Reason::Default => "default",
+        Reason::NoProfile => "none",
+        Reason::UnderThreshold { .. } => "under_threshold",
+        Reason::FailedOver { .. } => "failed_over",
+        Reason::AllOver { .. } => "all_over",
+        Reason::LeastUsed { .. } => "least_used",
+        Reason::ProjectDefault => "project_default",
+        Reason::Reserved => "reserved",
+    }
+}
+
+/// `kete profile list --json`: every profile, then each harness's own
+/// login in use, with its windows, live sessions and holds.
+fn list_json() -> Result<()> {
+    use nebula_core::accounts::{self, holds, LoginState};
+    let all = profiles::load();
+    let root = profiles::profiles_root();
+    let usage = nebula_core::usage::read_all_in(&root);
+    let policy = accounts::load_policy();
+    let now = nebula_core::clock::now_secs() as i64;
+    let live = live(false);
+    let held = holds::active_in(&root, now);
+    let account = |profile: Option<&Profile>, harness: &str| {
+        let key = nebula_core::usage::account_key(profile.map(|p| p.name.as_str()), harness);
+        let windows: Vec<serde_json::Value> = usage
+            .iter()
+            .find(|u| u.account == key)
+            .map(|u| u.windows.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .map(|w| {
+                serde_json::json!({
+                    "kind": w.kind,
+                    "label": w.label,
+                    "percent": w.shown_at(now),
+                    "resets_at": w.resets_at,
+                    "estimated": w.estimated,
+                    "read_at": w.read_at,
+                })
+            })
+            .collect();
+        let email = (harness == "claude")
+            .then(|| {
+                profile
+                    .and_then(|p| p.dir_for(&root, nebula_core::env::CLAUDE_CONFIG_DIR))
+                    .or_else(nebula_core::paths::claude_config_dir)
+            })
+            .flatten()
+            .and_then(|dir| nebula_core::claude_usage::account_email(&dir));
+        serde_json::json!({
+            "name": profile.map_or(key.as_str(), |p| p.name.trim()),
+            "harness": harness,
+            "kind": if profile.is_some() { "profile" } else { "own_login" },
+            "default": profile.is_some_and(|p| {
+                profiles::default_for(&all, harness).is_some_and(|d| d.name == p.name)
+            }),
+            "disabled": profile.is_some_and(|p| p.disabled),
+            "reserved": profile.is_some_and(|p| p.reserved),
+            "signed_in": accounts::login_state_in(profile, harness, &root) == LoginState::LoggedIn,
+            "email": email,
+            "windows": windows,
+            "live_sessions": live.sessions.get(&key).copied().unwrap_or(0),
+            "holds": held.get(&key).copied().unwrap_or(0),
+        })
+    };
+    let mut accounts: Vec<serde_json::Value> = all
+        .iter()
+        .map(|p| account(Some(p), p.harness.trim()))
+        .collect();
+    let mut own: Vec<String> = usage
+        .iter()
+        .filter_map(|u| nebula_core::usage::default_login_harness(&u.account))
+        .map(str::to_string)
+        .chain(
+            live.own_logins
+                .iter()
+                .filter(|h| profiles::login_args(h).is_some())
+                .cloned(),
+        )
+        .collect();
+    own.sort();
+    own.dedup();
+    accounts.extend(own.iter().map(|h| account(None, h)));
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "spread": policy.spread.as_str(),
+            "threshold": policy.threshold,
+            "accounts": accounts,
+        }))?
+    );
+    Ok(())
+}
+
+/// `kete profile pick`: the automation pick for `harness`, its name (or
+/// the JSON, or with `dry_run` every candidate), held for
+/// `holds::HOLD_SECS` unless `dry_run`. Exits 3 when no profile is
+/// eligible.
+fn pick_account(harness: &str, project: Option<&str>, dry_run: bool, json: bool) -> Result<()> {
+    use nebula_core::accounts::{self, holds, Launcher};
+    use std::io::Write;
+    let harness = harness.trim();
+    let all = profiles::load();
+    let root = profiles::profiles_root();
+    let policy = accounts::load_policy();
+    let now = nebula_core::clock::now_secs() as i64;
+    let live = live(project.is_some());
+    let held = holds::active_in(&root, now);
+    let project_default = match project {
+        Some(q) => project_default_for(q, harness, live.tree.as_ref())?,
+        None => None,
+    };
+    let count = |map: &BTreeMap<String, u32>, name: &str| map.get(name).copied().unwrap_or(0);
+    let usage = |name: &str| nebula_core::usage::read_account_in(&root, name);
+    let choice = accounts::pick_for(
+        &all,
+        harness,
+        project_default.as_deref(),
+        policy,
+        Launcher::Automation,
+        now,
+        usage,
+        |name| count(&live.sessions, name) + count(&held, name),
+    );
+    let picked = choice.profile.map(|p| p.name.trim().to_string());
+    let held_until = match (&picked, dry_run) {
+        (Some(name), false) => {
+            holds::add_in(&root, name, now).context("hold the pick")?;
+            Some(now + holds::HOLD_SECS)
+        }
+        _ => None,
+    };
+    let candidates: Vec<serde_json::Value> = profiles::for_harness(&all, harness)
+        .into_iter()
+        .map(|p| {
+            let name = p.name.trim();
+            let why = match () {
+                _ if p.reserved => "reserved",
+                _ if p.disabled => "disabled",
+                _ if picked.as_deref() == Some(name) => "picked",
+                _ => "eligible",
+            };
+            serde_json::json!({
+                "name": name,
+                "eligible": accounts::automation_may_pick(p),
+                "why": why,
+                "percent": usage(name).and_then(|u| u.worst_at(now)),
+                "live_sessions": count(&live.sessions, name),
+                "holds": count(&held, name),
+            })
+        })
+        .collect();
+    let line = choice.describe(harness);
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "harness": harness,
+                "profile": picked,
+                "reason": reason_word(&choice.reason),
+                "line": line,
+                "candidates": candidates,
+                "held_until": held_until,
+            }))?
+        );
+    } else if dry_run {
+        println!(
+            "{:<22} {:>5} {:>5} {:>5}  WHY",
+            "ACCOUNT", "USED", "LIVE", "HOLDS"
+        );
+        for c in &candidates {
+            let percent = c["percent"].as_f64().map(|p| p as f32);
+            println!(
+                "{:<22} {:>5} {:>5} {:>5}  {}",
+                c["name"].as_str().unwrap_or_default(),
+                nebula_core::usage::pct_text(percent),
+                c["live_sessions"],
+                c["holds"],
+                c["why"].as_str().unwrap_or_default()
+            );
+        }
+        match &picked {
+            Some(_) => println!("\npick: {line} (dry run: nothing held)"),
+            None => println!("\npick: none"),
+        }
+    } else if let Some(name) = &picked {
+        println!("{name}");
+    }
+    if picked.is_none() {
+        if !json {
+            eprintln!(
+                "no {harness} account is eligible: every one is reserved or switched off, or none is set up (kete profile list)"
+            );
+        }
+        std::io::stdout().flush().ok();
+        std::process::exit(3);
+    }
+    Ok(())
+}
+
 fn list() -> Result<()> {
     let all = profiles::load();
     let usage = nebula_core::usage::read_all_in(&profiles::profiles_root());
@@ -722,6 +1096,9 @@ fn render_list(
         if profile.disabled {
             name.push_str(" (off)");
         }
+        if profile.reserved {
+            name.push_str(" (yours)");
+        }
         push(name, profile.harness.trim(), Some(profile));
     }
     for u in usage {
@@ -744,6 +1121,9 @@ fn render_list(
         );
     }
     out.push("* default".to_string());
+    if all.iter().any(|p| p.reserved) {
+        out.push("(yours) reserved: never picked by the orchestrator or scripts".to_string());
+    }
     out
 }
 
@@ -907,6 +1287,7 @@ mod edit_tests {
             default: false,
             use_default: false,
             disabled: true,
+            reserved: false,
         }
     }
 
@@ -1008,6 +1389,7 @@ mod list_tests {
             default,
             use_default: false,
             disabled,
+            reserved: false,
         };
         let all = vec![p("work", true, false), p("home", false, true)];
         let usage = vec![

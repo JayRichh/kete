@@ -7,6 +7,7 @@
   import { api } from './api';
   import { app, openDiff, toast } from './store.svelte';
   import ContextBar from './accounts/ContextBar.svelte';
+  import SpendLine from './ledger/SpendLine.svelte';
   import UsageMeter from './accounts/UsageMeter.svelte';
   import { labelFor } from './accounts/labels.svelte';
   import { accountKey, sessionHarness } from './accounts/usage';
@@ -74,6 +75,8 @@
       {/if}
     </section>
   {/if}
+
+  <SpendLine agent={agent.id} />
 
   {#if f.model || f.effort}
     <section class="flex flex-col gap-1">

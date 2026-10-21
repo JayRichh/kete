@@ -17,11 +17,15 @@ mod accounts_view;
 mod ado_view;
 mod attention_view;
 pub(crate) mod footer;
+// 0.60: the gauntlet lane's (placeholder from the foundation).
+pub(crate) mod gauntlet_view;
 pub(crate) mod launcher_view;
 mod overlay;
 mod review_view;
 mod rows;
 mod ship_view;
+// 0.60: the board lane's (placeholder from the foundation).
+pub(crate) mod studio_board;
 pub(crate) mod subagents_view;
 
 pub(crate) use rows::{fit_to_width, render_row, status_color, status_dot};
@@ -288,9 +292,13 @@ fn draw_screen(f: &mut Frame, app: &mut App) {
     if app.pane.collapsed {
         // The ORCHESTRATOR VIEW: the strip of session chips over the
         // orchestrator's own full-screen pane.
-        let (strip, body) = crate::orchestrator_view::split(app, body);
+        let (strip, body, triage) = crate::orchestrator_view::split(app, body);
         if let Some(strip) = strip {
             crate::orchestrator_view::draw_strip(f, app, strip);
+        }
+        // 0.60: the TRIAGE STRIP under the orchestrator's pane.
+        if let Some(triage) = triage {
+            crate::triage_strip::draw(f, app, triage);
         }
         draw_terminal(f, app, body);
         if app.nav.focus == Focus::Terminal {
@@ -877,6 +885,27 @@ pub(crate) fn centered_rect(frame: Rect, width: u16, height: u16) -> Rect {
         width,
         height,
     }
+}
+
+/// A page that has nothing to show yet: a small modal titled `title`
+/// with one line and how to close it, centered in `area`. Returns where
+/// it drew, for the overlay's outside clicks.
+pub(crate) fn empty_state(f: &mut Frame, app: &App, area: Rect, title: &str, line: &str) -> Rect {
+    let th = app.chrome.theme;
+    let width = (line.chars().count().max(title.chars().count()) as u16).saturating_add(6);
+    let rect = centered_rect(area, width.max(30), 4);
+    f.render_widget(Clear, rect);
+    let block = modal_block(title.to_string(), th);
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(format!(" {line}")),
+            Line::from(Span::styled(" Esc closes", Style::default().fg(th.dim))),
+        ]),
+        inner,
+    );
+    rect
 }
 
 /// A centered rect sized as a percentage of the frame.

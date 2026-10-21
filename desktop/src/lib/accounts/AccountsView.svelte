@@ -2,7 +2,7 @@
   // ACCOUNTS: every account kete can run a session on, in one place. Each
   // profile (switched off and broken ones too) and each harness's own login
   // in use, with its login state, plan, 5-hour and weekly use with their
-  // resets, the default star, the enabled switch, the sessions on it and
+  // resets, the default star, the enabled switch, Reserve for me, the sessions on it and
   // the projects that start on it; and every verb: sign in again, edit,
   // duplicate, remove, make default, make it a project's account. The
   // account spread sits on top, said in words. Shift+U opens it, as the
@@ -37,9 +37,11 @@
     renameBlocked,
     runLogin,
     setAccountEnabled,
+    setAccountReserved,
     setDefaultAccount,
     setProjectAccount,
   } from './actions';
+  import { reserveSwitch } from './reserve';
   import { accountOpened } from './account-menu';
   import { editRequest } from './edit.svelte';
   import { openAddAccount } from './add.svelte';
@@ -250,6 +252,7 @@
         {@const [top, bottom] = bars(u)}
         {@const on = sessionsOn(r, app.model.agents)}
         {@const st = stateWord(r)}
+        {@const rs = reserveSwitch(r)}
         {@const projects = r.profile ? projectsDefaultingTo(app.launch, app.model.projects, r.harness, r.name) : []}
         {@const dimStar = !r.default && !!r.flaggedDefault && r.disabled}
         <li class="border-b border-rule py-3" data-account={r.key} use:ownMenu={() => menuOf(r)}>
@@ -302,9 +305,23 @@
                 {#if u?.plan}<span aria-hidden="true">&middot;</span><span title="Plan">{u.plan}</span>{/if}
               </div>
               <div class="pl-6 text-[12px] {st.tone}" title={r.problem ?? loginTitle(r)}>
-                {st.text}{#if r.disabled && !r.problem}<span class="text-muted">{' \u00b7 switched off'}</span>{/if}
+                {st.text}{#if r.disabled && !r.problem}<span class="text-muted">{' \u00b7 switched off'}</span>{/if}{#if rs.on}<span class="text-muted">{' \u00b7 reserved'}</span>{/if}
               </div>
               {#if r.problem}<p class="m-0 pl-6 text-[12px] text-fail">{r.problem}</p>{/if}
+              {#if rs.shown}
+                <button
+                  class="ml-6 flex w-fit items-center gap-2 border-0 bg-transparent p-0 text-left text-[12px] text-muted hover:text-ink"
+                  role="switch"
+                  aria-checked={rs.on}
+                  onclick={() => setAccountReserved(r)}
+                  title={rs.tooltip}
+                >
+                  <span class="relative h-[14px] w-[26px] flex-none border {rs.on ? 'border-rule-strong bg-ink' : 'border-rule bg-transparent'}" aria-hidden="true">
+                    <span class="absolute top-[2px] size-[8px] {rs.on ? 'right-[2px] bg-bg' : 'left-[2px] bg-faint'}"></span>
+                  </span>
+                  {rs.label}
+                </button>
+              {/if}
             </div>
 
             <!-- What runs on it: sessions, and the repos that start on it. -->

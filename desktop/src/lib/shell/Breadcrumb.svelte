@@ -4,6 +4,7 @@
   import { placeOf } from '../status';
   import { parseItem } from '../ado/prs-api';
   import { parseDiffItem } from '../diff-api';
+  import { parseGauntletItem } from '../studio/types';
   import { withKey } from '../shortcuts';
   import { ownMenu, type Opened } from '../menus/router';
   import { menuFor, targetLabel, type Target } from '../actions';
@@ -25,6 +26,8 @@
     accounts: 'Accounts',
     whakaoho: 'Whakaoho',
     worktrees: 'Worktrees',
+    studio: 'Studio',
+    gauntlet: 'Gauntlet',
   };
 
   const crumbs = $derived.by((): Crumb[] => {
@@ -45,6 +48,11 @@
       const it = parseItem(p.item);
       if (it.kind === 'pr') out.push({ label: `PR ${it.id}`, mono: true });
       else if (it.kind === 'compose') out.push({ label: 'New' }, { label: it.branch, mono: true });
+    }
+    if (p.view === 'gauntlet' && p.item) {
+      // `Gauntlet / <kind> / <id>`: the verdict that is open.
+      const g = parseGauntletItem(p.item);
+      if (g) out.push({ label: g.kind }, { label: g.id, mono: true });
     }
     if (p.view === 'session') {
       const s = sessionFromKey(p.item);

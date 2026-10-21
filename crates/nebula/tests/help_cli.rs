@@ -37,6 +37,10 @@ const VISIBLE: &[&[&str]] = &[
     &["session"],
     &["session", "move-account"],
     &["wake"],
+    // 0.60
+    &["studio"],
+    &["roles"],
+    &["usage"],
 ];
 
 fn help_at(columns: &str, args: &[&str]) -> String {
@@ -127,8 +131,8 @@ fn the_root_help_lists_one_line_per_command() {
     }
     assert_eq!(
         commands.lines().count(),
-        26,
-        "twenty-five commands plus `help`:\n{commands}"
+        30,
+        "twenty-nine commands plus `help`:\n{commands}"
     );
 }
 

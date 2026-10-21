@@ -66,6 +66,12 @@ pub struct Profile {
     /// off). A session already running under it keeps it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub disabled: bool,
+    /// Kept for the person's own launches (0.60): still the default for a
+    /// launch Jay starts, never picked for one the orchestrator or a script
+    /// starts (`accounts::Launcher::Automation`). Left off the file when
+    /// false, so a 0.59 build reads the entry unchanged.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub reserved: bool,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -346,6 +352,43 @@ pub fn set_enabled_in_file(path: &Path, name: &str, enabled: bool) -> Result<(),
     })
 }
 
+/// Reserve `name` for the person's own launches, or let automation pick
+/// it again, in the settings file, in place. The key is edited directly:
+/// [`update_in_file`] never removes it, so an edit from a form that does
+/// not know the flag keeps the account reserved.
+pub fn set_reserved_in_file(path: &Path, name: &str, reserved: bool) -> Result<(), String> {
+    edit_file(path, |entries| {
+        let Some(entry) = entries
+            .iter_mut()
+            .find(|e| e.get("name").and_then(Value::as_str) == Some(name.trim()))
+            .and_then(Value::as_object_mut)
+        else {
+            return Err(format!("no profile named `{}`", name.trim()));
+        };
+        if reserved {
+            entry.insert("reserved".into(), json!(true));
+        } else {
+            entry.remove("reserved");
+        }
+        Ok(())
+    })
+}
+
+/// [`set_reserved_in_file`] on the settings layer whose `profiles` key is
+/// in force, holding `config.json`'s lock for a local edit as every
+/// settings writer does.
+pub fn set_reserved(name: &str, reserved: bool) -> Result<(), String> {
+    let base = crate::paths::config_path();
+    let local = crate::paths::config_local_path();
+    let layer = layer_for(&base, &local, CONFIG_KEY)?;
+    let _lock = if layer == local {
+        Some(crate::settings::lock(&base).map_err(|e| e.to_string())?)
+    } else {
+        None
+    };
+    set_reserved_in_file(&layer, name, reserved)
+}
+
 /// Every usable profile for `harness`, in config order.
 pub fn for_harness<'a>(all: &'a [Profile], harness: &str) -> Vec<&'a Profile> {
     all.iter()
@@ -429,7 +472,8 @@ pub fn update_in_file(path: &Path, profile: &Profile) -> Result<(), String> {
             return Err("a profile serializes to an object".into());
         };
         let mut entry = entries[at].as_object().cloned().unwrap_or_default();
-        // Fields left out when empty or off must go, not linger.
+        // Fields left out when empty or off must go, not linger. `reserved`
+        // is not one: only `set_reserved_in_file` takes it off.
         for key in [
             "name",
             "harness",
@@ -673,6 +717,7 @@ pub fn duplicate_in_file(path: &Path, from: &str, name: &str) -> Result<Profile,
         default: false,
         use_default: source.use_default,
         disabled: false,
+        reserved: false,
     };
     add_to_file(path, &copy)?;
     Ok(copy)
@@ -1257,7 +1302,28 @@ mod tests {
             default: false,
             use_default: false,
             disabled: false,
+            reserved: false,
         }
+    }
+
+    /// 0.60's `reserved` round-trips, reads as false from a 0.59 entry,
+    /// and is left off the file when false, so 0.59 reads the entry as
+    /// it wrote it.
+    #[test]
+    fn reserved_round_trips_and_is_absent_when_false() {
+        let old: Profile =
+            serde_json::from_str(r#"{"name": "jayrich", "harness": "claude", "default": true}"#)
+                .unwrap();
+        assert!(!old.reserved);
+        assert!(!serde_json::to_string(&old).unwrap().contains("reserved"));
+        let mine = Profile {
+            reserved: true,
+            ..old
+        };
+        let text = serde_json::to_string(&mine).unwrap();
+        assert!(text.contains("\"reserved\":true"), "{text}");
+        let back: Profile = serde_json::from_str(&text).unwrap();
+        assert_eq!(back, mine);
     }
 
     #[test]
@@ -1679,6 +1745,33 @@ mod tests {
         let obj = crate::settings::read_object(&path).unwrap().unwrap();
         assert!(!from_settings(&obj)[0].disabled);
         assert!(set_enabled_in_file(&path, "nope", true).is_err());
+    }
+
+    #[test]
+    fn reserving_round_trips_and_an_edit_that_does_not_know_it_keeps_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        add_to_file(&path, &profile("a", "claude")).unwrap();
+        set_reserved_in_file(&path, "a", true).unwrap();
+        let read =
+            |path: &Path| from_settings(&crate::settings::read_object(path).unwrap().unwrap());
+        assert!(read(&path)[0].reserved);
+        // The apps' edit forms build a profile with `reserved: false`.
+        let mut edit = profile("a", "claude");
+        edit.env.insert("K".into(), "v".into());
+        update_in_file(&path, &edit).unwrap();
+        assert!(
+            read(&path)[0].reserved,
+            "an ordinary edit keeps it reserved"
+        );
+        set_reserved_in_file(&path, "a", false).unwrap();
+        assert!(!read(&path)[0].reserved);
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(!raw.contains("reserved"), "unreserved writes no key: {raw}");
+        assert_eq!(
+            set_reserved_in_file(&path, "nope", true).unwrap_err(),
+            "no profile named `nope`"
+        );
     }
 
     #[test]

@@ -111,6 +111,12 @@ export type ActionId =
   | "archive_done"
   | "wake_schedule"
   | "ask_aside"
+  | "studio_board"
+  | "gauntlet_view"
+  | "triage_note"
+  | "studio_autonomy"
+  | "renew_orchestrator"
+  | "usage_csv"
   | "cycle_theme"
   | "toggle_sidebar"
   | "home_board"
@@ -1630,6 +1636,84 @@ export const ACTIONS: readonly ActionRow[] = [
     desktop: [],
   },
   {
+    id: "studio_board",
+    label: "Studio board",
+    hint: "A studio repo's departments side by side: each one's inbox queue, lead, runners, last verdict, what waits on you and what it cost today; from a repo, on that repo",
+    group: "VIEWS",
+    word: "studio",
+    destructive: false,
+    appliesTo: ["global", "repo"],
+    worksIn: ["grid", "board", "pane"],
+    surface: "both",
+    tui: [],
+    desktop: [],
+  },
+  {
+    id: "gauntlet_view",
+    label: "Gauntlet view",
+    hint: "Every verdict in a studio repo's sign-off folders, by kind and newest first, with its evidence and a link into the review app",
+    group: "VIEWS",
+    word: "gauntlet",
+    destructive: false,
+    appliesTo: ["global", "repo"],
+    worksIn: ["grid", "board", "pane"],
+    surface: "both",
+    tui: [],
+    desktop: [],
+  },
+  {
+    id: "triage_note",
+    label: "Triage note",
+    hint: "Type one line for the studio: it is filed as an inbox note and the triage desk routes it in one turn",
+    group: "SESSIONS",
+    word: "triage",
+    destructive: false,
+    appliesTo: ["global"],
+    worksIn: ["grid", "board", "pane"],
+    surface: "both",
+    tui: [],
+    desktop: [],
+  },
+  {
+    id: "studio_autonomy",
+    label: "Studio autonomy",
+    hint: "How far a studio repo's agents may go without you: A0 Hold, A1 Plan, A2 Deliver or A3 Release",
+    group: "PROJECTS & WORKTREES",
+    word: "autonomy",
+    destructive: false,
+    appliesTo: ["repo"],
+    worksIn: ["grid", "board"],
+    surface: "both",
+    tui: [],
+    desktop: [],
+  },
+  {
+    id: "renew_orchestrator",
+    label: "Renew orchestrator",
+    hint: "Hand the orchestrator over to a fresh session that starts on a handover note, once its turn ends; the old one is archived",
+    group: "SESSIONS",
+    word: "renew",
+    destructive: false,
+    appliesTo: ["session"],
+    worksIn: ["grid", "board", "pane"],
+    surface: "both",
+    tui: [],
+    desktop: [],
+  },
+  {
+    id: "usage_csv",
+    label: "Export usage CSV",
+    hint: "Write the usage ledger (tokens, estimated cost, tool uses and turns per session per day) to a CSV file and show it",
+    group: "GENERAL",
+    word: "usage csv",
+    destructive: false,
+    appliesTo: ["global"],
+    worksIn: ["grid", "board", "pane"],
+    surface: "both",
+    tui: [],
+    desktop: [],
+  },
+  {
     id: "cycle_theme",
     label: "Cycle theme",
     hint: "Step the window's theme through system, light and dark",
@@ -1891,6 +1975,12 @@ export const MENU_LABELS: readonly { id: ActionId; on: AppliesTo | null; label: 
   { id: "activate", on: null, label: "Open" },
   { id: "follow_up", on: null, label: "Follow-up prompt\u2026" },
   { id: "ask_aside", on: null, label: "Ask aside\u2026" },
+  { id: "studio_board", on: null, label: "Studio board" },
+  { id: "gauntlet_view", on: null, label: "Gauntlet" },
+  { id: "triage_note", on: null, label: "Triage note\u2026" },
+  { id: "studio_autonomy", on: null, label: "Autonomy\u2026" },
+  { id: "renew_orchestrator", on: null, label: "Renew orchestrator\u2026" },
+  { id: "usage_csv", on: null, label: "Export usage (CSV)" },
   { id: "restart", on: null, label: "Restart agent" },
   { id: "duplicate_session", on: null, label: "Duplicate" },
   { id: "move_session", on: null, label: "Move to\u2026" },
@@ -1944,14 +2034,14 @@ export const MENU_LABELS: readonly { id: ActionId; on: AppliesTo | null; label: 
 
 /** Each kind's menu, in order: a right-click's rows in both apps. */
 export const MENUS: Readonly<Partial<Record<AppliesTo, readonly ActionId[]>>> = {
-  session: ["activate", "follow_up", "ask_aside", "git_diff", "open_pull_request", "create_pull_request", "merge_pull_request", "comment_pull_request", "open_issue", "open_in_vscode", "open_in_visual_studio", "reveal_in_explorer", "open_in_browser", "dock_editor", "copy_path", "copy_branch", "copy_pr_url", "mark_seen", "restart", "duplicate_session", "rename", "pin_orchestrator", "move_session", "move_to_account", "reorder_up", "reorder_down", "unarchive", "archive", "delete"],
+  session: ["activate", "follow_up", "ask_aside", "git_diff", "open_pull_request", "create_pull_request", "merge_pull_request", "comment_pull_request", "open_issue", "open_in_vscode", "open_in_visual_studio", "reveal_in_explorer", "open_in_browser", "dock_editor", "copy_path", "copy_branch", "copy_pr_url", "mark_seen", "restart", "duplicate_session", "rename", "pin_orchestrator", "renew_orchestrator", "move_session", "move_to_account", "reorder_up", "reorder_down", "unarchive", "archive", "delete"],
   terminal: ["activate", "copy_path", "rename", "delete"],
   worktree: ["new", "quick_prompt", "new_terminal", "toggle_run", "git_diff", "open_pull_request", "create_pull_request", "merge_pull_request", "comment_pull_request", "focus_scope", "open_repo", "open_worktree", "open_in_vscode", "open_in_visual_studio", "reveal_in_explorer", "open_in_browser", "dock_editor", "copy_path", "copy_branch", "copy_pr_url", "mark_seen", "switch_branch", "reorder_up", "reorder_down", "archive_done", "delete_all", "delete_worktree"],
-  repo: ["quick_prompt", "new_worktree", "toggle_run", "focus_scope", "open_repo", "pull_requests", "issues", "azure_devops", "refresh_pull_requests", "open_worktree", "open_in_vscode", "open_in_visual_studio", "reveal_in_explorer", "open_in_browser", "dock_editor", "copy_path", "mark_seen", "switch_branch", "rename", "reorder_up", "reorder_down", "archive_done", "sweep_worktrees", "remove_project"],
+  repo: ["quick_prompt", "new_worktree", "toggle_run", "focus_scope", "open_repo", "pull_requests", "issues", "azure_devops", "refresh_pull_requests", "studio_board", "gauntlet_view", "studio_autonomy", "open_worktree", "open_in_vscode", "open_in_visual_studio", "reveal_in_explorer", "open_in_browser", "dock_editor", "copy_path", "mark_seen", "switch_branch", "rename", "reorder_up", "reorder_down", "archive_done", "sweep_worktrees", "remove_project"],
   folder: ["open_in_vscode", "reveal_in_explorer", "copy_path", "copy_relative_path"],
   file: ["open_file_in_kete", "open_in_vscode", "open_in_visual_studio", "open_with_default", "reveal_in_explorer", "copy_path", "copy_relative_path"],
   account: ["scope_account", "accounts", "wake_account", "wake_schedule"],
-  global: ["quick_prompt", "add_project", "command_palette", "home_overview", "home_board", "toggle_kanban", "toggle_orchestrator_view", "accounts", "wake_schedule", "toggle_archived", "settings", "mark_seen", "critters", "archive_done"],
+  global: ["quick_prompt", "add_project", "command_palette", "triage_note", "home_overview", "home_board", "toggle_kanban", "toggle_orchestrator_view", "studio_board", "gauntlet_view", "accounts", "wake_schedule", "toggle_archived", "settings", "usage_csv", "mark_seen", "critters", "archive_done"],
 };
 
 /** The verbs a footer and the verb bar lead with, per kind, best first. */
@@ -1977,6 +2067,7 @@ export const MENU_SECTIONS: readonly { id: ActionId; on: AppliesTo | null; secti
   { id: "activate", on: null, section: "act" },
   { id: "follow_up", on: null, section: "act" },
   { id: "ask_aside", on: null, section: "act" },
+  { id: "triage_note", on: null, section: "act" },
   { id: "new", on: null, section: "act" },
   { id: "quick_prompt", on: null, section: "act" },
   { id: "new_terminal", on: null, section: "act" },
@@ -2003,6 +2094,8 @@ export const MENU_SECTIONS: readonly { id: ActionId; on: AppliesTo | null; secti
   { id: "home_board", on: null, section: "go" },
   { id: "toggle_kanban", on: null, section: "go" },
   { id: "toggle_orchestrator_view", on: null, section: "go" },
+  { id: "studio_board", on: null, section: "go" },
+  { id: "gauntlet_view", on: null, section: "go" },
   { id: "toggle_archived", on: null, section: "go" },
   { id: "settings", on: null, section: "go" },
   { id: "wake_schedule", on: "account", section: "change" },
@@ -2014,6 +2107,7 @@ export const MENU_SECTIONS: readonly { id: ActionId; on: AppliesTo | null; secti
   { id: "open_in_browser", on: null, section: "open" },
   { id: "open_with_default", on: null, section: "open" },
   { id: "dock_editor", on: null, section: "open" },
+  { id: "usage_csv", on: null, section: "open" },
   { id: "copy_path", on: null, section: "copy" },
   { id: "copy_relative_path", on: null, section: "copy" },
   { id: "copy_branch", on: null, section: "copy" },
@@ -2023,6 +2117,8 @@ export const MENU_SECTIONS: readonly { id: ActionId; on: AppliesTo | null; secti
   { id: "duplicate_session", on: null, section: "change" },
   { id: "rename", on: null, section: "change" },
   { id: "pin_orchestrator", on: null, section: "change" },
+  { id: "renew_orchestrator", on: null, section: "change" },
+  { id: "studio_autonomy", on: null, section: "go" },
   { id: "switch_branch", on: null, section: "change" },
   { id: "wake_account", on: null, section: "change" },
   { id: "critters", on: null, section: "change" },
@@ -2050,10 +2146,11 @@ export interface MenuGroup {
 export const MENU_GROUPS: readonly MenuGroup[] = [
   { id: "pull_request", title: "Pull request", on: ["session", "worktree"], rows: [{ id: "open_pull_request", label: "Open in browser" }, { id: "create_pull_request", label: "Create\u2026" }, { id: "merge_pull_request", label: "Merge\u2026" }, { id: "comment_pull_request", label: "Comment\u2026" }, { id: "open_issue", label: "Open the issue" }] },
   { id: "remote", title: "Remote", on: ["repo"], rows: [{ id: "open_repo", label: "Open in browser" }, { id: "pull_requests", label: "Pull requests\u2026" }, { id: "issues", label: "Issues\u2026" }, { id: "azure_devops", label: "Azure DevOps\u2026" }, { id: "refresh_pull_requests", label: "Refresh pull requests" }] },
+  { id: "studio", title: "Studio", on: ["repo"], rows: [{ id: "studio_board", label: "Board" }, { id: "gauntlet_view", label: "Gauntlet" }, { id: "studio_autonomy", label: "Autonomy\u2026" }] },
   { id: "open_in", title: "Open in", on: ["session", "worktree", "repo"], rows: [{ id: "open_worktree", label: "Open command" }, { id: "open_in_vscode", label: "VS Code" }, { id: "open_in_visual_studio", label: "Visual Studio" }, { id: "reveal_in_explorer", label: "Explorer" }, { id: "open_in_browser", label: "Browser" }, { id: "dock_editor", label: "Dock editor beside Kete" }] },
   { id: "copy", title: "Copy", on: ["session", "worktree"], rows: [{ id: "copy_path", label: "Path" }, { id: "copy_branch", label: "Branch name" }, { id: "copy_pr_url", label: "Pull request link" }] },
   { id: "move", title: "Move", on: ["session", "worktree", "repo"], rows: [{ id: "move_session", label: "To another worktree\u2026" }, { id: "move_to_account", label: "To another account\u2026" }, { id: "reorder_up", label: "Up" }, { id: "reorder_down", label: "Down" }] },
-  { id: "view", title: "View", on: ["global"], rows: [{ id: "home_overview", label: "Overview" }, { id: "home_board", label: "Board" }, { id: "toggle_kanban", label: "Board or bands" }, { id: "toggle_orchestrator_view", label: "Orchestrator" }, { id: "accounts", label: "Accounts" }, { id: "wake_schedule", label: "Whakaoho" }, { id: "toggle_archived", label: "Archived sessions" }] },
+  { id: "view", title: "View", on: ["global"], rows: [{ id: "home_overview", label: "Overview" }, { id: "home_board", label: "Board" }, { id: "toggle_kanban", label: "Board or bands" }, { id: "toggle_orchestrator_view", label: "Orchestrator" }, { id: "studio_board", label: "Studio board" }, { id: "gauntlet_view", label: "Gauntlet" }, { id: "accounts", label: "Accounts" }, { id: "wake_schedule", label: "Whakaoho" }, { id: "toggle_archived", label: "Archived sessions" }] },
 ];
 
 /** First-use tips (nebula-config learn.rs): `{verb}` / `{verb|words}` name a key. */
@@ -2067,6 +2164,7 @@ export const TIPS: readonly { id: string; text: string }[] = [
 
 /** The What's new page, newest release first. */
 export const WHATS_NEW: readonly { version: string; title: string; items: readonly string[] }[] = [
+  { version: "0.60", title: "A studio of agents", items: ["kete studio enable <repo> lets the orchestrator work through an inbox when it is idle, within the autonomy level you set (A0 to A3).", "Role cards in .kete/roles.toml set a session's model, tools, prompt and permissions; kete roles check shows them.", "The Studio board, state map and Gauntlet view read your repo's notes and verdicts; the triage strip files a note in one line.", "kete usage --csv exports tokens, estimated cost and tool uses per session per day.", "kete orchestrator renew --from <note> hands the orchestrator over to a fresh session."] },
   { version: "0.56", title: "Sessions from sessions", items: ["Start a follow-up as its own session, or Ask aside: both nest under the session they came from.", "Parent rows count their nested sessions and subagents: working, needs you, done.", "Subagent rows show the model and effort they run at, when Claude reports them.", "Moving a session says which uncommitted files and unpushed commits stay behind.", "The quick prompt offers recent checkouts; the desktop's git state and Details rail keep up within seconds."] },
   { version: "0.54", title: "Your tools, your menus, your day", items: ["Open files and checkouts in installed VS Code or Visual Studio, or dock an editor beside Kete.", "Right-click for contextual actions and searchable submenus; browse Files and drag paths onto sessions.", "Choose Workshop, One Dark, One Light or VS Code themes, with your own fonts and sizes.", "Whakaoho schedules optional account wake-ups beside usage windows; cards show limits and sign-in needs.", "Discover optional critters in Settings or the palette; pet, feed, name and collect visitors."] },
   { version: "0.52", title: "Learn in place", items: ["A one-line tip the first time you meet the ? menu, the scope chip, the Review and Ship lanes, drag, or the review. Settings, General, Show tips turns them off.", "Every empty lane and list says what goes there and the one thing to do.", "The footer and the verb bar show the selection's top verbs and ? more. The desktop's Help (F1) groups keys by task.", "A session's changes are counted per turn, so two sessions in one worktree no longer mix."] },

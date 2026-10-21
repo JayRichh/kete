@@ -9,10 +9,16 @@
 //! - `least_used`: the enabled profile with the least use.
 //!
 //! A disabled profile is never picked ([`crate::profiles::Profile::disabled`]).
+//! A reserved one ([`crate::profiles::Profile::reserved`]) is never picked
+//! for automation (the orchestrator's spawns, a renewal, a launch with a
+//! role card, `kete profile pick`), which also reads `manual` as
+//! `least_used` and counts each account's load ([`pick_for`]).
 //! An account with no reading yet counts as unused: picking it is how it
 //! gets one. One pure function ([`pick`]) serves the daemon (a create
 //! with no profile) and both apps (the toast that says what was picked
 //! and why).
+
+pub mod holds;
 
 use serde::Deserialize;
 
@@ -126,6 +132,22 @@ pub enum Reason {
     /// The launch's project names this account its harness's default
     /// (`profiles::PROJECT_DEFAULTS_KEY`).
     ProjectDefault,
+    /// Not a candidate for automation: kept for the person's own launches
+    /// (`Profile::reserved`). What `kete profile pick --dry-run` shows on a
+    /// reserved row; never the reason of a pick.
+    Reserved,
+}
+
+/// Who is starting a launch: a person (Jay, from the apps or his own
+/// shell) or automation (the orchestrator's spawns, a renewal, any launch
+/// with a role card). Passed down every launch path so the pick can tell
+/// them apart (a reserved profile is a person's own); 0.60's foundation
+/// threads it through and the pick does not read it yet.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Launcher {
+    #[default]
+    Person,
+    Automation,
 }
 
 /// A spread's choice.
@@ -163,6 +185,7 @@ impl Pick<'_> {
                 format!("least used, {}", crate::usage::pct_text(*percent))
             }
             Reason::ProjectDefault => "project default".to_string(),
+            Reason::Reserved => "reserved for your own sessions".to_string(),
         };
         format!("{harness}: {who} ({why})")
     }
@@ -190,8 +213,33 @@ pub fn pick<'a>(
             },
         };
     }
-    // The default first, then config order.
-    let mut candidates = profiles::enabled_for(all, harness);
+    spread_over(
+        profiles::enabled_for(all, harness),
+        policy,
+        now_secs,
+        usage,
+        |_, used| {
+            let mut best = 0;
+            for i in 1..used.len() {
+                if used[i].unwrap_or(0.0) < used[best].unwrap_or(0.0) {
+                    best = i;
+                }
+            }
+            best
+        },
+    )
+}
+
+/// `failover` or `least_used` over `candidates`, the default first, then
+/// in the order given. `least` names the least used of them, given each
+/// one's reading in that order.
+fn spread_over<'a>(
+    mut candidates: Vec<&'a Profile>,
+    policy: Policy,
+    now_secs: i64,
+    usage: impl Fn(&str) -> Option<AccountUsage>,
+    least: impl Fn(&[&'a Profile], &[Option<f32>]) -> usize,
+) -> Pick<'a> {
     if let Some(at) = candidates.iter().position(|p| p.default) {
         let d = candidates.remove(at);
         candidates.insert(0, d);
@@ -206,19 +254,9 @@ pub fn pick<'a>(
         .iter()
         .map(|p| usage(p.name.trim()).and_then(|u| u.worst_at(now_secs)))
         .collect();
-    let least = || {
-        let mut best = 0;
-        for i in 1..candidates.len() {
-            if used[i].unwrap_or(0.0) < used[best].unwrap_or(0.0) {
-                best = i;
-            }
-        }
-        best
-    };
     match policy.spread {
-        Spread::Manual => unreachable!("handled above"),
-        Spread::LeastUsed => {
-            let i = least();
+        Spread::Manual | Spread::LeastUsed => {
+            let i = least(&candidates, &used);
             Pick {
                 profile: Some(candidates[i]),
                 reason: Reason::LeastUsed { percent: used[i] },
@@ -239,7 +277,7 @@ pub fn pick<'a>(
                     },
                 },
                 None => {
-                    let i = least();
+                    let i = least(&candidates, &used);
                     Pick {
                         profile: Some(candidates[i]),
                         reason: Reason::AllOver {
@@ -252,32 +290,90 @@ pub fn pick<'a>(
     }
 }
 
-/// The profile a launch on `harness` naming none runs under in a project
-/// whose default account for that harness is `project_default`: that
-/// profile when it is usable, enabled and an account for `harness`, else
-/// the spread's [`pick`]. A project default that is switched off, removed
-/// or for another harness falls through rather than refusing the launch:
-/// the project's setting is a preference, not a pin.
-pub fn pick_for_project<'a>(
+/// The 10-point band an automation pick ranks a reading in: 20 and 28
+/// percent share one, 20 and 31 do not. No reading counts as unused.
+pub fn band(percent: Option<f32>) -> u32 {
+    (percent.unwrap_or(0.0).max(0.0) / 10.0).floor() as u32
+}
+
+/// Whether automation may pick `profile`: neither reserved nor switched off.
+pub fn automation_may_pick(profile: &Profile) -> bool {
+    !profile.reserved && !profile.disabled
+}
+
+/// The profile a launch on `harness` naming none runs under, for who
+/// starts it. [`Launcher::Person`] keeps 0.59's order exactly: the
+/// project's default account (`project_default`) when it is usable, else
+/// the spread's [`pick`]. [`Launcher::Automation`] never picks a reserved
+/// or switched-off profile (a reserved project default is skipped), reads
+/// `manual` as `least_used` (manual would hand every lane the default,
+/// usually the reserved account), and ranks `least_used` by the higher of
+/// the 5-hour and weekly percent in 10-point bands ([`band`]), then by
+/// `load` (live sessions plus [`holds`]), then by name. `failover` keeps
+/// its order over the eligible profiles. No eligible profile: no pick
+/// ([`Reason::NoProfile`]).
+#[allow(clippy::too_many_arguments)]
+pub fn pick_for<'a>(
     all: &'a [Profile],
     harness: &str,
     project_default: Option<&str>,
     policy: Policy,
+    launcher: Launcher,
     now_secs: i64,
     usage: impl Fn(&str) -> Option<AccountUsage>,
+    load: impl Fn(&str) -> u32,
 ) -> Pick<'a> {
+    let eligible: Vec<&'a Profile> = profiles::enabled_for(all, harness)
+        .into_iter()
+        .filter(|p| launcher == Launcher::Person || automation_may_pick(p))
+        .collect();
     if let Some(name) = project_default.map(str::trim).filter(|n| !n.is_empty()) {
-        if let Some(p) = profiles::enabled_for(all, harness)
-            .into_iter()
-            .find(|p| p.name.trim() == name)
-        {
+        if let Some(p) = eligible.iter().find(|p| p.name.trim() == name) {
             return Pick {
                 profile: Some(p),
                 reason: Reason::ProjectDefault,
             };
         }
     }
-    pick(all, harness, policy, now_secs, usage)
+    if launcher == Launcher::Person {
+        return pick(all, harness, policy, now_secs, usage);
+    }
+    spread_over(eligible, policy, now_secs, usage, |candidates, used| {
+        (0..candidates.len())
+            .min_by_key(|&i| {
+                let name = candidates[i].name.trim();
+                (band(used[i]), load(name), name)
+            })
+            .unwrap_or(0)
+    })
+}
+
+/// The profile a launch on `harness` naming none runs under in a project
+/// whose default account for that harness is `project_default`: that
+/// profile when it is usable, enabled and an account for `harness`, else
+/// the spread's [`pick`]. A project default that is switched off, removed
+/// or for another harness falls through rather than refusing the launch:
+/// the project's setting is a preference, not a pin. [`pick_for`] with no
+/// load counted.
+pub fn pick_for_project<'a>(
+    all: &'a [Profile],
+    harness: &str,
+    project_default: Option<&str>,
+    policy: Policy,
+    launcher: Launcher,
+    now_secs: i64,
+    usage: impl Fn(&str) -> Option<AccountUsage>,
+) -> Pick<'a> {
+    pick_for(
+        all,
+        harness,
+        project_default,
+        policy,
+        launcher,
+        now_secs,
+        usage,
+        |_| 0,
+    )
 }
 
 /// The account a launch on `harness` runs under, in the one order every
@@ -285,15 +381,47 @@ pub fn pick_for_project<'a>(
 /// for `harness`, switched off or not), else the project's default account
 /// for the harness, else the ACCOUNT SPREAD's pick, which under `manual` is
 /// the harness's default profile, else none (the CLI's own login). `Err`
-/// says why a named profile cannot be used.
+/// says why a named profile cannot be used. [`resolve_launch_with`] with
+/// no load counted.
+#[allow(clippy::too_many_arguments)]
 pub fn resolve_launch<'a>(
     all: &'a [Profile],
     harness: &str,
     asked: Option<&str>,
     project_default: Option<&str>,
     policy: Policy,
+    launcher: Launcher,
     now_secs: i64,
     usage: impl Fn(&str) -> Option<AccountUsage>,
+) -> Result<Pick<'a>, String> {
+    resolve_launch_with(
+        all,
+        harness,
+        asked,
+        project_default,
+        policy,
+        launcher,
+        now_secs,
+        usage,
+        |_| 0,
+    )
+}
+
+/// [`resolve_launch`], ranking automation's candidates by `load`. An
+/// automation launch with no eligible profile is refused when the CLI's
+/// own login is itself a reserved account (a reserved `use_default`
+/// profile): running it there would hand automation the person's account.
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_launch_with<'a>(
+    all: &'a [Profile],
+    harness: &str,
+    asked: Option<&str>,
+    project_default: Option<&str>,
+    policy: Policy,
+    launcher: Launcher,
+    now_secs: i64,
+    usage: impl Fn(&str) -> Option<AccountUsage>,
+    load: impl Fn(&str) -> u32,
 ) -> Result<Pick<'a>, String> {
     if asked.map(str::trim).is_some_and(|a| !a.is_empty()) {
         return profiles::resolve(all, harness, asked).map(|profile| Pick {
@@ -301,14 +429,29 @@ pub fn resolve_launch<'a>(
             reason: Reason::Named,
         });
     }
-    Ok(pick_for_project(
+    let pick = pick_for(
         all,
         harness,
         project_default,
         policy,
+        launcher,
         now_secs,
         usage,
-    ))
+        load,
+    );
+    if launcher == Launcher::Automation && pick.profile.is_none() {
+        if let Some(own) = profiles::for_harness(all, harness)
+            .into_iter()
+            .find(|p| p.reserved && p.use_default)
+        {
+            let name = own.name.trim();
+            return Err(format!(
+                "no {harness} account is free for automation: `{name}` is reserved and is the \
+                 CLI's own login. Name one with --profile, or run kete profile unreserve {name}"
+            ));
+        }
+    }
+    Ok(pick)
 }
 
 /// Whether an account has a login, as far as its files say: credentials
@@ -578,15 +721,22 @@ pub fn resolve_launch_now<'a>(
     harness: &str,
     asked: Option<&str>,
     project_default: Option<&str>,
+    launcher: Launcher,
 ) -> Result<Pick<'a>, String> {
-    resolve_launch(
+    let now = crate::clock::now_secs() as i64;
+    // shortcut: the daemon passes no session count here, so its load is
+    // holds only; upgrade when resolve_profile_name hands live sessions in.
+    let held = holds::active(now);
+    resolve_launch_with(
         all,
         harness,
         asked,
         project_default,
         load_policy(),
-        crate::clock::now_secs() as i64,
+        launcher,
+        now,
         crate::usage::read_account,
+        |name| held.get(name).copied().unwrap_or(0),
     )
 }
 
@@ -604,6 +754,7 @@ mod tests {
             default,
             use_default: false,
             disabled: false,
+            reserved: false,
         }
     }
 
@@ -731,8 +882,17 @@ mod tests {
         let u = usage(&[("main", 99.0, 99.0), ("proj", 50.0, 50.0)]);
         let manual = policy(Spread::Manual);
         let launch = |asked, project, policy| {
-            resolve_launch(&all, "claude", asked, project, policy, 0, &u)
-                .map(|p| (p.profile.map(|p| p.name.clone()), p.reason))
+            resolve_launch(
+                &all,
+                "claude",
+                asked,
+                project,
+                policy,
+                Launcher::Person,
+                0,
+                &u,
+            )
+            .map(|p| (p.profile.map(|p| p.name.clone()), p.reason))
         };
         // Named wins over everything, a switched-off one too.
         assert_eq!(
@@ -770,7 +930,15 @@ mod tests {
             launch(None, None, manual).unwrap(),
             (Some("main".into()), Reason::Default)
         );
-        let p = pick_for_project(&all, "claude", Some("proj"), manual, 0, &u);
+        let p = pick_for_project(
+            &all,
+            "claude",
+            Some("proj"),
+            manual,
+            Launcher::Person,
+            0,
+            &u,
+        );
         assert_eq!(p.describe("claude"), "claude: proj (project default)");
     }
 
@@ -810,6 +978,211 @@ mod tests {
         assert_eq!(p.profile.unwrap().name, "b");
         let p = pick(&[], "claude", policy(Spread::LeastUsed), 0, &u);
         assert_eq!(p.profile, None);
+    }
+
+    fn reserved(name: &str, default: bool) -> Profile {
+        Profile {
+            reserved: true,
+            ..profile(name, default)
+        }
+    }
+
+    fn auto<'a>(
+        all: &'a [Profile],
+        project: Option<&str>,
+        spread: Spread,
+        u: impl Fn(&str) -> Option<AccountUsage>,
+        load: &[(&str, u32)],
+    ) -> Pick<'a> {
+        pick_for(
+            all,
+            "claude",
+            project,
+            policy(spread),
+            Launcher::Automation,
+            0,
+            u,
+            |name| load.iter().find(|(n, _)| *n == name).map_or(0, |(_, l)| *l),
+        )
+    }
+
+    fn name(pick: &Pick) -> Option<String> {
+        pick.profile.map(|p| p.name.clone())
+    }
+
+    #[test]
+    fn automation_never_picks_a_reserved_default_and_a_person_still_does() {
+        let all = vec![reserved("jay", true), profile("max2", false)];
+        let u = usage(&[("jay", 0.0, 0.0), ("max2", 70.0, 70.0)]);
+        for spread in [Spread::Manual, Spread::Failover, Spread::LeastUsed] {
+            let p = auto(&all, None, spread, &u, &[]);
+            assert_eq!(name(&p).as_deref(), Some("max2"), "{spread:?}");
+        }
+        let person = pick_for(
+            &all,
+            "claude",
+            None,
+            policy(Spread::Manual),
+            Launcher::Person,
+            0,
+            &u,
+            |_| 9,
+        );
+        assert_eq!(name(&person).as_deref(), Some("jay"));
+        assert_eq!(person.reason, Reason::Default);
+    }
+
+    #[test]
+    fn with_every_profile_reserved_or_off_automation_picks_none() {
+        let mut off = profile("off", false);
+        off.disabled = true;
+        let all = vec![reserved("jay", true), reserved("max2", false), off];
+        let p = auto(&all, Some("max2"), Spread::LeastUsed, usage(&[]), &[]);
+        assert_eq!(p.profile, None);
+        assert_eq!(p.reason, Reason::NoProfile);
+    }
+
+    #[test]
+    fn automation_reads_manual_as_least_used() {
+        let all = vec![profile("main", true), profile("b", false)];
+        let u = usage(&[("main", 60.0, 10.0), ("b", 15.0, 10.0)]);
+        let p = auto(&all, None, Spread::Manual, &u, &[]);
+        assert_eq!(name(&p).as_deref(), Some("b"));
+        assert_eq!(
+            p.reason,
+            Reason::LeastUsed {
+                percent: Some(15.0)
+            }
+        );
+    }
+
+    #[test]
+    fn readings_rank_in_10_point_bands_and_load_breaks_a_tie() {
+        let all = vec![profile("a", false), profile("b", false)];
+        // 20 and 28 share a band: the lighter load wins.
+        let u = usage(&[("a", 20.0, 5.0), ("b", 10.0, 28.0)]);
+        let p = auto(&all, None, Spread::LeastUsed, &u, &[("a", 2), ("b", 1)]);
+        assert_eq!(name(&p).as_deref(), Some("b"));
+        // 20 and 31 do not: the lower band wins whatever its load.
+        let u = usage(&[("a", 20.0, 5.0), ("b", 31.0, 0.0)]);
+        let p = auto(&all, None, Spread::LeastUsed, &u, &[("a", 5), ("b", 0)]);
+        assert_eq!(name(&p).as_deref(), Some("a"));
+        // Same band, same load: by name.
+        let u = usage(&[("a", 1.0, 0.0), ("b", 0.0, 0.0)]);
+        let p = auto(&all, None, Spread::LeastUsed, &u, &[]);
+        assert_eq!(name(&p).as_deref(), Some("a"));
+        // A hold on the first moves the next pick on.
+        let p = auto(&all, None, Spread::LeastUsed, &u, &[("a", 1)]);
+        assert_eq!(name(&p).as_deref(), Some("b"));
+        assert_eq!((band(Some(29.9)), band(Some(30.0)), band(None)), (2, 3, 0));
+    }
+
+    #[test]
+    fn automation_skips_a_reserved_project_default() {
+        let all = vec![reserved("jay", false), profile("b", false)];
+        let p = auto(&all, Some("jay"), Spread::Manual, usage(&[]), &[]);
+        assert_eq!(name(&p).as_deref(), Some("b"));
+        let all = vec![reserved("jay", false), profile("proj", false)];
+        let p = auto(&all, Some("proj"), Spread::Manual, usage(&[]), &[]);
+        assert_eq!(p.reason, Reason::ProjectDefault);
+        let person = pick_for_project(
+            &all,
+            "claude",
+            Some("jay"),
+            policy(Spread::Manual),
+            Launcher::Person,
+            0,
+            usage(&[]),
+        );
+        assert_eq!(name(&person).as_deref(), Some("jay"), "a person keeps it");
+    }
+
+    /// `Launcher::Person` is 0.59's pick on every spread, load or no load.
+    #[test]
+    fn a_person_launch_is_unchanged() {
+        let mut off = profile("off", false);
+        off.disabled = true;
+        let all = vec![
+            profile("a", false),
+            reserved("main", true),
+            off,
+            profile("c", false),
+        ];
+        let u = usage(&[("main", 95.0, 0.0), ("a", 10.0, 0.0), ("c", 50.0, 0.0)]);
+        for spread in [Spread::Manual, Spread::Failover, Spread::LeastUsed] {
+            for project in [None, Some("c"), Some("main"), Some("off")] {
+                let old = match project.and_then(|n| {
+                    profiles::enabled_for(&all, "claude")
+                        .into_iter()
+                        .find(|p| p.name == n)
+                }) {
+                    Some(p) => Pick {
+                        profile: Some(p),
+                        reason: Reason::ProjectDefault,
+                    },
+                    None => pick(&all, "claude", policy(spread), 0, &u),
+                };
+                let new = pick_for(
+                    &all,
+                    "claude",
+                    project,
+                    policy(spread),
+                    Launcher::Person,
+                    0,
+                    &u,
+                    |_| 7,
+                );
+                assert_eq!(new, old, "{spread:?} {project:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn automation_is_refused_when_the_own_login_is_the_reserved_account() {
+        let mut jay = reserved("jay", true);
+        jay.use_default = true;
+        let all = vec![jay];
+        let launch = |launcher| {
+            resolve_launch(
+                &all,
+                "claude",
+                None,
+                None,
+                policy(Spread::Manual),
+                launcher,
+                0,
+                usage(&[]),
+            )
+        };
+        let err = launch(Launcher::Automation).unwrap_err();
+        assert!(err.contains("`jay` is reserved"), "{err}");
+        assert_eq!(launch(Launcher::Person).unwrap().reason, Reason::Default);
+        // Named, automation may still use it.
+        let named = resolve_launch(
+            &all,
+            "claude",
+            Some("jay"),
+            None,
+            policy(Spread::Manual),
+            Launcher::Automation,
+            0,
+            usage(&[]),
+        );
+        assert_eq!(named.unwrap().reason, Reason::Named);
+        // A reserved account with a home of its own: the own login is
+        // someone else's, so the launch runs there as in 0.59.
+        let all = vec![reserved("jay", true)];
+        let p = resolve_launch(
+            &all,
+            "claude",
+            None,
+            None,
+            policy(Spread::Manual),
+            Launcher::Automation,
+            0,
+            usage(&[]),
+        );
+        assert_eq!(p.unwrap().reason, Reason::NoProfile);
     }
 
     #[test]

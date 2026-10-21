@@ -174,6 +174,7 @@ async fn every_orchestrator_verb_is_gated_on_the_persisted_role() {
                         effort: None,
                         profile: None,
                         starting_prompt: "do it".into(),
+                        role_card: None,
                     },
                 )
                 .await
