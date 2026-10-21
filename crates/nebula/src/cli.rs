@@ -617,6 +617,23 @@ pub(crate) enum Command {
         #[arg(long)]
         csv: bool,
     },
+    /// The state map: what a studio repo holds and who is on it.
+    ///
+    /// Reads `.kete/state-map.json`, which the daemon rebuilds for a repo in
+    /// studio mode: departments, systems, decisions, lanes, pull requests
+    /// and agents. Prints the tree, or with --slice the short text (under
+    /// 2 KB) an agent reads about one node.
+    #[command(after_help = STATE_EXAMPLES)]
+    State {
+        /// The repo, or any checkout of it (default: the current folder).
+        repo: Option<std::path::PathBuf>,
+        /// One node's slice instead of the tree.
+        #[arg(long, value_name = "NODE")]
+        slice: Option<String>,
+        /// Print JSON: the whole map, or with --slice the node and its edges.
+        #[arg(long)]
+        json: bool,
+    },
     /// Role sessions' PreToolUse guard: refuse a force push and what the
     /// repo's autonomy denies. Reads the hook payload on stdin; exits 2
     /// with the reason to refuse, 0 to let the command run.
@@ -1136,6 +1153,12 @@ Examples:
   kete usage                       today, by session
   kete usage --since 2026-10-21 --by role
   kete usage --csv --since 2026-10-21 > ledger.csv";
+
+const STATE_EXAMPLES: &str = "\
+Examples:
+  kete state                       the tree of the repo you are in
+  kete state --slice D-012         what an agent reads about one node
+  kete state ../game --json        the whole map as JSON";
 
 const BROWSER_EXAMPLES: &str = "\
 Examples:

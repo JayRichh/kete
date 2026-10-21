@@ -11,6 +11,7 @@ mod roles;
 mod setup;
 mod ship;
 mod ssh;
+mod state;
 mod statusline;
 mod studio;
 mod studio_note;
@@ -230,6 +231,7 @@ fn main() -> Result<()> {
             other => studio::run(other),
         },
         Some(Command::Roles { command }) => roles::run(command),
+        Some(Command::State { repo, slice, json }) => state::run(repo, slice, json),
         Some(Command::Usage {
             since,
             until,

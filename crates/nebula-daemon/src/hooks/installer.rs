@@ -299,7 +299,8 @@ fn hook_command(endpoint: &str, event: &str) -> String {
 /// runs commands with — in the documented `PowerShell(cmd *)` form.
 /// 0.60 adds the read-only studio commands the orchestrator's guidance
 /// teaches (`kete studio status`, `queue`, `note`, `kete usage`, `kete
-/// profile list` and `pick`) and `kete orchestrator renew`; never the
+/// profile list` and `pick`), `kete orchestrator renew` and `kete state`
+/// (the state map, read-only); never the
 /// ones that change what a studio may do (`kete studio autonomy`,
 /// `enable`, `disable`, `exclude`, `include`).
 const CLAUDE_ALLOW_RULES: &[&str] = &[
@@ -317,6 +318,7 @@ const CLAUDE_ALLOW_RULES: &[&str] = &[
     "Bash(kete profile list:*)",
     "Bash(kete profile pick:*)",
     "Bash(kete orchestrator renew:*)",
+    "Bash(kete state:*)",
     "Bash(bro rename:*)",
     "Bash(bro worktree:*)",
     "Bash(bro spawn:*)",
@@ -331,6 +333,7 @@ const CLAUDE_ALLOW_RULES: &[&str] = &[
     "Bash(bro profile list:*)",
     "Bash(bro profile pick:*)",
     "Bash(bro orchestrator renew:*)",
+    "Bash(bro state:*)",
     "PowerShell(kete rename *)",
     "PowerShell(kete worktree *)",
     "PowerShell(kete spawn *)",
@@ -345,6 +348,7 @@ const CLAUDE_ALLOW_RULES: &[&str] = &[
     "PowerShell(kete profile list *)",
     "PowerShell(kete profile pick *)",
     "PowerShell(kete orchestrator renew *)",
+    "PowerShell(kete state *)",
     "PowerShell(bro rename *)",
     "PowerShell(bro worktree *)",
     "PowerShell(bro spawn *)",
@@ -359,6 +363,7 @@ const CLAUDE_ALLOW_RULES: &[&str] = &[
     "PowerShell(bro profile list *)",
     "PowerShell(bro profile pick *)",
     "PowerShell(bro orchestrator renew *)",
+    "PowerShell(bro state *)",
 ];
 
 /// Cursor variant: the payload arrives on stdin like Claude's, but cursor
@@ -1347,6 +1352,8 @@ mod tests {
                 "profile list --json",
                 "profile pick --json",
                 "orchestrator renew --from handover.md",
+                "state",
+                "state --slice D-012 --json",
             ] {
                 let cmd = format!("{bin} {cmd}");
                 assert!(
