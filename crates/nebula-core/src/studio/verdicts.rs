@@ -146,8 +146,13 @@ fn read_file(path: &Path, stem: &str, kind: &str) -> Option<Verdict> {
             .unwrap_or_else(|| stem.to_string()),
         kind: kind.to_string(),
         verdict: text(obj.get("verdict")).unwrap_or_default(),
-        by: text(obj.get("by")).filter(|s| !s.is_empty()),
-        at: text(obj.get("at")).filter(|s| !s.is_empty()),
+        // Sound sign-offs write `reviewer` and `date` where art writes `by` and `at`.
+        by: text(obj.get("by"))
+            .filter(|s| !s.is_empty())
+            .or_else(|| text(obj.get("reviewer")).filter(|s| !s.is_empty())),
+        at: text(obj.get("at"))
+            .filter(|s| !s.is_empty())
+            .or_else(|| text(obj.get("date")).filter(|s| !s.is_empty())),
         note: text(obj.get("note")).filter(|s| !s.is_empty()),
         tags: list(obj.get("tags")),
         evidence: list(obj.get("evidence")),
@@ -212,6 +217,33 @@ mod tests {
         assert!(v.tags.is_empty() && v.evidence.is_empty());
         assert!(v.modified.is_some());
         assert_eq!(v.reconciled, None);
+    }
+
+    #[test]
+    fn the_sound_shape_reads_reviewer_and_date() {
+        let dir = tempfile::tempdir().unwrap();
+        put(
+            dir.path(),
+            "sound",
+            "call.json",
+            r#"{"id":"call","verdict":"rejected","reviewer":"Jay","date":"2026-10-19"}"#,
+        );
+        put(
+            dir.path(),
+            "sound",
+            "both.json",
+            r#"{"by":"first","reviewer":"second","at":"2026-10-20","date":"2026-10-01"}"#,
+        );
+        let got = read_kind(dir.path(), "sound");
+        let call = got.iter().find(|v| v.id == "call").unwrap();
+        assert_eq!(call.by.as_deref(), Some("Jay"));
+        assert_eq!(call.at.as_deref(), Some("2026-10-19"));
+        // `by` and `at` win when a file has both spellings.
+        let both = got.iter().find(|v| v.id == "both").unwrap();
+        assert_eq!(both.by.as_deref(), Some("first"));
+        assert_eq!(both.at.as_deref(), Some("2026-10-20"));
+        // The fallback date takes part in the newest-first order.
+        assert_eq!(got[0].id, "both");
     }
 
     #[test]
