@@ -1,0 +1,25 @@
+// The ledger's one-line wording for the session rail: today's spend.
+import type { SpendRow } from '../studio/types';
+
+/** `412k`, `1.5M`, or the whole number under a thousand. */
+function short(n: number): string {
+  if (n >= 999_500) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+  if (n >= 1000) return `${Math.round(n / 1000)}k`;
+  return String(n);
+}
+
+const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/** `today: 412k tokens, est. US$3.10, 58 tool uses, 9 turns`. Tokens are
+ *  input plus output; cache tokens are left out (pending Jay). */
+export function spendLine(row: SpendRow | undefined): string | null {
+  if (!row) return null;
+  const tokens = row.input_tokens + row.output_tokens;
+  const words = tokens === 1 ? 'token' : 'tokens';
+  return [
+    `today: ${short(tokens)} ${words}`,
+    `est. US$${row.cost_usd.toFixed(2)}`,
+    count(row.tool_uses, 'tool use', 'tool uses'),
+    count(row.turns, 'turn', 'turns'),
+  ].join(', ');
+}
