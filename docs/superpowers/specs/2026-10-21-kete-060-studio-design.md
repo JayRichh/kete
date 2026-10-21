@@ -14,7 +14,7 @@ Source: the WHEKO studio design (`C:\Code\wheako\docs\superpowers\specs\2026-10-
 |---|---|---|---|---|---|
 | K1 | `kete profile list --json`, `kete profile pick [--dry-run]`, reserved profiles | accounts (`release/0.60-accounts`) | none | none | profile field `reserved` |
 | K2 | Queue runner: per-project `studio_inbox` and `autonomy` (A0 to A3, default A1), idle notes to the orchestrator | queue (`release/0.60-queue`) | `SetStudio`, `StudioQueue`, `StudioQueueState` | none | `studio` map (machine-local), `studio_idle_after` |
-| K3 | Role cards from `<repo>/.kete/roles.toml` applied at launch | roles (`release/0.60-roles`) | `role_card` on four requests, `SessionRoles` | 36 | none (repo file) |
+| K3 | Role cards from `<repo>/.kete/roles.toml` applied at launch | roles (`release/0.60-roles`) | `role_card` on three requests, `SpawnSiblingAgentWith`, `SessionRoles` | 36 | none (repo file) |
 | K4 | Studio board page, desktop and TUI, read-only from repo files | board (`release/0.60-board`) | none | none | repo file `.kete/studio.toml` |
 | K5 | Gauntlet view, read-only from verdict files, links into the Studio app | gauntlet (`release/0.60-gauntlet`) | none | none | `.kete/studio.toml` `kinds`, `links` |
 | K6 | Triage desk: inbox note writer, triage role, strip under the orchestrator view | triage (`release/0.60-triage`) | none | none | none |
@@ -41,6 +41,9 @@ These replace what studio design section 10 assumed. Each was checked against th
 9. **The idle note cannot ride the UserPromptSubmit hook.** That channel only fires when a prompt is submitted (hooks/mod.rs:697-730). An idle orchestrator is reached through `session_context::write_prompt` (session_context.rs:211), the path `orchestrator_tell` uses.
 10. **The system prompt is recorded once per conversation.** `--system-prompt-snapshot` defaults to on: the prompt rendered on the first request, `--append-system-prompt` included, is reused on every resume until a compaction (`claude --help`). A role card edit therefore reaches new sessions only. The docs say so.
 11. **Branch names cannot nest under `release/0.60`.** Git refuses `release/0.60/<lane>` while `release/0.60` exists (tested 2026-10-21: "cannot lock ref"). Lanes use `release/0.60-<lane>`.
+12. **K6's "quick prompt preset" is the `triage` role card.** An agent preset carries a prefix, a postfix, a model and an effort; the desk also needs a tool set, a permission profile and a stable system prompt, which only a role card carries. The strip launches the desk with that card.
+13. **`--tools <tools...>` is variadic.** Claude's option parser keeps taking values after a variadic flag until the next option, so a trailing task placed straight after the tool list would be read as one more tool name. Kete always emits `--tools <list>` immediately before `--append-system-prompt`, and a test pins that order.
+14. **`SpawnSiblingAgent` cannot take another trailing field.** Its last field, `profile`, is left off the frame when None (protocol 58), and frames are positional: a trailing `role_card` sent with no profile would be read as the profile. The role goes in a new variant, `SpawnSiblingAgentWith`, instead.
 
 ## 3. Engineering decisions
 
@@ -48,7 +51,7 @@ Recorded so lanes do not relitigate them.
 
 1. **One release, 0.60.0.** Lanes merge into `release/0.60` as their PRs go green; one gate and one release at the end.
 2. **Foundation first, then one owner per file.** The foundation lane lands every shared file: protocol, dispatch arms, CLI and verb tables, settings rows, migrations, view and overlay registration, Tauri command registration, e2e suite registration, and a placeholder for every lane-owned module it wires. After it merges, every file in the 0.60 change set has exactly one owning lane. A lane that finds it needs a shared file stops and reports; the main thread makes that change on `release/0.60`.
-3. **Protocol 66, once.** `PROTOCOL_VERSION` 65 to 66 with one gate constant, `STUDIO_PROTOCOL = 66`. `MIN_COMPATIBLE_PROTOCOL` stays 53. So: no new field on any struct an older peer decodes (`Agent`, `ContextUsage`, `AccountUsage`, `Snapshot`); new data travels in new events that `decodable_by` sends only to peers at 66 or later; new optional request fields go last with `#[serde(default, skip_serializing_if = "Option::is_none")]` and a client sends them only to a daemon that said 66 at Hello (the protocol 58 `SpawnSiblingAgent.profile` pattern).
+3. **Protocol 66, once.** `PROTOCOL_VERSION` 65 to 66 with one gate constant, `STUDIO_PROTOCOL = 66`. `MIN_COMPATIBLE_PROTOCOL` stays 53. So: no new field on any struct an older peer decodes (`Agent`, `ContextUsage`, `AccountUsage`, `Snapshot`); new data travels in new events that `decodable_by` sends only to peers at 66 or later; new optional request fields go last with `#[serde(default, skip_serializing_if = "Option::is_none")]` and a client sends them only to a daemon that said 66 at Hello (the protocol 58 `SpawnSiblingAgent.profile` pattern), and only on a request whose current last field is always encoded (correction 14).
 4. **Machine-local control, repo-local description.** What a repo *is* (inbox folder, departments, verdict folders, roles) lives in `<repo>/.kete/studio.toml` and `<repo>/.kete/roles.toml`, committed. What Jay *allows* (whether the queue runs, the autonomy level, exclusions) lives in `config.local.json` under `studio`, keyed by repo root, never exported and never sent to remotes, like `wake` since 0.54. A repo file can never raise autonomy.
 5. **Only a person changes autonomy.** `SetStudio` goes through the daemon, which refuses it from a client inside a live agent session (the `check_provisioning_peer` process walk). The apps and `kete studio` from Jay's own shell pass.
 6. **Roles are read from committed history.** The daemon reads `.kete/roles.toml` with `git show HEAD:.kete/roles.toml` in the project's root worktree, never a lane worktree's working copy. An uncommitted edit changes nothing; a committed one changes new sessions only (correction 10).
@@ -87,7 +90,17 @@ UsageLedger { req_id: u64, since: Option<String>, until: Option<String>, project
 
 `SetStudio` with `studio: None` switches the repo's studio off and is answered with `Ack`. `StudioQueue` with `run: false` reports what the runner would do now and changes nothing; `run: true` runs one tick at once. `since` and `until` are local dates, `YYYY-MM-DD`, inclusive.
 
-New trailing field, `#[serde(default, skip_serializing_if = "Option::is_none")] role_card: Option<String>`, on `CreateAgent`, `StartOrchestrator`, `OrchestratorSpawnWith` and `SpawnSiblingAgent`.
+New trailing field, `#[serde(default, skip_serializing_if = "Option::is_none")] role_card: Option<String>`, on `CreateAgent` (last field today: `profile`, always encoded), `StartOrchestrator` (`replace`, always encoded) and `OrchestratorSpawnWith` (`starting_prompt`, always encoded). With `role_card: None` each frame is the 65 frame byte for byte.
+
+`SpawnSiblingAgent` keeps its 58 shape (correction 14). A sibling spawn with a role uses a new variant appended after `UsageLedger`, every field always encoded:
+
+```rust
+SpawnSiblingAgentWith { req_id: u64, id: AgentId, kind: Option<AgentKind>, starting_prompt: String,
+                        worktree: Option<String>, base: Option<String>, profile: Option<String>,
+                        role_card: String },
+```
+
+A client sends it only to a 66 daemon and only when a role is named; without one it sends `SpawnSiblingAgent` as before.
 
 New `ServerEvent` variants, appended in this order, all gated `peer_version >= STUDIO_PROTOCOL` in `decodable_by`:
 
@@ -118,7 +131,7 @@ pub struct LedgerRow { pub spend: SpendRow, pub session: String, pub project: St
 
 `SessionRoles` is pushed after the `Snapshot` to a 66 peer and again whenever a role session is created or archived. `SessionSpend` carries today's row for one session and is pushed at each of its turn ends. `OrchestratorRenewal` answers `RenewOrchestrator` with `Scheduled`, then is broadcast with `req_id: None` on `Done` or `Failed`.
 
-Protocol tests follow the existing pattern (protocol.rs:1460-1593): a 65 frame of each widened request decodes on 66 with `role_card: None`; a request without a role card encodes to the 65 frame byte for byte; every new event is refused by `decodable_by(65)`; `MIN_COMPATIBLE_PROTOCOL` is still 53.
+Protocol tests follow the existing pattern (protocol.rs:1460-1593): a 65 frame of each widened request decodes on 66 with `role_card: None`; a request without a role card encodes to the 65 frame byte for byte; every combination of None and Some across each widened request's optional fields round-trips to the same values (so no field can land in another's slot); `SpawnSiblingAgent` with and without `profile` is unchanged from 58; every new event is refused by `decodable_by(65)`; `MIN_COMPATIBLE_PROTOCOL` is still 53.
 
 ### 4.2 SQLite
 
@@ -235,13 +248,15 @@ Desktop `View` gains `'studio' | 'gauntlet'`. The rail gains Studio and Gauntlet
 
 ## 6. K2: studio inbox, autonomy and idle notes
 
-**User story.** As Jay I point Kete at a repo's inbox folder and set how much the studio may do. When the orchestrator goes idle and I am not typing to it, Kete tells it what is new in the inbox, so the studio keeps moving between my visits and stops dead when I set A0.
+**User story.** As Jay I point Kete at a repo's inbox folder and set how much the studio may do. When the orchestrator goes idle and I am not typing to it, Kete tells it what is new in the inbox, so the studio keeps moving between my visits, and when I set A0 nothing new starts.
+
+**What a level change reaches.** A0 stops idle notes and refuses new spawns at once. Sessions already running keep going: their deny rules are the ones they started with, but `kete _guard` reads the repo's live autonomy on every shell command (section 7), so a lowered level stops their pushes and tags from the next command. Stopping a running session stays Jay's own action.
 
 **Autonomy levels** (studio design 4.4, decision 0121):
 
 | Level | Kete enforces |
 |---|---|
-| A0 Hold | No idle notes. `OrchestratorSpawn`, `OrchestratorSpawnWith` and `SpawnSiblingAgent` into the repo are refused: "autonomy A0 (Hold) for <repo>". |
+| A0 Hold | No idle notes. `OrchestratorSpawn`, `OrchestratorSpawnWith`, `SpawnSiblingAgent` and `SpawnSiblingAgentWith` into the repo are refused: "autonomy A0 (Hold) for <repo>". `denies()` returns A1's list, which the guard applies to sessions already running. |
 | A1 Plan (default) | Idle notes. Spawned and role sessions in the repo get A1 denies: `git push`, `gh pr`, `gh release`, `git tag`, `kete ship`, `kete ado pr` (Bash and PowerShell forms). |
 | A2 Deliver | Idle notes. A2 denies: `git tag`, `gh release`, `git push --tags`, `git push` of `refs/tags/`. |
 | A3 Release | Idle notes. No autonomy denies. |
@@ -324,22 +339,26 @@ At most 64 roles and 65,536 bytes. A parse error refuses the launch and names th
 
 | Profile | Claude flags | Rules in the session settings file |
 |---|---|---|
-| `prompt` | none added (Claude's own starting mode) | role `allow` and `deny`, plus autonomy denies |
-| `allowlist` | `--permission-mode dontAsk` | role `allow`; deny = built-in + governance + autonomy + role `deny` + `AskUserQuestion` |
+| `prompt` | none added (Claude's own starting mode) | allow = role `allow`; deny = built-in + governance + autonomy + role `deny` |
+| `allowlist` | `--permission-mode dontAsk` | allow = role `allow`; deny = built-in + governance + autonomy + role `deny` + `AskUserQuestion` |
 | `unattended` | `--permission-mode bypassPermissions` | deny = built-in + governance + autonomy + role `deny` + `AskUserQuestion` (allow rules have no effect in this mode) |
 
-**Built-in denies** (a roles file cannot remove them), for `allowlist` and `unattended`:
+Governance denies apply when the repo has a roles file; autonomy denies when the repo has a `studio` entry. Every role session gets a settings file and the guard, whatever its profile.
+
+**Sessions the orchestrator spawns without a role.** In a repo with a `studio` entry, a session created through `OrchestratorSpawn` or `OrchestratorSpawnWith` with no role card is treated as the `prompt` profile with no role rules: it gets a settings file with the built-in, governance and autonomy denies and the guard (decision 10). Outside studio repos, and for every session Jay starts himself without a role, nothing changes from 0.59.
+
+**Built-in denies** (a roles file cannot remove them):
 - Force-push, as Bash and PowerShell rules: `git push --force*`, `git push -f*`, `git push * --force*`, `git push * -f*`, `git push --force-with-lease*`, `git push * --force-with-lease*`, `git push * +*`, `git push --mirror*`, `git push * --mirror*`.
 - Edit and Write on Kete's data and config folders (`//<data dir>/**`, `//<config dir>/**`, in the POSIX form Claude matches on Windows, `//c/Users/...`), on `.claude/**` and `.kete/**` in the session's worktree and in the project's root worktree, and on the session's own settings file.
 - Governance paths from `roles.toml`, made absolute for the session's worktree and for the root worktree.
 
-**The guard.** `kete _guard --session <id>` is a PreToolUse command hook (matcher `Bash|PowerShell`, exec form on Windows as 0.54's B3 does) in the session settings file. It reads the hook JSON on stdin, splits the command on `&&`, `||`, `;` and pipes, finds every `git` invocation (through `-C <dir>`, `-c k=v` and environment prefixes), and exits 2 with a reason for: any force flag, a `+` refspec, `--mirror`, deleting the remote default branch, and the autonomy level's denied commands. It reads the session's autonomy from the settings file Kete wrote, so it needs no daemon.
+**The guard.** `kete _guard --session <id>` is a PreToolUse command hook (matcher `Bash|PowerShell`, exec form on Windows as 0.54's B3 does) in the session settings file. It reads the hook JSON on stdin, splits the command on `&&`, `||`, `;` and pipes, finds every `git` invocation (through `-C <dir>`, `-c k=v` and environment prefixes), and exits 2 with a reason for: any force flag, a `+` refspec, `--mirror`, deleting the remote default branch, and the autonomy level's denied commands. It reads the repo's live autonomy from the `studio` map in `config.local.json` (which sessions are denied from editing), falling back to the level written in its settings file, so it needs no daemon and a lowered level applies from the next command.
 
 **Bypass acceptance.** Before an `unattended` launch the daemon reads the account's user settings (`<profile home>/claude/settings.json`, or `~/.claude/settings.json` for an adopted login). Without `skipDangerousModePermissionPrompt: true` it refuses: "account max2 has not accepted bypass mode: run `kete roles accept-bypass max2` in your own terminal". `kete roles accept-bypass <profile>` runs `claude --permission-mode bypassPermissions` under that profile in the current terminal, as `kete profile login` runs a sign-in; Jay answers Claude's own dialog. It refuses to run inside a Kete session.
 
 **Data model.** Migration 36 `agents.role_card`. The daemon keeps the parsed card per project in memory, keyed by the root worktree's HEAD, re-read when HEAD moves.
 
-**Protocol.** `role_card` on `CreateAgent`, `StartOrchestrator`, `OrchestratorSpawnWith`, `SpawnSiblingAgent`; `SessionRoles` (section 4.1).
+**Protocol.** `role_card` on `CreateAgent`, `StartOrchestrator`, `OrchestratorSpawnWith`; `SpawnSiblingAgentWith`; `SessionRoles` (section 4.1).
 
 **Daemon** (`crates/nebula-daemon/src/registry/roles.rs`). `Daemon::launch_overlay(&self, agent, project) -> Result<LaunchOverlay, String>` returns the flags (`--tools`, `--permission-mode`, `--strict-mcp-config`, model and effort when the launch named none), the role prompt for the system prompt join, and writes the session settings file. The foundation's argv builder applies a `LaunchOverlay` (an empty one changes nothing, by test). The role prompt goes after Kete's worktree guidance and before the PR or issue rule, in that fixed order every time, so the cached prefix is stable. Unattended and allowlist refusals append a line to `<data dir>/studio/refusals.jsonl`.
 
@@ -349,7 +368,7 @@ At most 64 roles and 65,536 bytes. A parse error refuses the launch and names th
 
 **Desktop.** `RoleChip` on session rows, board cards and the session header; a role picker in the quick prompt and the Start orchestrator form, shown when the repo has roles, with each role's model and permission in the option text.
 
-**Tests.** Unit (core `roles`): parse and refuse (bad version, unknown permission, prompt over 8,192 bytes, 65 roles); compose for each profile (rule lists exact, order exact); Windows paths to `//c/...` rules; the guard on 30 commands (force forms, `-C`, environment prefixes, chains, PowerShell, safe pushes that must pass, tag pushes per autonomy). Daemon unit: an empty overlay leaves the 0.59 argv byte for byte; roles read from HEAD, not the working copy; bypass acceptance refusal. Windows e2e (`e2e_windows/roles.rs`): a repo with a committed roles file; `kete orchestrator spawn --role runner` gives the fake agent `--tools Read,Write,Bash`, `--permission-mode dontAsk`, `--strict-mcp-config`, `--model haiku` and a `--settings` file whose deny list holds the governance and force-push rules; `kete _guard` fed a `git push --force` hook payload exits 2; an `unattended` role on an account without acceptance is refused with the command to run; the card shows the role label after a daemon restart (migration 36).
+**Tests.** Unit (core `roles`): parse and refuse (bad version, unknown permission, prompt over 8,192 bytes, 65 roles); compose for each profile (rule lists exact, order exact); Windows paths to `//c/...` rules; the guard on 30 commands (force forms, `-C`, environment prefixes, chains, PowerShell, safe pushes that must pass, tag pushes per autonomy). Daemon unit: an empty overlay leaves the 0.59 argv byte for byte; roles read from HEAD, not the working copy; bypass acceptance refusal. Windows e2e (`e2e_windows/roles.rs`): a repo with a committed roles file; `kete orchestrator spawn --role runner` gives the fake agent `--tools Read,Write,Bash`, `--permission-mode dontAsk`, `--strict-mcp-config`, `--model haiku` and a `--settings` file whose deny list holds the governance and force-push rules; `kete _guard` fed a `git push --force` hook payload exits 2; an `unattended` role on an account without acceptance is refused with the command to run; the card shows the role label after a daemon restart (migration 36); at A1, `kete orchestrator spawn` with no role in a studio repo gets a settings file denying `git push`, and the guard refuses `git push` for it.
 
 **Docs.** docs/roles.md (new): the file, the profiles, the built-in denies, the guard, acceptance, what deny rules do not catch, and that a card edit reaches new sessions only.
 
@@ -396,6 +415,8 @@ At most 64 roles and 65,536 bytes. A parse error refuses the launch and names th
 **User story.** As Jay I type one line under the orchestrator ("the storm sky bands at dusk"), press Enter, and within one turn it is a filed inbox note with a department, a priority and a route, and I see the route in a line.
 
 **Data** (`nebula_core::studio::inbox_write`). `write(dir, &NewNote { text, to, about, priority, by }, now) -> Result<Written, Duplicate>`: id `YYYY-MM-DD-<slug of the first 6 words>`, frontmatter `status: new`, `to: triage` unless given, `by: jay`, `at` now in UTC; written to a temp file and renamed. `Duplicate` when the id exists or an open note's title shares its first 5 normalised words (lowercase, letters and digits); it names the existing note.
+
+**The preset.** The studio design's "quick prompt preset" is the `triage` role card (correction 12).
 
 **Flow.** The note is written, then sent as one turn to the repo's triage desk: the live session with role card `triage`, started on first use in the repo's root worktree through `CreateAgent { role_card: Some("triage") }` (name "triage desk") when the repo's roles file defines `triage`, else the orchestrator, labelled `[triage]`. The turn asks the desk to set `to`, `about`, `priority` and `status: open` in the note and to answer in one line. The strip shows that line once the turn ends (read back through `ReadSession`), waiting up to 120 s; past that it says the note is filed and the desk is busy. A desk at or over 60 percent context is left and a fresh one started for the next note.
 
@@ -451,7 +472,7 @@ Not a lane. After installing 0.60 on Jay's PC: `kete add C:\Code\wheako` and `ke
 1. **Who may ask.** With `caller: Some(id)`: `check_caller_peer` and `require_orchestrator` (only the orchestrator renews itself). With `caller: None`: `check_provisioning_peer` (Jay's own shell or the apps; never another session).
 2. **The note.** A file inside the orchestrator's workspace (`<data dir>/orchestrator`) or inside a registered project, UTF-8, 1 to 65,536 bytes. Anything else is refused before anything changes.
 3. **When.** The reply is `Scheduled`. The swap waits for the old session's turn to end (its `Finished` status), at most 300 s; `now: true` (or a caller that is not mid-turn) swaps at once.
-4. **The swap.** Under the provisioning gate: start the new orchestrator with the old one's project, harness, model and effort (or `model`), role card, and profile (or `profile`, which may come from `kete profile pick`), with the starting prompt `[from kete renew] You are the orchestrator, renewed from <old name> at <time>. Your handover note is <path>; it is quoted below. Read it, then carry on.` followed by the note. `StartOrchestratorSpec` gains `starting_prompt` (foundation). The role moves to the new session when its first hook arrives, at most 60 s; if it does not, the new session is stopped, the old one keeps the role and the state is `Failed`.
+4. **The swap.** Under the provisioning gate, `start_orchestrator` with `replace: true` demotes the old session and creates the new one already holding the role, so its cold spawn carries the orchestrator guidance (`launch_rule` adds it only to a session created as the orchestrator, and a partial unique index allows one orchestrator row). The new session takes the old one's project, harness, model and effort (or `model`), role card, and profile (or `profile`, which may come from `kete profile pick`), with the starting prompt `[from kete renew] You are the orchestrator, renewed from <old name> at <time>. Your handover note is <path>; it is quoted below. Read it, then carry on.` followed by the note. `StartOrchestratorSpec` gains `starting_prompt` (foundation). If the new session sends no hook within 60 s, it is stopped and archived, the old session is re-pinned with `Store::set_orchestrator` directly (not `Daemon::set_orchestrator`, which would type the guidance into it as a turn; its own system prompt already holds it), and the state is `Failed`.
 5. **The old session.** Archived and its process stopped, unless `keep_old`, which leaves it running as a worker.
 6. **The record.** A line in `<data dir>/orchestrator-renewals.jsonl`; `OrchestratorRenewal` broadcast to every 66 peer.
 
@@ -477,7 +498,7 @@ The socket stays same-user; that is the real boundary (docs/orchestrator.md, Per
 - **Roles** come from committed history in the root worktree, and `.kete/**` is denied to allowlist and unattended sessions. Gap: an agent with push rights at A2 could commit a roles change and have the manager merge it; the governance list should name `.kete/**` (Jay's does), which makes a roles change a governance change in decision 0121's sense.
 - **Force-push** is denied by rules and by the guard. Gap: a push from inside a script (`python -c "subprocess.run(['git','push','-f'])"`) passes both; branch protection on the remote is the boundary that holds, and the install note asks Jay to keep it on for `main` in wheako and wheko-web.
 - **Unattended** runs only on accounts Jay accepted himself, only for roles a committed roles file marks `unattended`, and never with `AskUserQuestion`.
-- **The guard** needs no daemon and reads only the session's settings file, which the session cannot edit.
+- **The guard** needs no daemon and reads only the session's settings file and the `studio` map in `config.local.json`, both of which the session is denied from editing.
 
 ## 15. Non-goals
 
