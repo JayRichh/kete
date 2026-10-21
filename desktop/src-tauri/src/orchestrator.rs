@@ -80,6 +80,7 @@ pub async fn start_orchestrator_in(client: &Client, cfg: &Config, spec: StartSpe
         project: some(spec.project).map(nebula_core::ProjectId),
         name: some(spec.name),
         replace: spec.replace,
+        role_card: None,
     })
     .await?;
     Ok(created_id(created))

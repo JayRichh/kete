@@ -13,6 +13,9 @@ import type { Against, ReviewBase } from './diff-base';
 import { knownTheme } from './look';
 import { look, setLookPrefs } from './look.svelte';
 import { refreshLabels } from './accounts/labels.svelte';
+import { gauntletItem, studioOnly, type SessionRole, type SpendRow, type StudioRepo } from './studio/types';
+
+export { studioOnly };
 
 /** Workshop's `system`, `light` or `dark`, `one-dark`, `one-light`,
  *  `vscode`, or `import:<id>` (lib/look.ts). */
@@ -96,6 +99,12 @@ export const app = $state({
   /** The session whose review the Diff view shows (a Review or Ship card
    *  opened): its verbs ride above the diff while it reads its worktree. */
   review: null as string | null,
+  /** Role cards by agent id: the pushed model's map, {} when absent. */
+  roles: {} as Record<string, SessionRole>,
+  /** Today's spend by agent id: the pushed model's map, {} when absent. */
+  spend: {} as Record<string, SpendRow>,
+  /** Repos with studio mode (a manifest or a machine entry). */
+  studioRepos: [] as StudioRepo[],
 });
 
 /** Narrow the window to `s` (`{}`: everything). The Tauri side holds it
@@ -365,8 +374,16 @@ nav.setSaver((view, repo, state) => {
 });
 
 let worktreeSig = '';
+let projectSig = '';
 function take(m: Model) {
   app.model = m;
+  app.roles = m.roles ?? {};
+  app.spend = m.spend ?? {};
+  const projects = m.projects.map((p) => p.id).join(',');
+  if (projects !== projectSig) {
+    projectSig = projects;
+    refreshStudioRepos();
+  }
   refreshUsageLabels();
   askAdo(m);
   // A scope naming a repo, worktree or session that is gone lets it go.
@@ -380,6 +397,36 @@ function take(m: Model) {
     worktreeSig = sig;
     refreshRunCommands();
   }
+}
+
+/** Ask again which repos have studio mode (the projects changed). A failed
+ *  ask leaves none. */
+export function refreshStudioRepos() {
+  api
+    .studioRepos()
+    .then((r) => (app.studioRepos = studioOnly(r)))
+    .catch(() => (app.studioRepos = []));
+}
+
+/** The Studio view, on a repo when one is named. */
+export function openStudio(repo?: string) {
+  nav.go({ view: 'studio', repo });
+}
+
+/** The Gauntlet view, on a repo, and on one verdict when `kind` and `id` are given. */
+export function openGauntlet(repo?: string, verdict?: { kind: string; id: string }) {
+  nav.go({ view: 'gauntlet', repo, item: verdict ? gauntletItem(verdict.kind, verdict.id) : undefined });
+}
+
+/** Whether `repo` has studio mode. */
+export function hasStudio(repo: string | undefined | null): boolean {
+  return !!repo && app.studioRepos.some((r) => r.repo === repo);
+}
+
+/** Whether a triage note has somewhere to go: an orchestrator, or a session on the triage card. */
+export function triageAvailable(): boolean {
+  const m = app.model;
+  return m.agents.some((a) => !a.archived && (a.role === 'orchestrator' || app.roles[a.id]?.card === 'triage'));
 }
 
 /** Mark the session on screen seen when it reads unread and the window has focus. */

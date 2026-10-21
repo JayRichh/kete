@@ -88,6 +88,12 @@ pub struct Model {
     /// board read against before deriving one.
     #[serde(skip)]
     pub bases: HashMap<String, nebula_core::review_base::RecordedBase>,
+    /// Each role session's role card, by agent id (`ServerEvent::
+    /// SessionRoles`, a 66+ daemon): replaced whole by each push.
+    pub roles: HashMap<String, nebula_core::studio::wire::SessionRole>,
+    /// Today's spend per session, by agent id (`ServerEvent::SessionSpend`,
+    /// a 66+ daemon): folded in row by row.
+    pub spend: HashMap<String, nebula_core::studio::wire::SpendRow>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -135,6 +141,24 @@ type Answers = HashMap<u64, oneshot::Sender<Result<String, String>>>;
 /// `SessionChanges` requests waiting on their reply.
 type Changes =
     HashMap<u64, oneshot::Sender<Result<nebula_core::session_snapshot::SessionChanges, String>>>;
+
+/// 0.60 requests answered by an event of their own rather than `Ack`
+/// (`StudioQueueState`, `UsageLedgerRows`, a renewal's `Scheduled`):
+/// the whole reply, for the lane's command to read.
+type Replies = HashMap<u64, oneshot::Sender<Result<ServerEvent, String>>>;
+
+/// A renewal, as the window hears it (the Tauri event
+/// `orchestrator-renewal`): `Scheduled` answering a request, then
+/// `Done` or `Failed` for everyone.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Renewal {
+    pub old: String,
+    pub new: Option<String>,
+    pub state: nebula_core::studio::wire::RenewState,
+}
+
+/// Where a [`Renewal`] goes: the app emits it to the window.
+pub type RenewalSink = Box<dyn Fn(Renewal) + Send + Sync>;
 
 /// The orchestrator asked for a review (`kete orchestrator review`): the
 /// daemon's `ReviewOpened` broadcast, as the window hears it.
@@ -208,8 +232,10 @@ pub struct Client {
     pending: Mutex<Pending>,
     answers: Mutex<Answers>,
     changes: Mutex<Changes>,
+    replies: Mutex<Replies>,
     panes: Mutex<HashMap<SessionRef, Channel<PtyEvent>>>,
     reviews: Mutex<Option<ReviewSink>>,
+    renewals: Mutex<Option<RenewalSink>>,
     notices: Mutex<Option<NoticeSink>>,
     /// Each checkout's base ref, kept between `worktree_git` polls.
     bases: Mutex<nebula_core::review_base::BaseRefs>,
@@ -231,8 +257,10 @@ impl Client {
             pending: Mutex::new(HashMap::new()),
             answers: Mutex::new(HashMap::new()),
             changes: Mutex::new(HashMap::new()),
+            replies: Mutex::new(HashMap::new()),
             panes: Mutex::new(HashMap::new()),
             reviews: Mutex::new(None),
+            renewals: Mutex::new(None),
             notices: Mutex::new(None),
             bases: Mutex::new(Default::default()),
             next_req: AtomicU64::new(1),
@@ -411,6 +439,53 @@ impl Client {
     /// Hand every `ReviewOpened` to `sink` from now on.
     pub fn on_review(&self, sink: ReviewSink) {
         *self.reviews.lock().expect("reviews lock") = Some(sink);
+    }
+
+    /// Hand every orchestrator [`Renewal`] to `sink` from now on.
+    pub fn on_renewal(&self, sink: RenewalSink) {
+        *self.renewals.lock().expect("renewals lock") = Some(sink);
+    }
+
+    /// Send a 0.60 request carrying `req_id` and wait for the event that
+    /// answers it (`StudioQueueState`, `UsageLedgerRows`, the renewal's
+    /// `OrchestratorRenewal`); an `Error` for it is the error. Refused
+    /// before sending to a daemon below 66, which would drop the
+    /// connection on the request.
+    // The queue, ledger and renew lanes' commands call it.
+    #[allow(dead_code)]
+    pub async fn rpc_reply(&self, req_id: u64, req: ClientRequest) -> Result<ServerEvent> {
+        if self.daemon_protocol() < nebula_core::STUDIO_PROTOCOL {
+            bail!("needs the 0.60 daemon: run `kete kill` and reopen");
+        }
+        let (done_tx, done_rx) = oneshot::channel();
+        self.replies
+            .lock()
+            .expect("replies lock")
+            .insert(req_id, done_tx);
+        if let Err(e) = self.send(req) {
+            self.replies.lock().expect("replies lock").remove(&req_id);
+            return Err(e);
+        }
+        match tokio::time::timeout(RPC_TIMEOUT, done_rx).await {
+            Ok(Ok(Ok(ev))) => Ok(ev),
+            Ok(Ok(Err(message))) => Err(anyhow!(message)),
+            Ok(Err(_)) => bail!("the daemon connection closed before it answered"),
+            Err(_) => {
+                self.replies.lock().expect("replies lock").remove(&req_id);
+                Err(RpcTimeout.into())
+            }
+        }
+    }
+
+    /// Hand a reply event to the request waiting on `req_id`, if any.
+    fn reply(&self, req_id: u64, ev: ServerEvent) -> bool {
+        match self.replies.lock().expect("replies lock").remove(&req_id) {
+            Some(w) => {
+                let _ = w.send(Ok(ev));
+                true
+            }
+            None => false,
+        }
     }
 
     /// Hand every [`Notice`] to `sink` from now on.
@@ -707,6 +782,58 @@ impl Client {
                     let _ = w.send(Err(message));
                 } else if let Some(w) = self.changes.lock().expect("changes lock").remove(&req_id) {
                     let _ = w.send(Err(message));
+                } else if let Some(w) = self.replies.lock().expect("replies lock").remove(&req_id) {
+                    let _ = w.send(Err(message));
+                }
+            }
+            // 0.60 (a 66+ daemon): the role sessions, replaced whole.
+            ServerEvent::SessionRoles { roles } => {
+                self.model.lock().expect("model lock").roles =
+                    roles.into_iter().map(|r| (r.agent.0.clone(), r)).collect();
+                self.touch();
+            }
+            // Today's spend, one session at a time.
+            ServerEvent::SessionSpend { rows } => {
+                let mut m = self.model.lock().expect("model lock");
+                for row in rows {
+                    m.spend.insert(row.agent.0.clone(), row);
+                }
+                drop(m);
+                self.touch();
+            }
+            ev @ ServerEvent::StudioQueueState { .. }
+            | ev @ ServerEvent::UsageLedgerRows { .. } => {
+                let req_id = match &ev {
+                    ServerEvent::StudioQueueState { req_id, .. }
+                    | ServerEvent::UsageLedgerRows { req_id, .. } => *req_id,
+                    _ => unreachable!("matched above"),
+                };
+                self.reply(req_id, ev);
+            }
+            ServerEvent::OrchestratorRenewal {
+                req_id,
+                old,
+                new,
+                state,
+            } => {
+                let renewal = Renewal {
+                    old: old.0.clone(),
+                    new: new.as_ref().map(|n| n.0.clone()),
+                    state: state.clone(),
+                };
+                if let Some(req_id) = req_id {
+                    self.reply(
+                        req_id,
+                        ServerEvent::OrchestratorRenewal {
+                            req_id: Some(req_id),
+                            old,
+                            new,
+                            state,
+                        },
+                    );
+                }
+                if let Some(sink) = self.renewals.lock().expect("renewals lock").as_ref() {
+                    sink(renewal);
                 }
             }
             ServerEvent::SessionAnswer { req_id, answer, .. } => {
@@ -1535,5 +1662,71 @@ mod tests {
             subagents: Vec::new(),
         });
         assert_eq!(client.recorded_base("w"), None);
+    }
+
+    /// 0.60: a 66 daemon's role sessions land in the model replaced whole,
+    /// its spend rows upserted, both by agent id; a renewal reaches the
+    /// window's sink.
+    #[test]
+    fn roles_spend_and_renewals_reach_the_window() {
+        use nebula_core::studio::wire::{RenewState, SessionRole, SpendRow};
+        let role = |agent: &str, card: &str| SessionRole {
+            agent: AgentId(agent.into()),
+            card: card.into(),
+            label: card.into(),
+            tier: 3,
+            department: None,
+            permission: "allowlist".into(),
+            context_budget: None,
+        };
+        let spend = |agent: &str, turns: u32| SpendRow {
+            agent: AgentId(agent.into()),
+            day: "2026-10-21".into(),
+            input_tokens: 1,
+            output_tokens: 1,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            cost_usd: 0.1,
+            tool_uses: 1,
+            turns,
+        };
+        let client = Client::new();
+        client.handle(ServerEvent::SessionRoles {
+            roles: vec![role("a", "runner"), role("b", "triage")],
+        });
+        client.handle(ServerEvent::SessionRoles {
+            roles: vec![role("a", "lead")],
+        });
+        let json = serde_json::to_value(client.snapshot()).unwrap();
+        assert_eq!(json["roles"]["a"]["card"], "lead");
+        assert!(json["roles"].get("b").is_none(), "replaced whole");
+        client.handle(ServerEvent::SessionSpend {
+            rows: vec![spend("a", 1), spend("b", 3)],
+        });
+        client.handle(ServerEvent::SessionSpend {
+            rows: vec![spend("a", 2)],
+        });
+        let json = serde_json::to_value(client.snapshot()).unwrap();
+        assert_eq!(json["spend"]["a"]["turns"], 2);
+        assert_eq!(json["spend"]["b"]["turns"], 3);
+
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let h = heard.clone();
+        client.on_renewal(Box::new(move |r| h.lock().unwrap().push(r)));
+        client.handle(ServerEvent::OrchestratorRenewal {
+            req_id: None,
+            old: AgentId("o".into()),
+            new: Some(AgentId("n".into())),
+            state: RenewState::Done,
+        });
+        let heard = heard.lock().unwrap();
+        assert_eq!(heard.len(), 1);
+        assert_eq!(
+            (heard[0].old.as_str(), heard[0].new.as_deref()),
+            ("o", Some("n"))
+        );
+        assert_eq!(heard[0].state, RenewState::Done);
+        let wire = serde_json::to_value(&heard[0]).unwrap();
+        assert_eq!(wire["state"], "Done");
     }
 }

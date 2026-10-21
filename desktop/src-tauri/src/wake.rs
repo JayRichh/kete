@@ -123,6 +123,7 @@ mod tests {
             default: false,
             use_default: false,
             disabled: false,
+            reserved: false,
         };
         let codex = nebula_core::profiles::Profile {
             name: "cx".into(),

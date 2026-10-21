@@ -7,7 +7,22 @@
 
 import { api, type AccountRow, type Agent, type Model, type StopNote, type TerminalTab, type Worktree } from './api';
 import { stopLabel, stopTone } from './stop';
-import { app, focusQuickPrompt, markSeen, openDiff, openSession, projectOf, revealRepo, setScope, toast } from './store.svelte';
+import {
+  app,
+  focusQuickPrompt,
+  hasStudio,
+  markSeen,
+  openDiff,
+  openGauntlet,
+  openSession,
+  openStudio,
+  projectOf,
+  revealRepo,
+  setScope,
+  toast,
+} from './store.svelte';
+import { openAutonomy } from './studio/queue/autonomy';
+import { openRenew } from './orchestrator/renew';
 import { ALT_CHOICE, ask, openMenu, type MenuEntry, type MenuHeading, type MenuIcon, type MenuItem } from './ui/ui.svelte';
 import type { ShortcutId } from './shortcuts';
 import { makeOrchestrator, openReview, unpinOrchestrator } from './orch.svelte';
@@ -633,6 +648,8 @@ function agentVerbs(a: Agent, viaSub = false, where: StepIn = stepInFor()): Verb
     archive: { run: () => archiveAgent(a.id, viaSub), label: viaSub ? 'Archive parent session\u2026' : undefined },
     delete: { run: () => deleteAgent(a.id) },
   };
+  // 0.60: Renew orchestrator, on the orchestrator only.
+  if (pinned) t.renew_orchestrator = { run: openRenew };
   // Its worktree's pull request.
   Object.assign(t, prVerbs(a.worktree_id, a.id));
   if (!viaSub) {
@@ -711,6 +728,12 @@ function projectVerbs(project: string): VerbTable {
     remove_project: { run: () => removeProject(project) },
   };
   if (canSwitchBranch(project)) t.switch_branch = { run: () => openBranchSwitch(project) };
+  // 0.60: a studio repo's board, gauntlet and autonomy, only on one.
+  if (hasStudio(project)) {
+    t.studio_board = { run: () => openStudio(project) };
+    t.gauntlet_view = { run: () => openGauntlet(project) };
+    t.studio_autonomy = { run: () => openAutonomy(project) };
+  }
   // The Worktrees view's sweep, with a linked checkout to look at. Its
   // module imports this one, so it loads when asked.
   const linked = m().worktrees.filter((w) => w.project_id === project && !w.is_main);

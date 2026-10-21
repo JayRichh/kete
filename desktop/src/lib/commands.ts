@@ -11,6 +11,8 @@ import {
   goHome,
   markSeen,
   openDiff,
+  openGauntlet,
+  openStudio,
   openSession,
   openSettings,
   projectOf,
@@ -19,6 +21,7 @@ import {
   setHome,
   setThemePref,
   toast,
+  triageAvailable,
 } from './store.svelte';
 import { nextTheme, themeLabel } from './look';
 import { look } from './look.svelte';
@@ -53,6 +56,8 @@ import { orchestratorOf } from './orchestrator';
 import { openAccounts } from './accounts/actions';
 import { openWake } from './wake/state.svelte';
 import { openAddAccount } from './accounts/add.svelte';
+import { focusTriage } from './triage/focus';
+import { exportUsage } from './ledger/export';
 import { moveStep, rootOf, stepInFor } from './reorder.svelte';
 import { railOrder, repoRows } from './overview/repos';
 import { inScope, isEverything, scopedRepo, scopedWorktree } from './scope';
@@ -295,6 +300,14 @@ export function backgroundMenu(): MenuEntry[] {
   };
   // The critters' own toggle (the shared `critters` setting), ticked while
   // on, once they have been found (menu matrix 5.15).
+  // Studio mode (0.60): the rows show once a repo has it; Repo and Session
+  // rows (studio_autonomy, renew_orchestrator) are in actions.ts.
+  if (app.studioRepos.length) {
+    t.studio_board = { run: () => openStudio(repo) };
+    t.gauntlet_view = { run: () => openGauntlet(repo) };
+  }
+  if (triageAvailable()) t.triage_note = { run: focusTriage };
+  t.usage_csv = { run: () => void exportUsage() };
   if (critters.found) t.critters = { run: () => void toggleCritters(), checked: critters.prefs.on };
   const where = isEverything(app.model.scope) ? 'across every repo' : 'in the scope';
   if (scopedSessions().some((a) => a.unseen)) t.mark_seen = { run: () => markAllSeen(scopedSessions()) };

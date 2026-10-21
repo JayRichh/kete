@@ -8,6 +8,7 @@
   import RunButton from './RunButton.svelte';
   import ContextBar from '../accounts/ContextBar.svelte';
   import StopBadge from '../StopBadge.svelte';
+  import RoleChip from '../roles/RoleChip.svelte';
   import { flatten, rollup, rollupLabel, subagentMeta, type Node } from './tree';
   // A row's right-click menu comes from its data-target (menus/router.ts).
   import OrchBadge from '../orchestrator/OrchBadge.svelte';
@@ -176,6 +177,7 @@
           {/if}
         </span>
         {#if n.agent?.role === 'orchestrator'}<span class="ml-2"><OrchBadge /></span>{/if}
+        {#if n.agent}<RoleChip agent={n.agent.id} />{/if}
         {#if n.from}
           {@const from = n.from}
           <button
