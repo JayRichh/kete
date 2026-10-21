@@ -377,11 +377,11 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
     true
 }
 
-/// A key on the studio board for `repo`: `[` and `]` work the control,
-/// opened on `repo` when it is not already, and a raise waiting for a yes
-/// on `repo` takes every key. True when it took the key.
+/// A key on the studio board for `repo`: `[` and `]` (or `-` and `+`)
+/// work the control, opened on `repo` when it is not already, and a raise
+/// waiting for a yes on `repo` takes every key. True when it took the key.
 pub fn board_key(app: &mut App, repo: Option<&ProjectId>, key: KeyEvent) -> bool {
-    let bracket = matches!(key.code, KeyCode::Char('[' | ']'))
+    let bracket = matches!(key.code, KeyCode::Char('[' | ']' | '-' | '+'))
         && !key
             .modifiers
             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
@@ -775,6 +775,12 @@ mod tests {
         assert!(
             board_key(&mut app, Some(&p), ch('n')),
             "n answers the raise"
+        );
+        assert_eq!(text(&header_line(&app, Some(&p))), ready);
+        assert!(board_key(&mut app, Some(&p), ch('+')), "+ raises as ] does");
+        assert!(
+            board_key(&mut app, Some(&p), k(KeyCode::Esc)),
+            "Esc drops it"
         );
         assert_eq!(text(&header_line(&app, Some(&p))), ready);
         *state() = State::EMPTY;
