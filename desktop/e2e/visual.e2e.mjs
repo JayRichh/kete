@@ -217,6 +217,13 @@ for (const theme of ['light', 'dark']) {
         await d.click(PROMPT);
         await d.el('form[aria-label="Start a session"] select[aria-label="Role"]');
         await shoot(d, theme, w, 'quick-prompt-role', 'form[aria-label="Start a session"]', seen);
+        // The option row: nothing wraps past its height, no select squeezed shut.
+        const row = await d.wd.exec(`const r = document.querySelector('[aria-label="Launch options"]');
+          const out = [];
+          for (const c of r.children) if (c.getBoundingClientRect().width && c.scrollHeight > r.clientHeight + 1) out.push('wraps: ' + c.innerText.replace(/\s+/g, ' ').slice(0, 40));
+          for (const s of r.querySelectorAll('select')) if (s.getBoundingClientRect().width < 64) out.push('squeezed: ' + s.getAttribute('aria-label') + ' ' + Math.round(s.getBoundingClientRect().width));
+          return out;`);
+        seen.at(-1).bad.push(...row);
 
         await d.press('k', Key.Control);
         await d.type('[aria-label="Command palette"] input', 'studio');

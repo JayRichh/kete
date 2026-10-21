@@ -328,7 +328,7 @@
         </div>
       {/if}
       <div
-        class="flex h-8 items-stretch border-t border-rule-strong bg-bg"
+        class="@container flex min-h-8 flex-wrap items-stretch border-t border-rule-strong bg-bg *:h-8"
         role="group"
         aria-label="Launch options"
       >
@@ -369,7 +369,7 @@
           {@render chevron()}
         </span>
         {#if !isTerminal}<RolePicker repo={project} bind:value={role} bar />{/if}
-        <label class="flex items-center gap-2 border-r border-rule px-3 text-[12px] text-ink">
+        <label class="flex items-center gap-2 border-r border-rule px-3 text-[12px] whitespace-nowrap text-ink">
           <input
             type="checkbox"
             class="size-3.5 accent-[var(--color-ink)]"
@@ -379,7 +379,8 @@
           new worktree
         </label>
         <span class="flex-1"></span>
-        <span class="flex items-center pr-3 font-mono text-[11px] text-muted">Enter start &middot; Shift+Enter new line</span>
+        <!-- Gives way first in a narrow row: the prompt's placeholder names Enter too. -->
+        <span class="flex flex-none items-center pr-3 font-mono text-[11px] whitespace-nowrap text-muted @max-[1100px]:hidden">Enter start &middot; Shift+Enter new line</span>
       </div>
     </div>
   {/if}

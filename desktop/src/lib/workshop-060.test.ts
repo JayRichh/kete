@@ -34,6 +34,9 @@ describe('the 0.60 views keep Workshop', () => {
       expect(text, 'an em dash').not.toContain(String.fromCharCode(0x2014));
       expect(text.match(/\b(shadow|rounded)(-[a-z0-9]+)?\b/g)?.filter((c) => c !== 'rounded-none') ?? [], 'shadows or round corners').toEqual([]);
       expect(text.match(/error[^}\n]*\?\s*'[^']*ember/g) ?? [], 'an error in ember').toEqual([]);
+      // Svelte drops the space at a tag's edge (`verdict </span>` ran into
+      // the path); a kept space is `{' '}`.
+      expect(text.match(/[^\s>] <\/span>|<span[^>]*> [^\s<{]/g) ?? [], 'a space at the edge of a span').toEqual([]);
       // An sr-only word is absolute: a sideways scroller that is not its
       // containing block lets it widen the whole page.
       const scrollers = text.match(/class="[^"]*overflow-x-auto[^"]*"/g) ?? [];

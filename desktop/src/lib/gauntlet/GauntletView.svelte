@@ -340,12 +340,12 @@
             <div class="mt-3 {head}">files</div>
             <ul class="m-0 mt-1 list-none p-0">
               <li class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-rule py-1.5">
-                <span class="min-w-0 font-mono text-[12px] break-all text-ink"><span class="text-faint">verdict </span>{sel.rel}</span>
+                <span class="min-w-0 font-mono text-[12px] break-all text-ink"><span class="text-faint">verdict</span>{' '}{sel.rel}</span>
                 {@render files(sel.rel, null, false)}
               </li>
               {#if sel.reconciled}
                 <li class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-rule py-1.5">
-                  <span class="min-w-0 font-mono text-[12px] break-all text-ink"><span class="text-faint">reconciled </span>{sel.reconciled_rel ?? sel.reconciled}</span>
+                  <span class="min-w-0 font-mono text-[12px] break-all text-ink"><span class="text-faint">reconciled</span>{' '}{sel.reconciled_rel ?? sel.reconciled}</span>
                   {#if sel.reconciled_rel}{@render files(sel.reconciled_rel, null, false)}{/if}
                 </li>
               {/if}
