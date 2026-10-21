@@ -92,6 +92,10 @@ pub(crate) fn row_lines(
             Style::default().fg(th.muted),
         ));
     }
+    // Kept for the person's own sessions: a word, so it never rests on colour.
+    if row.reserved() {
+        head.push(Span::styled("  (yours)", Style::default().fg(th.accent)));
+    }
     if row.disabled() {
         let off = if row.default_off {
             "  off (default)"
@@ -305,6 +309,7 @@ fn list_buttons(view: &AccountsView) -> Vec<Button> {
     let profile = row.is_some_and(|r| r.profile.is_some());
     let usable = profile && row.is_some_and(|r| r.problem.is_none());
     let off = row.is_some_and(AccountRow::disabled);
+    let yours = row.is_some_and(AccountRow::reserved);
     let mut out = vec![
         button("a", "add", KeyCode::Char('a')),
         button("\u{21b5}", "edit", KeyCode::Enter),
@@ -317,6 +322,15 @@ fn list_buttons(view: &AccountsView) -> Vec<Button> {
             if off { "switch on" } else { "switch off" },
             KeyCode::Char(' '),
         ),
+        button(
+            "y",
+            if yours {
+                "stop reserving"
+            } else {
+                "reserve for me"
+            },
+            KeyCode::Char('y'),
+        ),
         button("l", "sign in", KeyCode::Char('l')),
         button("p", "use for repo", KeyCode::Char('p')),
         button("m", "move session here", KeyCode::Char('m')),
@@ -324,7 +338,7 @@ fn list_buttons(view: &AccountsView) -> Vec<Button> {
     for b in &mut out[1..] {
         b.on = match b.key {
             "\u{21b5}" | "c" | "r" | "x" => profile,
-            "d" | "\u{2423}" | "p" => usable,
+            "d" | "\u{2423}" | "y" | "p" => usable,
             "l" => row.is_some_and(|r| r.problem.is_none()),
             _ => row.is_some(),
         };

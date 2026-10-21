@@ -6,9 +6,11 @@
 //! whether it is signed in, and the live sessions running on it. A
 //! profile the settings got wrong is listed with what is wrong, never
 //! left out. `Space` (or `e`) switches a profile on or off, `d` (or `*`)
-//! makes it its harness's default; both write the settings layer holding
-//! the profiles in place (`nebula_core::profiles`), which the config beat
-//! then reloads everywhere. A login is never run from here: an account
+//! makes it its harness's default, `y` keeps it for the person's own
+//! sessions (`(yours)`: no launch a script or the orchestrator starts picks
+//! it); each writes the settings layer holding the profiles in place
+//! (`nebula_core::profiles`), which the config beat then reloads
+//! everywhere. A login is never run from here: an account
 //! that needs one shows the command to type.
 //!
 //! `Tab` turns the overlay to its other view, the WAKE tab
@@ -56,6 +58,11 @@ impl AccountRow {
 
     pub fn disabled(&self) -> bool {
         self.profile.as_ref().is_some_and(|p| p.disabled)
+    }
+
+    /// A profile kept for the person's own sessions; an own login never is.
+    pub fn reserved(&self) -> bool {
+        self.profile.as_ref().is_some_and(|p| p.reserved)
     }
 
     /// The login hint for an account that needs one.
@@ -1197,6 +1204,38 @@ impl AccountsView {
         })
     }
 
+    /// Keep the selected profile for the person's own sessions, or give it
+    /// back to scripts, in the settings file. The message for the footer,
+    /// or why not.
+    pub fn toggle_reserved(&mut self) -> Result<String, String> {
+        let row = self.selected().ok_or("no account selected")?;
+        if let Some(problem) = &row.problem {
+            return Err(format!("{}: {problem}", row.label()));
+        }
+        let Some(profile) = &row.profile else {
+            return Err(format!(
+                "{} is the CLI's own login: add it as a profile to reserve it (kete profile add <name> --harness {} --use-default)",
+                row.label(),
+                row.harness
+            ));
+        };
+        let name = profile.name.trim().to_string();
+        let on = !profile.reserved;
+        self.on_profiles_layer(|layer| profiles::set_reserved_in_file(layer, &name, on))?;
+        if let Some(p) = self
+            .rows
+            .get_mut(self.cursor)
+            .and_then(|r| r.profile.as_mut())
+        {
+            p.reserved = on;
+        }
+        Ok(if on {
+            format!("{name} is reserved: kept for your own sessions")
+        } else {
+            format!("{name} can be picked by scripts again")
+        })
+    }
+
     /// Make the selected profile its harness's default.
     pub fn set_default(&mut self) -> Result<String, String> {
         let row = self.selected().ok_or("no account selected")?;
@@ -1502,6 +1541,51 @@ mod tests {
         assert_eq!(view.cursor, 2, "clamped");
         assert!(view.toggle_enabled().is_err());
         assert!(view.set_default().is_err());
+    }
+
+    /// `y` keeps a profile for the person's own sessions: reserved lands in
+    /// the file, and off again leaves no key; own logins and broken
+    /// profiles are refused.
+    #[test]
+    fn toggle_reserved_writes_the_settings_file_and_reads_back_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(
+            &path,
+            r#"{"theme":"x","profiles":[{"name":"work","harness":"claude"},{"name":"home","harness":"claude"}]}"#,
+        )
+        .unwrap();
+        let mut broken = profile("bad", false);
+        broken.harness = String::new();
+        // The broken profile's harness is empty: its group sorts first.
+        let all = vec![broken, profile("work", false), profile("home", false)];
+        let mut view = AccountsView::new(
+            build_rows(&all, &[reading("@claude", 0.0, 0.0)], &[], signed_in),
+            path.clone(),
+            dir.path().join("config.local.json"),
+        );
+        let saved = || -> serde_json::Value {
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
+        };
+        assert!(view.toggle_reserved().is_err(), "a broken profile");
+        view.step(2);
+        let said = view.toggle_reserved().unwrap();
+        assert_eq!(said, "home is reserved: kept for your own sessions");
+        assert!(view.rows[2].reserved() && !view.rows[1].reserved());
+        assert_eq!(saved()["profiles"][1]["reserved"], true);
+        assert_eq!(saved()["theme"], "x", "other keys kept");
+        assert_eq!(
+            view.toggle_reserved().unwrap(),
+            "home can be picked by scripts again"
+        );
+        assert!(!view.rows[2].reserved());
+        assert!(saved()["profiles"][1].get("reserved").is_none());
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("reserved"));
+        // The own-login row is refused.
+        view.step(5);
+        assert!(view.rows[view.cursor].profile.is_none());
+        assert!(!view.rows[view.cursor].reserved());
+        assert!(view.toggle_reserved().is_err());
     }
 
     #[test]
