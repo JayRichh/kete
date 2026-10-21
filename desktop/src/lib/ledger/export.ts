@@ -1,7 +1,11 @@
-// Owner: the ledger lane. 0.60 foundation placeholder: it fills this in.
+import { api } from '../api';
 import { toast } from '../store.svelte';
 
-/** Write the usage ledger as a CSV and show the file. */
+/** Write today's usage ledger as a CSV; the app shows the file in Explorer. */
 export async function exportUsage(): Promise<void> {
-  toast('Usage export: not in this build yet');
+  try {
+    toast(`Usage CSV written: ${await api.usageExport()}`);
+  } catch (e) {
+    toast(String(e));
+  }
 }
