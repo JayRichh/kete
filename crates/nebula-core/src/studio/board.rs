@@ -8,7 +8,7 @@
 //! desktop's `studio_board` command returns it as it is, and the TUI runs
 //! it as a background read. [`build`] is pure: it joins that half with the
 //! live sessions, their roles and today's spend into a [`Board`]. The
-//! desktop repeats the join in `lib/studio/board/board.svelte.ts`, so a
+//! desktop repeats the join in `lib/studio/board/board.ts`, so a
 //! rule changed here changes there too.
 
 use std::collections::{BTreeMap, HashMap};
