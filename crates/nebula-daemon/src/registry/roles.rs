@@ -13,12 +13,13 @@
 use super::*;
 use crate::launch_overlay::LaunchOverlay;
 use nebula_core::roles::permissions::{self, ComposeCtx};
-use nebula_core::roles::{Mcp, Permission, RoleCard, RolesFile};
+use nebula_core::roles::{
+    accepted_bypass, bypass_refusal, bypass_settings, Mcp, Permission, RoleCard, RolesFile,
+    SETTINGS_FILE,
+};
 use nebula_core::studio::autonomy::Autonomy;
 use nebula_core::studio::wire::SessionRole;
 
-/// The session's settings file, in its folder.
-pub const SETTINGS_FILE: &str = "claude-settings.json";
 /// The role it launched with, for `SessionRoles` after a restart.
 const ROLE_FILE: &str = "role.json";
 
@@ -30,43 +31,8 @@ pub(crate) struct RolesBook {
     sessions: HashMap<AgentId, SessionRole>,
 }
 
-/// `<data dir>/sessions/<agent id>/`.
-pub fn session_dir(agent: &AgentId) -> PathBuf {
-    nebula_core::paths::data_dir()
-        .join("sessions")
-        .join(agent.to_string())
-}
-
-/// The Claude user settings an account's bypass acceptance lives in.
-fn account_settings(profile: Option<&nebula_core::profiles::Profile>) -> Option<PathBuf> {
-    match profile.and_then(|p| {
-        p.dir_for(
-            &nebula_core::profiles::profiles_root(),
-            env::CLAUDE_CONFIG_DIR,
-        )
-    }) {
-        Some(dir) => Some(dir.join("settings.json")),
-        None => nebula_core::paths::claude_config_dir().map(|d| d.join("settings.json")),
-    }
-}
-
-/// Whether the account's Claude settings say it accepted bypass mode.
-pub fn accepted_bypass(settings: &Path) -> bool {
-    std::fs::read_to_string(settings)
-        .ok()
-        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-        .and_then(|v| v.get("skipDangerousModePermissionPrompt")?.as_bool())
-        == Some(true)
-}
-
-/// The refusal for an account that has not accepted bypass mode.
-pub fn bypass_refusal(profile: Option<&str>) -> String {
-    match profile {
-        Some(name) => format!(
-            "account {name} has not accepted bypass mode: run `kete roles accept-bypass {name}` in your own terminal"
-        ),
-        None => "Claude's own login has not accepted bypass mode: run `claude --permission-mode bypassPermissions` in your own terminal and accept its dialog".into(),
-    }
+fn session_dir(agent: &AgentId) -> PathBuf {
+    nebula_core::roles::session_dir(&agent.to_string())
 }
 
 fn role_of(agent: &AgentId, card: &RoleCard) -> SessionRole {
@@ -187,7 +153,7 @@ impl Daemon {
                 .profile
                 .as_deref()
                 .and_then(|name| profiles.iter().find(|p| p.name.trim() == name));
-            let accepted = account_settings(profile).is_some_and(|s| accepted_bypass(&s));
+            let accepted = bypass_settings(profile).is_some_and(|s| accepted_bypass(&s));
             if !accepted {
                 return Err(bypass_refusal(agent.profile.as_deref()));
             }

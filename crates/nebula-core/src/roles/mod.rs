@@ -10,8 +10,51 @@ pub mod permissions;
 
 pub use card::{parse, Mcp, Permission, RoleCard, RoleError, RolesFile, ROLES_PATH};
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+
+/// A role or studio session's settings file, in its [`session_dir`].
+pub const SETTINGS_FILE: &str = "claude-settings.json";
+
+/// `<data dir>/sessions/<agent id>/`: the session's settings file, and
+/// the mark that its launches are restricted.
+pub fn session_dir(agent: &str) -> PathBuf {
+    crate::paths::data_dir().join("sessions").join(agent)
+}
+
+/// The Claude user settings an account's bypass acceptance lives in: its
+/// PROFILE HOME's, or Claude's own for an adopted login or no profile.
+pub fn bypass_settings(profile: Option<&crate::profiles::Profile>) -> Option<PathBuf> {
+    let home = profile.and_then(|p| {
+        p.dir_for(
+            &crate::profiles::profiles_root(),
+            crate::env::CLAUDE_CONFIG_DIR,
+        )
+    });
+    home.or_else(crate::paths::claude_config_dir)
+        .map(|dir| dir.join("settings.json"))
+}
+
+/// Whether Claude settings at `path` say bypass mode was accepted
+/// (`skipDangerousModePermissionPrompt: true`). Kete never writes the key.
+pub fn accepted_bypass(path: &Path) -> bool {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get("skipDangerousModePermissionPrompt")?.as_bool())
+        == Some(true)
+}
+
+/// The refusal for an unattended launch on an account that has not
+/// accepted bypass mode.
+pub fn bypass_refusal(profile: Option<&str>) -> String {
+    match profile {
+        Some(name) => format!(
+            "account {name} has not accepted bypass mode: run `kete roles accept-bypass {name}` in your own terminal"
+        ),
+        None => "Claude's own login has not accepted bypass mode: run `claude --permission-mode bypassPermissions` in your own terminal and accept its dialog".into(),
+    }
+}
 
 /// The roles file at `root_worktree`'s HEAD, with every `prompt_file`
 /// read from the same commit into `prompt`. `Ok(None)`: the commit has no
