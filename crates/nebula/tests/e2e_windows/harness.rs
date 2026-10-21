@@ -25,6 +25,51 @@ pub const SHIFT_RIGHT: &[u8] = b"\x1b[1;2C";
 
 type Writer = Arc<Mutex<Box<dyn Write + Send>>>;
 
+/// The home variables every child gets, each under the harness's home:
+/// `HOME` for Kete and Git, `USERPROFILE` for Node's `os.homedir()`
+/// (where Claude Code finds `.claude` and `.claude.json`), and AppData.
+pub const HOME_VARS: [&str; 4] = ["HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA"];
+/// Variables naming a config dir a real login lives in, dropped from
+/// every child so a shell with a Kete profile or a CLI login lends none.
+pub const LOGIN_DIR_VARS: &[&str] = &[
+    nebula_core::env::CLAUDE_CONFIG_DIR,
+    nebula_core::env::CODEX_HOME,
+    nebula_core::profiles::GH_CONFIG_DIR,
+    nebula_core::env::CONFIG_FILE,
+    "XDG_CONFIG_HOME",
+];
+/// Variables that are a login themselves, dropped from every child.
+pub const LOGIN_TOKEN_VARS: &[&str] = &[
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+];
+
+/// [`HOME_VARS`] under `base`, in order.
+fn home_values(base: &Path) -> [PathBuf; 4] {
+    let home = base.join("home");
+    [
+        home.clone(),
+        home.clone(),
+        home.join("AppData").join("Roaming"),
+        home.join("AppData").join("Local"),
+    ]
+}
+
+/// A `kete` command run beside the TUI, isolated as the TUI is.
+fn kete_command(base: &Path) -> std::process::Command {
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_kete"));
+    for (var, value) in HOME_VARS.iter().zip(home_values(base)) {
+        cmd.env(var, value);
+    }
+    for var in LOGIN_DIR_VARS.iter().chain(LOGIN_TOKEN_VARS) {
+        cmd.env_remove(var);
+    }
+    cmd
+}
+
 pub struct Tui {
     writer: Writer,
     parser: Arc<Mutex<vt100::Parser>>,
@@ -92,9 +137,12 @@ impl Tui {
         );
         let runtime_dir = base.join("rt");
         let data_dir = base.join("data");
-        let home = base.join("home");
         let repos = base.join("repos");
-        for dir in [&runtime_dir, &data_dir, &home, &repos] {
+        for dir in [&runtime_dir, &data_dir, &repos]
+            .into_iter()
+            .cloned()
+            .chain(home_values(&base))
+        {
             std::fs::create_dir_all(dir).unwrap();
         }
         // The look the assertions read (the indexed default theme, no file
@@ -166,8 +214,8 @@ impl Tui {
         }
     }
 
-    /// The harness's home: what `HOME` is for the TUI, its daemon and
-    /// [`Tui::kete`].
+    /// The harness's home: what `HOME` and `USERPROFILE` are for the TUI,
+    /// its daemon and [`Tui::kete`].
     pub fn home(&self) -> PathBuf {
         self.launch.base.join("home")
     }
@@ -176,15 +224,19 @@ impl Tui {
     /// and home, the fake agent's environment (a daemon it has to start
     /// runs the fake too), and never the machine's Task Scheduler.
     pub fn kete(&self, args: &[&str]) -> std::process::Output {
-        let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_kete"));
+        self.kete_with(args, &[])
+    }
+
+    /// [`Tui::kete`] with `env` on top: `NEBULA_AGENT_ID` names the
+    /// session an orchestrator verb runs as.
+    pub fn kete_with(&self, args: &[&str], env: &[(&str, &str)]) -> std::process::Output {
+        let mut cmd = kete_command(&self.launch.base);
         cmd.args(args)
             .env(nebula_core::env::RUNTIME_DIR, &self.runtime_dir)
             .env(nebula_core::env::DATA_DIR, &self.data_dir)
             .env(nebula_core::env::WAKE_NO_TASK, "1")
-            .env("HOME", self.home())
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GCM_INTERACTIVE", "never")
-            .env_remove(nebula_core::env::CLAUDE_CONFIG_DIR)
             .env(agent::ROLE, "1")
             .stdin(std::process::Stdio::null());
         for var in nebula_core::env::AGENT_SESSION_VARS {
@@ -193,6 +245,7 @@ impl Tui {
         for (key, value) in &self.launch.options_env {
             cmd.env(key, value);
         }
+        cmd.envs(env.iter().copied());
         cmd.output().unwrap()
     }
 
@@ -444,7 +497,12 @@ impl Launch {
         cmd.env(nebula_core::env::WORKTREE_SYNC_MS, "100");
         cmd.env(nebula_core::env::UPDATE_CHECK_SECS, "0");
         cmd.env(nebula_core::env::LOG, "debug");
-        cmd.env("HOME", base.join("home"));
+        for (var, value) in HOME_VARS.iter().zip(home_values(base)) {
+            cmd.env(var, value);
+        }
+        for var in LOGIN_DIR_VARS.iter().chain(LOGIN_TOKEN_VARS) {
+            cmd.env_remove(var);
+        }
         cmd.env("GIT_TERMINAL_PROMPT", "0");
         cmd.env("GCM_INTERACTIVE", "never");
         cmd.env_remove("NO_COLOR");
@@ -535,7 +593,7 @@ struct Started {
 impl Drop for Tui {
     fn drop(&mut self) {
         let _ = self.child.kill();
-        let _ = std::process::Command::new(env!("CARGO_BIN_EXE_kete"))
+        let _ = kete_command(&self.launch.base)
             .arg("kill")
             .env(nebula_core::env::RUNTIME_DIR, &self.runtime_dir)
             .env(nebula_core::env::DATA_DIR, &self.data_dir)
