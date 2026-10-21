@@ -148,8 +148,13 @@ impl TranscriptTally {
             return Tally::default();
         };
         let now = Tally::of_usage(usage);
+        // By whole seconds: `stamp_ms` drops a stamp's milliseconds, so a
+        // line written in the cutoff's own second still counts. A line with
+        // no stamp counts.
         let history = match (self.since_ms, v.get("timestamp").and_then(Value::as_str)) {
-            (Some(since), Some(stamp)) => crate::usage::stamp_ms(stamp).is_some_and(|t| t < since),
+            (Some(since), Some(stamp)) => {
+                crate::usage::stamp_ms(stamp).is_some_and(|t| t / 1000 < since / 1000)
+            }
             _ => false,
         };
         let id = message
