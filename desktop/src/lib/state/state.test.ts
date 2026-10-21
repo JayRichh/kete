@@ -182,6 +182,19 @@ describe('slice', () => {
     expect(text.length).toBeLessThan(bytes(text));
     expect(text.endsWith('has them all.\n')).toBe(true);
   });
+
+  it('stays under its cap with a huge id and a multibyte label', () => {
+    const id = 'x'.repeat(3000);
+    const nodes = [n(id, 'system', { label: String.fromCodePoint(0x1f30a).repeat(1500) })];
+    const edges: StateEdge[] = [];
+    for (let i = 0; i < 50; i++) {
+      nodes.push(n(`f${i}`, 'file', { label: String.fromCodePoint(0xe9).repeat(99) }));
+      edges.push(edge(id, `f${i}`, 'owns'));
+    }
+    const text = slice(map(nodes, edges), id, 0)!;
+    expect(bytes(text)).toBeLessThanOrEqual(SLICE_MAX_BYTES);
+    expect(text.endsWith('has them all.\n')).toBe(true);
+  });
 });
 
 describe('neighbours', () => {

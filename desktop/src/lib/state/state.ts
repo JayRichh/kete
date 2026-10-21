@@ -188,6 +188,20 @@ function cut(text: string, max: number): string {
   return all.length <= max ? text : all.slice(0, Math.max(max - 3, 0)).join('') + '...';
 }
 
+/** `text` cut to at most `max` UTF-8 bytes on a character boundary, ending in `...` when cut. */
+function cutBytes(text: string, max: number): string {
+  if (bytes(text) <= max) return text;
+  let out = '';
+  let used = 0;
+  for (const c of chars(text)) {
+    const b = bytes(c);
+    if (used + b > max - 3) break;
+    out += c;
+    used += b;
+  }
+  return out + '...';
+}
+
 function plural(n: number, word: string): string {
   return n === 1 ? `1 ${word}` : `${n} ${word}s`;
 }
@@ -251,13 +265,14 @@ export function slice(map: StateMap, id: string, now: number): string | null {
 }
 
 /** `lines` joined, as many as fit SLICE_MAX_BYTES with room for the line that says how many were left out. */
-function fit(lines: string[], id: string): string {
+function fit(lines: string[], whole: string): string {
+  const id = cutBytes(whole, 200);
   const tailRoom = 120 + bytes(id);
   const total = lines.length;
   let out = '';
   let used = 0;
   for (let i = 0; i < total; i++) {
-    const l = cut(lines[i], SLICE_MAX_BYTES / 2);
+    const l = cutBytes(lines[i], SLICE_MAX_BYTES / 2);
     const room = i + 1 === total ? SLICE_MAX_BYTES : SLICE_MAX_BYTES - tailRoom;
     if (used + bytes(l) + 1 > room) {
       return out + `And ${plural(total - i, 'line')} more. \`kete state --slice ${id} --json\` has them all.\n`;
