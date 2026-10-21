@@ -40,7 +40,9 @@ impl Default for LedgerBook {
 
 #[derive(Debug, Default)]
 struct SessionBook {
-    tally: Option<TranscriptTally>,
+    /// Behind a lock of its own: a first read of a long transcript never
+    /// holds up the other sessions' ledger calls.
+    tally: Option<Arc<Mutex<TranscriptTally>>>,
     /// The transcript the statusLine names.
     transcript: Option<PathBuf>,
     /// The latest `cost.total_cost_usd`.
@@ -138,13 +140,20 @@ impl Daemon {
             .lock()
             .get(agent)
             .map(|t| t.transcript_path.clone());
-        let (tokens, cost, tool_uses, turns) = {
+        let (tally, path) = {
             let mut book = self.ledger.lock();
             let since = book.since(agent);
             let s = book.sessions.entry(agent.clone()).or_default();
-            let path = hooked.or_else(|| s.transcript.clone());
-            let tally = s.tally.get_or_insert_with(|| TranscriptTally::new(since));
-            let tokens = path.map(|p| tally.read_new(&p)).unwrap_or_default();
+            let tally = s
+                .tally
+                .get_or_insert_with(|| Arc::new(Mutex::new(TranscriptTally::new(since))))
+                .clone();
+            (tally, hooked.or_else(|| s.transcript.clone()))
+        };
+        let tokens = path.map(|p| tally.lock().read_new(&p)).unwrap_or_default();
+        let (cost, tool_uses, turns) = {
+            let mut book = self.ledger.lock();
+            let s = book.sessions.entry(agent.clone()).or_default();
             let cost = s
                 .cost_now
                 .map_or(0.0, |now| ledger::cost_delta(s.cost_counted, now));
@@ -160,12 +169,7 @@ impl Daemon {
             if tokens.is_zero() && cost == 0.0 && tool_uses == 0 {
                 return;
             }
-            (
-                tokens,
-                cost,
-                tool_uses,
-                std::mem::take(&mut s.turns_pending),
-            )
+            (cost, tool_uses, std::mem::take(&mut s.turns_pending))
         };
         if !crate::config::Config::load_quiet().usage_ledger() {
             return;
@@ -252,8 +256,19 @@ mod tests {
                 token: String::new(),
             },
         );
-        daemon
-            .store
+        seed(&daemon.store, dir, &AgentId("a".into()), kind);
+        let transcript = dir.join("sid.jsonl");
+        daemon.transcripts.lock().insert(
+            AgentId("a".into()),
+            TranscriptRef::from_payload(transcript.to_str(), Some("sid")).unwrap(),
+        );
+        (daemon, transcript, guard)
+    }
+
+    /// Project `demo`, its main worktree and session `id` of `kind`,
+    /// running, in `store`.
+    fn seed(store: &Store, dir: &Path, id: &AgentId, kind: AgentKind) {
+        store
             .insert_project(&Project {
                 id: ProjectId("p".into()),
                 name: "demo".into(),
@@ -261,8 +276,7 @@ mod tests {
                 sort_order: 0,
             })
             .unwrap();
-        daemon
-            .store
+        store
             .insert_worktree(&Worktree {
                 id: WorktreeId("w".into()),
                 project_id: ProjectId("p".into()),
@@ -272,12 +286,11 @@ mod tests {
                 sort_order: 0,
             })
             .unwrap();
-        daemon
-            .store
+        store
             .insert_agent(&Agent {
                 parent: None,
                 profile: None,
-                id: AgentId("a".into()),
+                id: id.clone(),
                 worktree_id: WorktreeId("w".into()),
                 name: "fix login".into(),
                 status: AgentStatus::Running,
@@ -298,12 +311,6 @@ mod tests {
                 recent_prompts: Vec::new(),
             })
             .unwrap();
-        let transcript = dir.join("sid.jsonl");
-        daemon.transcripts.lock().insert(
-            AgentId("a".into()),
-            TranscriptRef::from_payload(transcript.to_str(), Some("sid")).unwrap(),
-        );
-        (daemon, transcript, guard)
     }
 
     /// One turn's traffic: an assistant message in the transcript, `tools`
@@ -431,6 +438,129 @@ mod tests {
         let s = &rows(&daemon)[0].spend;
         assert_eq!((s.input_tokens, s.turns), (140, 2));
         assert!((s.cost_usd - 0.07).abs() < 1e-9, "{}", s.cost_usd);
+    }
+
+    /// `ms` as Claude stamps a transcript line (RFC 3339, UTC).
+    fn stamp(ms: i64) -> String {
+        let secs = ms.div_euclid(1000);
+        format!(
+            "{}T{:02}:{:02}:{:02}.{:03}Z",
+            ledger::day_at(secs, |_| 0),
+            secs.rem_euclid(86_400) / 3600,
+            secs.rem_euclid(3600) / 60,
+            secs.rem_euclid(60),
+            ms.rem_euclid(1000)
+        )
+    }
+
+    /// An assistant line stamped `at` (epoch ms).
+    fn stamped(transcript: &Path, id: &str, input: u64, at: i64) {
+        let line = serde_json::json!({
+            "type": "assistant",
+            "timestamp": stamp(at),
+            "message": { "id": id, "usage": { "input_tokens": input, "output_tokens": 0 } },
+        });
+        let mut text = std::fs::read_to_string(transcript).unwrap_or_default();
+        text.push_str(&format!("{line}\n"));
+        std::fs::write(transcript, text).unwrap();
+    }
+
+    fn reading(daemon: &Daemon, id: &AgentId, cost: f64) {
+        let raw = serde_json::json!({ "cost": { "total_cost_usd": cost } });
+        daemon.ledger_on_statusline(id, &nebula_core::usage::claude_statusline(&raw), &raw);
+    }
+
+    /// A daemon restart on the same database: the new daemon counts a
+    /// session older than itself from its own start. The old daemon's
+    /// transcript lines (stamped before the restart) are history, and the
+    /// session's first estimate after the restart is taken as counted, so
+    /// only what the next turn adds lands on the row.
+    #[test]
+    fn after_a_restart_a_session_older_than_the_daemon_counts_from_the_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config.json");
+        std::fs::write(&config, r#"{"usage_ledger": true}"#).unwrap();
+        let _env = EnvGuard::set_all(&[
+            (env::DATA_DIR, dir.path().to_str().unwrap()),
+            (env::CONFIG_FILE, config.to_str().unwrap()),
+        ]);
+        let db = dir.path().join("nebula.db");
+        let transcript = dir.path().join("sid.jsonl");
+        let open = || {
+            Daemon::new(
+                Arc::new(Store::open(&db).unwrap()),
+                HookEnv {
+                    port: 0,
+                    token: String::new(),
+                },
+            )
+        };
+        let note = |daemon: &Daemon, id: &AgentId| {
+            daemon.transcripts.lock().insert(
+                id.clone(),
+                TranscriptRef::from_payload(transcript.to_str(), Some("sid")).unwrap(),
+            );
+        };
+
+        // The first daemon sees the session start and its first turn whole.
+        let first = open();
+        let id = AgentId::generate();
+        let created = ledger::created_ms(id.as_str()).unwrap();
+        seed(&first.store, dir.path(), &id, AgentKind::Claude);
+        note(&first, &id);
+        stamped(&transcript, "msg_1", 1000, created);
+        reading(&first, &id, 0.50);
+        first.ledger_on_turn_end(&id);
+        drop(first);
+
+        // A restart five seconds on: the session is older than the daemon.
+        let second = open();
+        second.ledger.lock().started_ms = created + 5_000;
+        note(&second, &id);
+        assert!(second.ledger.lock().predates(&id));
+        // Its first reading is the estimate the first daemon counted.
+        reading(&second, &id, 0.50);
+        stamped(&transcript, "msg_2", 200, created + 6_000);
+        reading(&second, &id, 0.58);
+        second.ledger_on_turn_end(&id);
+
+        let rows = second.usage_ledger(None, None, None).unwrap();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        let s = &rows[0].spend;
+        assert_eq!(
+            (s.input_tokens, s.turns),
+            (1200, 2),
+            "msg_1 is not read again"
+        );
+        assert!(
+            (s.cost_usd - 0.58).abs() < 1e-9,
+            "the 0.50 is not counted again: {}",
+            s.cost_usd
+        );
+    }
+
+    /// The history cutoff is the later of the session's creation and the
+    /// daemon's start: a session created after the daemon started has its
+    /// own lines counted and a resumed conversation's older lines skipped,
+    /// while a session older than the daemon starts at the daemon.
+    #[test]
+    fn the_history_cutoff_is_the_later_of_creation_and_the_daemon_start() {
+        let book = LedgerBook {
+            started_ms: 1_000_000,
+            sessions: HashMap::new(),
+        };
+        let fresh = AgentId::generate();
+        let created = ledger::created_ms(fresh.as_str()).unwrap();
+        assert_eq!(book.since(&fresh), Some(created));
+        assert!(!book.predates(&fresh));
+        let late = LedgerBook {
+            started_ms: created + 60_000,
+            sessions: HashMap::new(),
+        };
+        assert_eq!(late.since(&fresh), Some(created + 60_000));
+        assert!(late.predates(&fresh));
+        // An id that is no ULID has no cutoff: every line counts.
+        assert_eq!(book.since(&AgentId("a".into())), None);
     }
 
     #[test]

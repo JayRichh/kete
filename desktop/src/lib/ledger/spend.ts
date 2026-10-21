@@ -16,6 +16,27 @@ export function localDay(d: Date = new Date()): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+/** Milliseconds from `now` to the next local midnight. */
+export function msToMidnight(now: Date = new Date()): number {
+  const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  return next.getTime() - now.getTime();
+}
+
+/** Call `onDay` with the new local date just after each local midnight
+ *  (a timer, so a machine that slept catches up when it wakes); the
+ *  returned function stops it. */
+export function everyMidnight(onDay: (day: string) => void): () => void {
+  let timer: ReturnType<typeof setTimeout>;
+  const arm = () => {
+    timer = setTimeout(() => {
+      onDay(localDay());
+      arm();
+    }, msToMidnight() + 1000);
+  };
+  arm();
+  return () => clearTimeout(timer);
+}
+
 /** `today: 412k tokens, est. US$3.10, 58 tool uses, 9 turns`. Tokens are
  *  input plus output; cache tokens are left out (pending Jay). Nothing for
  *  no row, or for a row from another day (yesterday's, past midnight). */

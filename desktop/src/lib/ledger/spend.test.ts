@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { SpendRow } from '../studio/types';
-import { localDay, spendLine } from './spend';
+import { everyMidnight, localDay, msToMidnight, spendLine } from './spend';
 
 const row = (over: Partial<SpendRow>): SpendRow => ({
   agent: 'a',
@@ -18,6 +18,29 @@ const row = (over: Partial<SpendRow>): SpendRow => ({
 describe('spendLine', () => {
   it('says nothing without a row', () => {
     expect(spendLine(undefined)).toBeNull();
+  });
+
+  it('ticks to the new day just after each local midnight, and stops', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 9, 21, 23, 59, 30));
+      expect(msToMidnight()).toBe(30_000);
+      const days: string[] = [];
+      const stop = everyMidnight((d) => days.push(d));
+      vi.advanceTimersByTime(29_000);
+      expect(days).toEqual([]);
+      vi.advanceTimersByTime(2_000);
+      expect(days).toEqual(['2026-10-22']);
+      // Yesterday's row stops reading as today's on that tick.
+      expect(spendLine(row({ day: '2026-10-21', turns: 2 }), days[0])).toBeNull();
+      vi.advanceTimersByTime(24 * 3600 * 1000);
+      expect(days).toEqual(['2026-10-22', '2026-10-23']);
+      stop();
+      vi.advanceTimersByTime(48 * 3600 * 1000);
+      expect(days).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("says nothing for another day's row", () => {
