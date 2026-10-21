@@ -6,7 +6,7 @@ use super::harness::{git, Options, Tui, WAIT};
 use nebula_core::studio::autonomy::Autonomy;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 use std::time::{Duration, Instant};
 
 pub const TESTS: &[(&str, fn())] = &[
@@ -81,7 +81,7 @@ fn ok(out: &Output) {
 /// `kete <args>` beside the harness's TUI, run as session `agent` when
 /// given (`NEBULA_AGENT_ID`), with `stdin` piped in.
 fn kete_as(t: &Tui, agent: Option<&str>, args: &[&str], stdin: Option<&str>) -> Output {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_kete"));
+    let mut cmd = t.kete_command();
     cmd.args(args)
         .env(nebula_core::env::RUNTIME_DIR, &t.runtime_dir)
         .env(nebula_core::env::DATA_DIR, &t.data_dir)

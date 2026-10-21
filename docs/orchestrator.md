@@ -109,6 +109,66 @@ protocol 54 is never sent these requests: the window says to run `kete reload`.
 - **Open on** (Settings, Desktop tab) starts the window on the orchestrator;
   `--view orchestrator` does it for one run.
 
+## Renewal
+
+An orchestrator's context fills up. At 60 percent of its budget it writes a
+handover note into its workspace (what is in flight, what is next, what waits
+on you) and runs `kete orchestrator renew --from <note>`. You can ask for the
+same from your own shell, the TUI (**Renew orchestrator** on the
+orchestrator's session menu, which asks for the note path) or the desktop
+(**Renew orchestrator…** on its session menu, a form with the note, an
+account, **Keep old session** and **Renew now**).
+
+```sh
+kete orchestrator renew --from <note> [--profile P | --pick] [--model M] [--keep-old] [--now] [--json]
+```
+
+1. **The checks come first.** The note must be a file inside the
+   orchestrator's workspace (`<data dir>/orchestrator`) or inside a registered
+   project or one of its checkouts, UTF-8, 1 to 65,536 bytes, and short
+   enough for a first prompt (below). A bad note, no
+   live orchestrator, or a renewal already waiting is refused before anything
+   changes. The daemon answers **Scheduled**.
+2. **It waits for the turn to end.** The swap happens once the old
+   orchestrator's turn ends (its status reads finished), at most 300 s, or at
+   once with `--now` or when it is not mid-turn. A turn that never ends fails
+   the renewal and changes nothing.
+3. **The swap.** A fresh orchestrator starts on the same project with the old
+   one's harness, model and effort (or `--model`), role card and account (or
+   `--profile`; `--pick` takes the account `kete profile pick` would name and
+   holds it, and refuses with the reason when no account is eligible). It
+   holds the role from its first spawn, so its system prompt carries the
+   guidance, and its first prompt is:
+
+   ```text
+   [from kete renew] You are the orchestrator, renewed from <old name> at <HH:MM>. Your handover note is <path>; it is quoted below. Read it, then carry on.
+   ```
+
+   followed by the note.
+4. **The new one must report.** Once its first prompt reaches Kete through
+   its hooks, the old session is archived and stopped (`--keep-old` leaves it
+   running as a worker) and the renewal is **Done**. If the new session sends
+   no hook within 60 s, or exits first, it is stopped and archived and the old
+   one holds the role again, untouched: it is never typed the guidance as a
+   turn. The renewal is **Failed** with the reason.
+5. **Every client hears.** The TUI's orchestrator view moves onto the new
+   session and flashes *Orchestrator renewed from <note>* (or the failure);
+   the desktop shows a notice with **Open note** (or the reason).
+
+Each renewal ends in one line of `<data dir>/orchestrator-renewals.jsonl`:
+
+```json
+{"at":1792590537978,"old":"01M5FABXZNVAN04SVYT9CYNSA2","new":"01M5FABYC4MBSCNQ3XF98J4VSS","note":"C:\\Code\\game\\handover.md","state":"done","reason":null}
+```
+
+`at` is epoch milliseconds; `state` is `done` or `failed`; `new` is null when
+no new session was started; `reason` says why a renewal failed.
+
+A session's first prompt holds at most 16 KiB (16,384 bytes), the same cap
+every starting prompt has. A note that would not fit beside the renewal line
+is refused up front with its size, though it is inside the 65,536-byte note
+cap.
+
 ## Agent-facing commands
 
 The orchestrator's guidance is injected by role on every cold start: the
@@ -126,6 +186,7 @@ kete orchestrator send <session> <prompt> [--no-wait] [--timeout S]
 kete orchestrator spawn --project <project> [--worktree <branch-or-id>] [--base <ref>]
                         [--kind K] [--name N] [--model M] [--effort E] [--profile P] <task>
 kete orchestrator review <session>... [--tab terminal|diff|history|pr]...
+kete orchestrator renew --from <note> [--profile P | --pick] [--model M] [--keep-old] [--now] [--json]
 ```
 
 Sessions are named by id, `terminal:<id>`, or an unambiguous fragment of their
@@ -145,6 +206,9 @@ name, project or branch.
   `--worktree` names a branch that has none.
 - **review** opens the review modal in every attached kete over all the named
   sessions.
+- **renew** hands the orchestrator over to a fresh session that starts on a
+  handover note, once this turn ends (see [Renewal](#renewal)). End the turn
+  after running it.
 
 The everyday `kete sessions`, `kete read` and `kete ask` work in the
 orchestrator too.
@@ -186,6 +250,13 @@ Granting the role is checked too:
   process check backs them: a verb whose client runs inside a *different*
   agent's session than the orchestrator it names (a worker that set
   `NEBULA_AGENT_ID` to the orchestrator's id) is refused.
+- A renewal (`RenewOrchestrator`) is the orchestrator's own or a person's.
+  Naming a caller, it passes the caller checks above and only the persisted,
+  unarchived orchestrator may renew itself; a worker is refused. Naming none,
+  it is refused from inside any agent session, like provisioning. Its note
+  must lie in the orchestrator's workspace or a registered project (or one of
+  its checkouts), so a renewal cannot quote an arbitrary file into the new
+  orchestrator's first prompt.
 - Provisioning is serialized, so two starts cannot both win, and a partial
   unique index on the role makes a second orchestrator row impossible from any
   path.
@@ -212,5 +283,8 @@ fresh read. Nothing is written into its chat box unasked.
 
 ## Follow-ups
 
-- Optional idle-note injection for the orchestrator, behind an autonomy setting.
 - Azure DevOps pipelines in `kete ado`.
+
+Shipped in 0.60: idle notes for an idle orchestrator, within the studio's
+autonomy level ([Studio](studio.md), K2), and orchestrator
+renewal ([Renewal](#renewal), K9).

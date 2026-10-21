@@ -25,12 +25,6 @@ use cli::{
     SetupCommand, StudioCommand, WakeAction,
 };
 
-/// What a 0.60 command not built yet says (a lane's placeholder): its
-/// name, on stderr, and exit 1.
-pub(crate) fn not_in_this_build(what: &str) -> ! {
-    eprintln!("{what}: not in this build yet");
-    std::process::exit(1)
-}
 use std::path::Path;
 
 fn main() -> Result<()> {
