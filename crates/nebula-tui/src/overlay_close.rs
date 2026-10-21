@@ -55,6 +55,7 @@ pub(crate) fn overlay_area(overlay: &Overlay) -> Rect {
         Overlay::CritterLog(v) => v.area,
         Overlay::StudioBoard(v) => v.area,
         Overlay::Gauntlet(v) => v.area,
+        Overlay::StateMap(v) => v.area(),
     }
 }
 

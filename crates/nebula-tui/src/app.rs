@@ -3028,6 +3028,8 @@ pub enum Overlay {
     StudioBoard(crate::studio_board::BoardView),
     /// The GAUNTLET VIEW (0.60, the gauntlet lane's `gauntlet_view`).
     Gauntlet(crate::gauntlet_view::GauntletView),
+    /// The STATE MAP (0.60, K10's `state_overlay`), `s` on the studio board.
+    StateMap(crate::state_overlay::StateMapView),
 }
 
 /// Rows optimistically removed for an in-flight DeleteWorktree, kept so an

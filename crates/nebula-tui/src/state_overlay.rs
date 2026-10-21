@@ -10,17 +10,22 @@
 //! [`StateOverlay::reload`], feeds keys to [`StateOverlay::handle_key`] and
 //! acts on the [`Outcome`] (close, re-read, copy the slice).
 
+use crate::app::{App, Overlay};
 use crate::theme::Theme;
 use crate::ui::{centered_rect_pct, truncate};
+use crate::view_jobs::{Answer, Jobs};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use nebula_core::clock::now_ms;
 use nebula_core::state_map::{self, StateMap, TreeRow, MAP_PATH};
+use nebula_core::ProjectId;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 /// What a key asks of the caller.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,9 +38,13 @@ pub enum Outcome {
     Copy(String),
 }
 
+#[derive(Debug, Clone)]
 pub struct StateOverlay {
     repo: String,
-    read: Result<Option<StateMap>, String>,
+    /// Shared, so the per-frame clone of the overlay copies a pointer.
+    read: Arc<Result<Option<StateMap>, String>>,
+    /// Where it last drew, for outside clicks.
+    pub area: Rect,
     /// A node's open state where the user changed it; else roots are open.
     toggled: HashMap<String, bool>,
     /// The visible rows, rebuilt whenever the map or a toggle changes.
@@ -72,7 +81,8 @@ impl StateOverlay {
     pub fn new(repo: String, read: Result<Option<StateMap>, String>) -> Self {
         let mut overlay = Self {
             repo,
-            read,
+            read: Arc::new(read),
+            area: Rect::default(),
             toggled: HashMap::new(),
             rows: Vec::new(),
             cursor: 0,
@@ -99,14 +109,14 @@ impl StateOverlay {
     /// stay where their ids still exist.
     pub fn reload(&mut self, read: Result<Option<StateMap>, String>) {
         let keep = self.selected_id();
-        self.read = read;
+        self.read = Arc::new(read);
         self.flash = None;
         self.rebuild(keep);
     }
 
     fn rebuild(&mut self, keep: Option<String>) {
         self.rows = build(&self.read, &self.toggled);
-        self.cursor = match (&self.read, keep) {
+        self.cursor = match (&*self.read, keep) {
             (Ok(Some(map)), Some(id)) => self
                 .rows
                 .iter()
@@ -117,7 +127,7 @@ impl StateOverlay {
     }
 
     fn selected_id(&self) -> Option<String> {
-        let Ok(Some(map)) = &self.read else {
+        let Ok(Some(map)) = &*self.read else {
             return None;
         };
         Some(map.nodes.get(self.rows.get(self.cursor)?.node)?.id.clone())
@@ -174,7 +184,7 @@ impl StateOverlay {
     }
 
     fn copy(&self) -> Outcome {
-        let (Ok(Some(map)), Some(id)) = (&self.read, self.selected_id()) else {
+        let (Ok(Some(map)), Some(id)) = (&*self.read, self.selected_id()) else {
             return Outcome::None;
         };
         state_map::slice(map, &id, now_ms()).map_or(Outcome::None, Outcome::Copy)
@@ -209,7 +219,7 @@ impl StateOverlay {
     }
 
     fn title(&self) -> String {
-        match &self.read {
+        match &*self.read {
             Ok(Some(map)) => format!(
                 " State map of {}, built {} ",
                 self.repo,
@@ -234,6 +244,7 @@ impl StateOverlay {
     pub fn draw(&mut self, f: &mut Frame, area: Rect) {
         let th = self.theme;
         let rect = centered_rect_pct(area, 96, 90);
+        self.area = rect;
         f.render_widget(Clear, rect);
         let block = Block::default()
             .borders(Borders::ALL)
@@ -250,7 +261,7 @@ impl StateOverlay {
         }
         let width = usize::from(inner.width);
         let has_rows = !self.rows.is_empty();
-        let note = match &self.read {
+        let note = match &*self.read {
             Ok(Some(map)) => map.note.clone().filter(|n| !n.trim().is_empty()),
             _ => None,
         };
@@ -269,7 +280,7 @@ impl StateOverlay {
         .areas(inner);
         self.follow(body.height);
 
-        match &self.read {
+        match &*self.read {
             Err(e) => say(f, body, e, Style::default().fg(th.warn)),
             Ok(None) => say(
                 f,
@@ -347,6 +358,117 @@ impl StateOverlay {
             )),
             foot,
         );
+    }
+}
+
+// ---- in the app: `Overlay::StateMap`, opened with `s` on the studio board ----
+
+/// The overlay as the app holds it: the view, and the file read in flight.
+#[derive(Debug, Clone)]
+pub struct StateMapView {
+    pub overlay: StateOverlay,
+    /// The board's repo, which Esc goes back to.
+    repo: Option<ProjectId>,
+    root: PathBuf,
+    /// The read the view waits on; an older one landing is dropped.
+    ticket: u64,
+    /// Reads that finished since the last [`sync`].
+    inbox: Arc<Mutex<Vec<Landed>>>,
+}
+
+type Landed = (u64, Result<Option<StateMap>, String>);
+
+impl StateMapView {
+    pub fn area(&self) -> Rect {
+        self.overlay.area
+    }
+}
+
+/// Open the state map of the board's repo over the board.
+pub fn open(app: &mut App, repo: Option<ProjectId>, name: String, root: PathBuf) {
+    // shortcut: the first frame says "no map yet" until the read lands, a
+    // few milliseconds on the blocking pool; a loading state if it shows.
+    let mut view = StateMapView {
+        overlay: StateOverlay::new(name, Ok(None)),
+        repo,
+        root,
+        ticket: 0,
+        inbox: Arc::default(),
+    };
+    view.overlay.set_theme(app.chrome.theme);
+    read(&mut view, app.jobs.view_jobs.clone());
+    app.modals.overlay = Some(Overlay::StateMap(view));
+    app.chrome.dirty = true;
+}
+
+/// Read the file on the blocking pool when there is one, else now.
+fn read(view: &mut StateMapView, jobs: Option<Jobs>) {
+    view.ticket = crate::view_jobs::ticket();
+    let (ticket, root) = (view.ticket, view.root.clone());
+    match jobs {
+        Some(jobs) => {
+            let inbox = Arc::downgrade(&view.inbox);
+            jobs.run(move || {
+                let inbox = inbox.upgrade()?;
+                let read = state_map::read(&root);
+                inbox.lock().ok()?.push((ticket, read));
+                Some(Answer::Slow {
+                    ticket: crate::view_jobs::ticket(),
+                })
+            });
+        }
+        None => {
+            if let Ok(mut q) = view.inbox.lock() {
+                q.push((ticket, state_map::read(&root)));
+            }
+            sync(view);
+        }
+    }
+}
+
+/// Land the read the view waits on. Every draw and key runs it.
+fn sync(view: &mut StateMapView) {
+    let landed: Vec<Landed> = view
+        .inbox
+        .lock()
+        .map(|mut q| q.drain(..).collect())
+        .unwrap_or_default();
+    if let Some((_, read)) = landed.into_iter().find(|(t, _)| *t == view.ticket) {
+        view.overlay.reload(read);
+    }
+}
+
+/// Keys over the overlay.
+pub fn handle_key(app: &mut App, key: KeyEvent) {
+    let jobs = app.jobs.view_jobs.clone();
+    let Some(Overlay::StateMap(view)) = &mut app.modals.overlay else {
+        return;
+    };
+    sync(view);
+    app.chrome.dirty = true;
+    match view.overlay.handle_key(key) {
+        Outcome::None => {}
+        Outcome::Reload => read(view, jobs),
+        Outcome::Copy(text) => {
+            view.overlay.flash("Copied the slice.");
+            crate::event_loop::copy_and_flash(app, &text, "Copied the state map slice");
+        }
+        Outcome::Close => {
+            let repo = view.repo.clone();
+            app.modals.overlay = None;
+            crate::studio_board::open(app, repo);
+        }
+    }
+}
+
+/// Draw the live overlay over the whole frame.
+pub fn draw_live(f: &mut Frame, app: &mut App) {
+    let theme = app.chrome.theme;
+    if let Some(Overlay::StateMap(view)) = &mut app.modals.overlay {
+        sync(view);
+        view.overlay.set_theme(theme);
+        let area = f.area();
+        view.overlay.draw(f, area);
     }
 }
 

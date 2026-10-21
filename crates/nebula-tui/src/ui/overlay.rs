@@ -74,6 +74,7 @@ impl Overlay {
                 let area = f.area();
                 super::gauntlet_view::draw(f, app, area);
             }
+            Overlay::StateMap(_) => crate::state_overlay::draw_live(f, app),
         }
     }
 }

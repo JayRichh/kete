@@ -21380,6 +21380,20 @@ fn every_overlay() -> Vec<(&'static str, fn(&mut App), Option<&'static str>)> {
             None,
         ),
         (
+            // 0.60: `s` on the studio board (K10's state map); Esc goes
+            // back to the board.
+            "StateMap",
+            |app| {
+                crate::state_overlay::open(
+                    app,
+                    None,
+                    "demo".into(),
+                    std::env::temp_dir().join("kete-no-state-map"),
+                )
+            },
+            Some("StudioBoard"),
+        ),
+        (
             // ⇧S from the grid.
             "Subagents",
             |app| {
@@ -21539,6 +21553,7 @@ fn overlay_label(overlay: &Overlay) -> &'static str {
         Overlay::CritterLog(_) => "CritterLog",
         Overlay::StudioBoard(_) => "StudioBoard",
         Overlay::Gauntlet(_) => "Gauntlet",
+        Overlay::StateMap(_) => "StateMap",
     }
 }
 
@@ -21568,7 +21583,7 @@ fn the_overlay_table_covers_every_variant_exactly_once() {
         let mut unique = seen.clone();
         unique.dedup();
         assert_eq!(unique, seen, "two rows for the same variant");
-        assert_eq!(seen.len(), 26, "a variant came or went: {seen:?}");
+        assert_eq!(seen.len(), 27, "a variant came or went: {seen:?}");
     });
 }
 

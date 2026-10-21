@@ -28,6 +28,7 @@ pub mod scope;
 pub mod session_snapshot;
 pub mod settings;
 pub mod shell;
+pub mod state_map;
 pub mod stop;
 pub mod studio;
 pub mod tracked_settings;
