@@ -204,7 +204,9 @@
       {#if board.columns.length === 0}
         <p class="m-0 max-w-[60ch] text-[13px] text-muted">No departments: add a departments table to the manifest's departments file.</p>
       {:else}
-        <div class="flex min-w-0 items-start gap-3 overflow-x-auto pb-2">
+        <!-- relative: the cells' sr-only words are absolute, and would
+             widen the page past a scroller that is not their containing block. -->
+        <div class="relative flex min-w-0 items-start gap-3 overflow-x-auto pb-2">
           {#each board.columns as col (col.slug)}
             {@const un = col.slug === UNASSIGNED}
             {@const menu = columnMenu(col)}
