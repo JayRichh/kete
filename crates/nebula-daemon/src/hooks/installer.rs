@@ -1341,8 +1341,8 @@ mod tests {
         for bin in ["kete", "bro"] {
             for cmd in [
                 "studio status --json",
-                "studio queue --project wheako",
-                "studio note \"storm sky\" --project wheako",
+                "studio queue --project my-game",
+                "studio note \"storm sky\" --project my-game",
                 "usage --csv --since 2026-10-21",
                 "profile list --json",
                 "profile pick --json",
@@ -1356,13 +1356,13 @@ mod tests {
             }
             for cmd in [
                 "studio",
-                "studio autonomy wheako A3",
-                "studio enable wheako",
-                "studio disable wheako",
-                "studio exclude wheako x",
-                "studio include wheako x",
+                "studio autonomy my-game A3",
+                "studio enable my-game",
+                "studio disable my-game",
+                "studio exclude my-game x",
+                "studio include my-game x",
                 "profile reserve jayrich",
-                "profile set-project wheako max2",
+                "profile set-project my-game max2",
                 "roles accept-bypass max2",
             ] {
                 let cmd = format!("{bin} {cmd}");

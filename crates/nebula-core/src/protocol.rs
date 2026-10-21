@@ -2812,7 +2812,7 @@ mod tests {
                 req_id: 1,
                 rows: vec![StudioQueueRow {
                     project: ProjectId("p".into()),
-                    name: "wheako".into(),
+                    name: "my-game".into(),
                     autonomy: Autonomy::A2,
                     inbox: "notes/inbox".into(),
                     open: 3,
@@ -2856,7 +2856,7 @@ mod tests {
                 rows: vec![LedgerRow {
                     spend,
                     session: "agent-1".into(),
-                    project: "wheako".into(),
+                    project: "my-game".into(),
                     branch: Some("main".into()),
                     role_card: None,
                     profile: Some("max2".into()),

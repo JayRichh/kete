@@ -309,6 +309,7 @@ pub fn spawn_request(
             effort,
             profile,
             starting_prompt: prompt.unwrap_or_default(),
+            role_card: None,
         });
     }
     Ok(ClientRequest::CreateAgent {
@@ -325,6 +326,7 @@ pub fn spawn_request(
         issue_url: None,
         role: Default::default(),
         profile,
+        role_card: None,
     })
 }
 

@@ -17,7 +17,26 @@ use std::path::{Path, PathBuf};
 
 /// What `kete profile` was asked to do.
 pub enum ProfileOp {
-    List,
+    /// `--json` (0.60): every account with its windows, live sessions
+    /// and holds; the accounts lane's.
+    List {
+        json: bool,
+    },
+    /// `kete profile pick` (0.60): the account a scripted launch takes;
+    /// the accounts lane's.
+    #[allow(dead_code)]
+    Pick {
+        harness: Option<String>,
+        project: Option<String>,
+        dry_run: bool,
+        json: bool,
+    },
+    /// `kete profile reserve` (0.60): the accounts lane's.
+    #[allow(dead_code)]
+    Reserve(String),
+    /// `kete profile unreserve` (0.60): the accounts lane's.
+    #[allow(dead_code)]
+    Unreserve(String),
     Add {
         name: String,
         harness: String,
@@ -84,7 +103,10 @@ pub fn run_profile(op: ProfileOp) -> Result<()> {
     let _lock = match &op {
         // A project default edits the `projects` key: its own layer.
         // A rename and a spread take the settings locks themselves.
-        ProfileOp::List
+        ProfileOp::List { .. }
+        | ProfileOp::Pick { .. }
+        | ProfileOp::Reserve(_)
+        | ProfileOp::Unreserve(_)
         | ProfileOp::Login { .. }
         | ProfileOp::SetProject { .. }
         | ProfileOp::Rename { .. }
@@ -96,7 +118,12 @@ pub fn run_profile(op: ProfileOp) -> Result<()> {
         _ => None,
     };
     match op {
-        ProfileOp::List => list(),
+        ProfileOp::List { json: false } => list(),
+        // 0.60: placeholders from the foundation; the accounts lane fills them.
+        ProfileOp::List { json: true } => crate::not_in_this_build("kete profile list --json"),
+        ProfileOp::Pick { .. } => crate::not_in_this_build("kete profile pick"),
+        ProfileOp::Reserve(_) => crate::not_in_this_build("kete profile reserve"),
+        ProfileOp::Unreserve(_) => crate::not_in_this_build("kete profile unreserve"),
         ProfileOp::Add {
             name,
             harness,
@@ -113,6 +140,7 @@ pub fn run_profile(op: ProfileOp) -> Result<()> {
                 default,
                 use_default,
                 disabled: false,
+                reserved: false,
             };
             profiles::add_to_file(&config, &profile).map_err(anyhow::Error::msg)?;
             match profile.home() {
@@ -907,6 +935,7 @@ mod edit_tests {
             default: false,
             use_default: false,
             disabled: true,
+            reserved: false,
         }
     }
 
@@ -1008,6 +1037,7 @@ mod list_tests {
             default,
             use_default: false,
             disabled,
+            reserved: false,
         };
         let all = vec![p("work", true, false), p("home", false, true)];
         let usage = vec![

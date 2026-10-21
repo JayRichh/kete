@@ -651,7 +651,7 @@ fn the_studio_map_stays_local_through_settings_writes() {
         autonomy: Autonomy::A2,
         queue_exclude: Vec::new(),
     };
-    let repo = Path::new("/code/wheako");
+    let repo = Path::new("/code/my-game");
     settings::write_in(&path, &local, repo, Some(&entry)).unwrap();
     let global = |key: &str| Target::Global { key: key.into() };
     set_in(&path, &local, &global("kanban"), &json!(true)).unwrap();

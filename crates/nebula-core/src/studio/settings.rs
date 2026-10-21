@@ -2,7 +2,7 @@
 //! `config.local.json`, a map keyed by repo root.
 //!
 //! ```json
-//! { "studio": { "C:/Code/wheako": { "studio_inbox": "Design/Studio/inbox",
+//! { "studio": { "C:/Code/my-game": { "studio_inbox": "Design/Studio/inbox",
 //!   "autonomy": "A1", "queue_exclude": ["library-sweep-2"] } } }
 //! ```
 //!
@@ -285,11 +285,11 @@ mod tests {
         write_in(
             &config,
             &local,
-            Path::new(r"C:\Code\Wheako"),
+            Path::new(r"C:\Code\My-game"),
             Some(&entry(Autonomy::A2)),
         )
         .unwrap();
-        assert!(for_repo_in(&local, Path::new("c:/code/wheako")).is_some());
+        assert!(for_repo_in(&local, Path::new("c:/code/my-game")).is_some());
     }
 
     #[test]
