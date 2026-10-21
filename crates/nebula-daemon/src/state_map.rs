@@ -164,7 +164,9 @@ enum Sources {
     Fixed {
         layer: Result<Layer, String>,
         prs: Vec<LivePr>,
-        asked: usize,
+        /// How often each source was asked.
+        layers_asked: usize,
+        prs_asked: usize,
     },
 }
 
@@ -173,8 +175,12 @@ impl Sources {
         match self {
             Sources::Real => extract(root),
             #[cfg(test)]
-            Sources::Fixed { layer, asked, .. } => {
-                *asked += 1;
+            Sources::Fixed {
+                layer,
+                layers_asked,
+                ..
+            } => {
+                *layers_asked += 1;
                 layer.clone()
             }
         }
@@ -184,8 +190,8 @@ impl Sources {
         match self {
             Sources::Real => open_prs(root),
             #[cfg(test)]
-            Sources::Fixed { prs, asked, .. } => {
-                *asked += 1;
+            Sources::Fixed { prs, prs_asked, .. } => {
+                *prs_asked += 1;
                 prs.clone()
             }
         }
@@ -393,6 +399,9 @@ fn run_capped(mut cmd: Command, timeout: Duration, max: usize) -> Result<Vec<u8>
             Err(e) => return Err(e.to_string()),
         }
     };
+    // shortcut: a grandchild the extractor leaves holding stdout keeps this
+    // join (and so the rebuild) waiting until it exits; bound the join if
+    // an extractor ever does that.
     let out = reader.join().map_err(|_| "output was lost".to_string())?;
     if out.len() > max {
         return Err(format!("printed over {max} bytes"));
@@ -525,7 +534,8 @@ mod tests {
                 url: String::new(),
                 draft: false,
             }],
-            asked: 0,
+            layers_asked: 0,
+            prs_asked: 0,
         };
         let mut cache = Cache::default();
         let map = rebuild(&daemon, &project, &mut cache, &mut sources);
@@ -555,10 +565,49 @@ mod tests {
         // A second rebuild inside a minute asks neither source again.
         let again = rebuild(&daemon, &project, &mut cache, &mut sources);
         assert_eq!(again.nodes, map.nodes);
-        let Sources::Fixed { asked, .. } = sources else {
-            unreachable!()
+        assert_eq!(asked(&sources), (1, 1));
+    }
+
+    /// (layer, pull requests) asks so far.
+    fn asked(sources: &Sources) -> (usize, usize) {
+        match sources {
+            Sources::Fixed {
+                layers_asked,
+                prs_asked,
+                ..
+            } => (*layers_asked, *prs_asked),
+            Sources::Real => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn the_extractor_is_re_read_each_minute_and_gh_every_five() {
+        let repo = tempfile::tempdir().unwrap();
+        let (daemon, project) = daemon_with_repo(repo.path());
+        let mut sources = Sources::Fixed {
+            layer: Ok(Layer::default()),
+            prs: Vec::new(),
+            layers_asked: 0,
+            prs_asked: 0,
         };
-        assert_eq!(asked, 2);
+        let mut cache = Cache::default();
+        rebuild(&daemon, &project, &mut cache, &mut sources);
+        assert_eq!(asked(&sources), (1, 1));
+        // Each cached read made `layer` and `prs` seconds ago, then a rebuild.
+        let mut at = |layer: u64, prs: u64| {
+            let ago = |secs| {
+                Instant::now()
+                    .checked_sub(Duration::from_secs(secs))
+                    .unwrap()
+            };
+            cache.layer.as_mut().unwrap().0 = ago(layer);
+            cache.prs.as_mut().unwrap().0 = ago(prs);
+            rebuild(&daemon, &project, &mut cache, &mut sources);
+            asked(&sources)
+        };
+        assert_eq!(at(61, 61), (2, 1), "past a minute: the extractor, not gh");
+        assert_eq!(at(61, 299), (3, 1), "gh waits out its five minutes");
+        assert_eq!(at(61, 301), (4, 2), "past five minutes: gh once more");
     }
 
     #[test]
@@ -568,7 +617,8 @@ mod tests {
         let mut sources = Sources::Fixed {
             layer: Err("the extractor exited with exit code: 1".into()),
             prs: Vec::new(),
-            asked: 0,
+            layers_asked: 0,
+            prs_asked: 0,
         };
         let map = rebuild(&daemon, &project, &mut Cache::default(), &mut sources);
         assert_eq!(

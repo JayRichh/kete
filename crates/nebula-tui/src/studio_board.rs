@@ -882,39 +882,54 @@ mod tests {
                 node("SYS-1", NodeKind::System, "Music"),
                 node("D-7", NodeKind::Decision, "Loudness"),
             ],
-            edges: vec![owns("dept:audio", "SYS-1"), owns("dept:audio", "D-7")],
+            // The e2e's shape: the decision sits under its system.
+            edges: vec![owns("dept:audio", "SYS-1"), owns("SYS-1", "D-7")],
         };
         let map = state_map::merge("demo", 0, layer, Layer::default());
         state_map::write(dir.path(), &map).unwrap();
 
+        let screen = |app: &mut App| -> String {
+            let mut terminal = ratatui::Terminal::new(TestBackend::new(80, 24)).unwrap();
+            terminal
+                .draw(|f| crate::state_overlay::draw_live(f, app))
+                .unwrap();
+            terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|c| c.symbol())
+                .collect()
+        };
+        let press = |app: &mut App, code| {
+            let ev = KeyEvent {
+                code,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                state: KeyEventState::NONE,
+            };
+            crate::state_overlay::handle_key(app, ev);
+        };
+
         key(&mut app, KeyCode::Char('s'));
         assert!(matches!(app.modals.overlay, Some(Overlay::StateMap(_))));
-        let mut terminal = ratatui::Terminal::new(TestBackend::new(80, 24)).unwrap();
-        terminal
-            .draw(|f| crate::state_overlay::draw_live(f, &mut app))
-            .unwrap();
-        let screen: String = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|c| c.symbol())
-            .collect();
-        for text in [
-            "department dept:audio: Audio",
-            "system SYS-1: Music",
-            "decision D-7: Loudness",
-        ] {
-            assert!(screen.contains(text), "{text} is not drawn");
-        }
+        // Roots open, the rest closed: the decision waits for its system.
+        let first = screen(&mut app);
+        assert!(first.contains("department dept:audio: Audio"));
+        assert!(first.contains("system SYS-1: Music"));
+        assert!(
+            !first.contains("decision D-7: Loudness"),
+            "D-7 drawn before SYS-1 opened"
+        );
 
-        let esc = KeyEvent {
-            code: KeyCode::Esc,
-            modifiers: KeyModifiers::NONE,
-            kind: KeyEventKind::Press,
-            state: KeyEventState::NONE,
-        };
-        crate::state_overlay::handle_key(&mut app, esc);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Char('l'));
+        assert!(
+            screen(&mut app).contains("decision D-7: Loudness"),
+            "l opens SYS-1"
+        );
+
+        press(&mut app, KeyCode::Esc);
         assert!(matches!(app.modals.overlay, Some(Overlay::StudioBoard(_))));
     }
 
