@@ -1,18 +1,72 @@
 //! USAGE LEDGER (K7): tokens, estimated cost, tool uses and turns per
 //! session per local day, added at every turn end.
 //!
-//! Placeholder from the 0.60 foundation lane. The ledger lane owns this
-//! file: it fills [`LedgerBook`] and the methods below; their signatures
-//! are fixed (the foundation wires the call sites).
+//! Tokens come from the session's transcript (and its subagents'),
+//! read incrementally and counted once per message id
+//! (`nebula_core::usage_ledger::TranscriptTally`). The cost is the change
+//! in the statusLine's `cost.total_cost_usd` since it was last counted.
+//! Tool uses are the PostToolUse hooks of the turn.
+//!
+//! The statusLine runs about 300 ms after the last message, and Claude
+//! writes its transcript asynchronously, so a turn's last reading can land
+//! after its `Stop`. A reading that lands while the session is not running
+//! is added on its own (no turn), so the day's total misses nothing.
 
 use super::*;
+use crate::store::SpendDelta;
 use nebula_core::studio::wire::LedgerRow;
 use nebula_core::usage::StatuslineReading;
+use nebula_core::usage_ledger::{self as ledger, TranscriptTally};
 
 /// Per-session ledger state (transcript offsets, the last cost, tool uses
-/// this turn), on `Daemon::ledger`. The ledger lane adds its fields.
+/// this turn), on `Daemon::ledger`.
+#[derive(Debug)]
+pub(crate) struct LedgerBook {
+    /// When this daemon started, epoch ms. A session older than that is
+    /// counted from here on: whatever came before was counted by the
+    /// daemon that saw it, or is history.
+    started_ms: i64,
+    sessions: HashMap<AgentId, SessionBook>,
+}
+
+impl Default for LedgerBook {
+    fn default() -> Self {
+        Self {
+            started_ms: nebula_core::clock::now_ms(),
+            sessions: HashMap::new(),
+        }
+    }
+}
+
 #[derive(Debug, Default)]
-pub(crate) struct LedgerBook {}
+struct SessionBook {
+    /// Behind a lock of its own: a first read of a long transcript never
+    /// holds up the other sessions' ledger calls.
+    tally: Option<Arc<Mutex<TranscriptTally>>>,
+    /// The transcript the statusLine names.
+    transcript: Option<PathBuf>,
+    /// The latest `cost.total_cost_usd`.
+    cost_now: Option<f64>,
+    /// The `cost.total_cost_usd` already in the ledger.
+    cost_counted: Option<f64>,
+    /// PostToolUse hooks since the last turn end.
+    tool_uses: u32,
+    /// Turns that ended before anything they spent had landed.
+    turns_pending: u32,
+}
+
+impl LedgerBook {
+    /// Epoch ms before which `agent`'s transcript lines are not counted:
+    /// its creation (its id is a ULID) or this daemon's start, the later.
+    fn since(&self, agent: &AgentId) -> Option<i64> {
+        ledger::created_ms(agent.as_str()).map(|created| created.max(self.started_ms))
+    }
+
+    /// Whether `agent` was created before this daemon started.
+    fn predates(&self, agent: &AgentId) -> bool {
+        ledger::created_ms(agent.as_str()).is_some_and(|created| created < self.started_ms)
+    }
+}
 
 impl Daemon {
     /// A Claude statusLine landed for `agent` (`registry/usage.rs`).
@@ -22,17 +76,140 @@ impl Daemon {
         reading: &StatuslineReading,
         raw: &serde_json::Value,
     ) {
-        let _ = (agent, reading, raw);
+        let cost = raw
+            .pointer("/cost/total_cost_usd")
+            .and_then(serde_json::Value::as_f64);
+        let uncounted = {
+            let mut book = self.ledger.lock();
+            let predates = book.predates(agent);
+            let s = book.sessions.entry(agent.clone()).or_default();
+            if let Some(path) = reading.transcript_path.as_deref().filter(|p| !p.is_empty()) {
+                s.transcript = Some(PathBuf::from(path));
+            }
+            let Some(cost) = cost else {
+                return;
+            };
+            // A session this daemon first hears of mid-life: its estimate so
+            // far was counted before (or is history).
+            if s.cost_now.is_none() && s.cost_counted.is_none() && predates {
+                s.cost_counted = Some(cost);
+            }
+            s.cost_now = Some(cost);
+            s.cost_counted != Some(cost)
+        };
+        let idle = || {
+            matches!(
+                self.store.get_agent(agent),
+                Ok(Some(row)) if row.status != AgentStatus::Running
+            )
+        };
+        if uncounted && idle() {
+            self.ledger_record(agent, false, nebula_core::clock::now_ms());
+        }
     }
 
     /// A PostToolUse hook landed for `agent` (`registry/status.rs`).
     pub fn ledger_on_tool_use(&self, agent: &AgentId) {
-        let _ = agent;
+        let mut book = self.ledger.lock();
+        let s = book.sessions.entry(agent.clone()).or_default();
+        s.tool_uses = s.tool_uses.saturating_add(1);
     }
 
     /// `agent`'s turn ended (`Finished`, `registry/status.rs`).
     pub fn ledger_on_turn_end(&self, agent: &AgentId) {
-        let _ = agent;
+        self.ledger_record(agent, true, nebula_core::clock::now_ms());
+    }
+
+    /// Count what `agent` spent since the last count, at `now_ms`: add it
+    /// to the day's row and push the row to clients. A turn end counts one
+    /// turn and the turn's tool uses; a late reading counts tokens and
+    /// cost. A turn end that finds nothing spent yet writes nothing: its
+    /// turn is counted with the reading that brings its messages. With
+    /// `usage_ledger` off the state still moves on, so turning it back on
+    /// never counts what was spent while it was off.
+    pub(crate) fn ledger_record(&self, agent: &AgentId, turn_end: bool, now_ms: i64) {
+        // Claude sessions only; a wake-up session has no row.
+        let Ok(Some(row)) = self.store.get_agent(agent) else {
+            return;
+        };
+        if row.kind != AgentKind::Claude {
+            return;
+        }
+        let hooked = self
+            .transcripts
+            .lock()
+            .get(agent)
+            .map(|t| t.transcript_path.clone());
+        let (tally, path) = {
+            let mut book = self.ledger.lock();
+            let since = book.since(agent);
+            let s = book.sessions.entry(agent.clone()).or_default();
+            let tally = s
+                .tally
+                .get_or_insert_with(|| Arc::new(Mutex::new(TranscriptTally::new(since))))
+                .clone();
+            (tally, hooked.or_else(|| s.transcript.clone()))
+        };
+        let tokens = path.map(|p| tally.lock().read_new(&p)).unwrap_or_default();
+        let (cost, tool_uses, turns) = {
+            let mut book = self.ledger.lock();
+            let s = book.sessions.entry(agent.clone()).or_default();
+            let cost = s
+                .cost_now
+                .map_or(0.0, |now| ledger::cost_delta(s.cost_counted, now));
+            if s.cost_now.is_some() {
+                s.cost_counted = s.cost_now;
+            }
+            let tool_uses = if turn_end {
+                s.turns_pending += 1;
+                std::mem::take(&mut s.tool_uses)
+            } else {
+                0
+            };
+            if tokens.is_zero() && cost == 0.0 && tool_uses == 0 {
+                return;
+            }
+            (cost, tool_uses, std::mem::take(&mut s.turns_pending))
+        };
+        if !crate::config::Config::load_quiet().usage_ledger() {
+            return;
+        }
+        let worktree = self.store.get_worktree(&row.worktree_id).ok().flatten();
+        let project = worktree
+            .as_ref()
+            .and_then(|w| self.store.get_project(&w.project_id).ok().flatten());
+        let delta = SpendDelta {
+            agent: agent.clone(),
+            day: ledger::local_day(now_ms.div_euclid(1000)),
+            project: project.map(|p| p.name),
+            branch: worktree.map(|w| w.branch),
+            session: Some(row.name),
+            model: row.model,
+            profile: row.profile,
+            role_card: self.role_card_of(agent),
+            input_tokens: tokens.input_tokens,
+            output_tokens: tokens.output_tokens,
+            cache_read_tokens: tokens.cache_read_tokens,
+            cache_write_tokens: tokens.cache_write_tokens,
+            cost_usd: cost,
+            tool_uses,
+            turns,
+            at: now_ms,
+        };
+        match self.store.add_spend(&delta) {
+            Ok(spend) => self.broadcast(ServerEvent::SessionSpend { rows: vec![spend] }),
+            Err(e) => tracing::warn!(agent = %agent, error = %e, "usage ledger row not added"),
+        }
+    }
+
+    /// Today's row for every session that has one: what a client that
+    /// connects after the turns ended needs for `SessionSpend`.
+    pub fn today_spend(&self) -> Vec<nebula_core::studio::wire::SpendRow> {
+        let today = ledger::local_day(nebula_core::clock::now_secs() as i64);
+        self.store
+            .spend_rows(Some(&today), Some(&today), None)
+            .map(|rows| rows.into_iter().map(|r| r.spend).collect())
+            .unwrap_or_default()
     }
 
     /// `UsageLedger`: the ledger's rows from `since` to `until` (local
@@ -46,5 +223,352 @@ impl Daemon {
         self.store
             .spend_rows(since, until, project)
             .map_err(|e| format!("{e:#}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::registry::tests::EnvGuard;
+    use crate::session_title::TranscriptRef;
+
+    /// A daemon on a fresh store holding one session, `a`, of `kind`,
+    /// whose transcript is `<dir>/sid.jsonl`, with `usage_ledger` as given.
+    fn daemon_with_session(
+        dir: &Path,
+        ledger_on: bool,
+        kind: AgentKind,
+    ) -> (Arc<Daemon>, PathBuf, EnvGuard) {
+        let config = dir.join("config.json");
+        std::fs::write(
+            &config,
+            serde_json::json!({ "usage_ledger": ledger_on }).to_string(),
+        )
+        .unwrap();
+        let guard = EnvGuard::set_all(&[
+            (env::DATA_DIR, dir.to_str().unwrap()),
+            (env::CONFIG_FILE, config.to_str().unwrap()),
+        ]);
+        let daemon = Daemon::new(
+            Arc::new(Store::open_in_memory().unwrap()),
+            HookEnv {
+                port: 0,
+                token: String::new(),
+            },
+        );
+        seed(&daemon.store, dir, &AgentId("a".into()), kind);
+        let transcript = dir.join("sid.jsonl");
+        daemon.transcripts.lock().insert(
+            AgentId("a".into()),
+            TranscriptRef::from_payload(transcript.to_str(), Some("sid")).unwrap(),
+        );
+        (daemon, transcript, guard)
+    }
+
+    /// Project `demo`, its main worktree and session `id` of `kind`,
+    /// running, in `store`.
+    fn seed(store: &Store, dir: &Path, id: &AgentId, kind: AgentKind) {
+        store
+            .insert_project(&Project {
+                id: ProjectId("p".into()),
+                name: "demo".into(),
+                repo_path: dir.to_path_buf(),
+                sort_order: 0,
+            })
+            .unwrap();
+        store
+            .insert_worktree(&Worktree {
+                id: WorktreeId("w".into()),
+                project_id: ProjectId("p".into()),
+                path: dir.to_path_buf(),
+                branch: "main".into(),
+                is_main: true,
+                sort_order: 0,
+            })
+            .unwrap();
+        store
+            .insert_agent(&Agent {
+                parent: None,
+                profile: None,
+                id: id.clone(),
+                worktree_id: WorktreeId("w".into()),
+                name: "fix login".into(),
+                status: AgentStatus::Running,
+                archived: false,
+                archived_at: 0,
+                unseen: false,
+                kind,
+                custom_harness: None,
+                model: None,
+                effort: None,
+                session_id: None,
+                cloud_session_id: None,
+                sort_order: 0,
+                status_changed_at: 0,
+                alive: true,
+                issue_url: None,
+                role: nebula_core::AgentRole::Worker,
+                recent_prompts: Vec::new(),
+            })
+            .unwrap();
+    }
+
+    /// One turn's traffic: an assistant message in the transcript, `tools`
+    /// tool uses, and a statusLine whose estimate is `cost`.
+    fn turn(daemon: &Daemon, transcript: &Path, id: &str, input: u64, cost: f64, tools: u32) {
+        let line = serde_json::json!({
+            "type": "assistant",
+            "message": { "id": id, "usage": { "input_tokens": input, "output_tokens": input / 10 } },
+        });
+        let mut text = std::fs::read_to_string(transcript).unwrap_or_default();
+        text.push_str(&format!("{line}\n"));
+        std::fs::write(transcript, text).unwrap();
+        let a = AgentId("a".into());
+        for _ in 0..tools {
+            daemon.ledger_on_tool_use(&a);
+        }
+        let raw = serde_json::json!({ "cost": { "total_cost_usd": cost } });
+        daemon.ledger_on_statusline(&a, &nebula_core::usage::claude_statusline(&raw), &raw);
+    }
+
+    fn rows(daemon: &Daemon) -> Vec<LedgerRow> {
+        daemon.usage_ledger(None, None, None).unwrap()
+    }
+
+    #[test]
+    fn two_turns_sum_into_one_row_and_tool_uses_reset_each_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let (daemon, transcript, _env) = daemon_with_session(dir.path(), true, AgentKind::Claude);
+        let mut events = daemon.events.subscribe();
+        let a = AgentId("a".into());
+        turn(&daemon, &transcript, "msg_1", 1000, 0.05, 3);
+        daemon.ledger_on_turn_end(&a);
+        let pushed = std::iter::from_fn(|| events.try_recv().ok()).find_map(|e| match e {
+            ServerEvent::SessionSpend { rows } => Some(rows),
+            _ => None,
+        });
+        assert_eq!(
+            pushed.map(|r| (r[0].turns, r[0].tool_uses)),
+            Some((1, 3)),
+            "a turn end pushes SessionSpend"
+        );
+        turn(&daemon, &transcript, "msg_2", 500, 0.08, 2);
+        daemon.ledger_on_turn_end(&a);
+        let rows = rows(&daemon);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        let s = &rows[0].spend;
+        assert_eq!((s.input_tokens, s.output_tokens), (1500, 150));
+        assert!((s.cost_usd - 0.08).abs() < 1e-9, "{}", s.cost_usd);
+        assert_eq!((s.tool_uses, s.turns), (5, 2));
+        assert_eq!(rows[0].project, "demo");
+        assert_eq!(rows[0].session, "fix login");
+        assert_eq!(rows[0].branch.as_deref(), Some("main"));
+        assert_eq!(daemon.today_spend(), [rows[0].spend.clone()]);
+    }
+
+    #[test]
+    fn a_turn_across_local_midnight_lands_on_the_new_day() {
+        let dir = tempfile::tempdir().unwrap();
+        let (daemon, transcript, _env) = daemon_with_session(dir.path(), true, AgentKind::Claude);
+        let a = AgentId("a".into());
+        let t = nebula_core::clock::now_secs() as i64;
+        let off = nebula_core::clock::local_offset_secs_at(t) as i64;
+        let midnight = t - (t + off).rem_euclid(86_400) + 86_400;
+        turn(&daemon, &transcript, "msg_1", 10, 0.01, 0);
+        daemon.ledger_record(&a, true, (midnight - 60) * 1000);
+        turn(&daemon, &transcript, "msg_2", 20, 0.03, 0);
+        daemon.ledger_record(&a, true, (midnight + 60) * 1000);
+        let days: Vec<(String, u64)> = rows(&daemon)
+            .into_iter()
+            .map(|r| (r.spend.day, r.spend.input_tokens))
+            .collect();
+        assert_eq!(
+            days,
+            [
+                (ledger::local_day(midnight - 60), 10),
+                (ledger::local_day(midnight + 60), 20)
+            ]
+        );
+        assert_ne!(days[0].0, days[1].0);
+    }
+
+    #[test]
+    fn with_the_ledger_off_nothing_is_recorded_or_counted_later() {
+        let dir = tempfile::tempdir().unwrap();
+        let (daemon, transcript, _env) = daemon_with_session(dir.path(), false, AgentKind::Claude);
+        let a = AgentId("a".into());
+        turn(&daemon, &transcript, "msg_1", 1000, 0.05, 4);
+        daemon.ledger_on_turn_end(&a);
+        assert!(rows(&daemon).is_empty());
+        // Back on: only what the next turn spends counts.
+        std::fs::write(
+            dir.path().join("config.json"),
+            serde_json::json!({ "usage_ledger": true }).to_string(),
+        )
+        .unwrap();
+        turn(&daemon, &transcript, "msg_2", 500, 0.08, 1);
+        daemon.ledger_on_turn_end(&a);
+        let s = &rows(&daemon)[0].spend;
+        assert_eq!((s.input_tokens, s.tool_uses, s.turns), (500, 1, 1));
+        assert!((s.cost_usd - 0.03).abs() < 1e-9, "{}", s.cost_usd);
+    }
+
+    #[test]
+    fn a_reading_after_the_turn_ended_is_counted_without_a_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let (daemon, transcript, _env) = daemon_with_session(dir.path(), true, AgentKind::Claude);
+        let a = AgentId("a".into());
+        turn(&daemon, &transcript, "msg_1", 100, 0.05, 0);
+        daemon.ledger_on_turn_end(&a);
+        daemon
+            .store
+            .set_agent_status(&a, AgentStatus::Finished)
+            .unwrap();
+        // The second turn ends before anything it spent has landed: no
+        // row change, and no push of an empty one.
+        let mut events = daemon.events.subscribe();
+        daemon.ledger_on_turn_end(&a);
+        assert!(
+            events.try_recv().is_err(),
+            "an empty turn end pushes nothing"
+        );
+        assert_eq!(rows(&daemon)[0].spend.turns, 1);
+        // Its statusLine and transcript line land after its Stop.
+        turn(&daemon, &transcript, "msg_2", 40, 0.07, 0);
+        let s = &rows(&daemon)[0].spend;
+        assert_eq!((s.input_tokens, s.turns), (140, 2));
+        assert!((s.cost_usd - 0.07).abs() < 1e-9, "{}", s.cost_usd);
+    }
+
+    /// `ms` as Claude stamps a transcript line (RFC 3339, UTC).
+    fn stamp(ms: i64) -> String {
+        let secs = ms.div_euclid(1000);
+        format!(
+            "{}T{:02}:{:02}:{:02}.{:03}Z",
+            ledger::day_at(secs, |_| 0),
+            secs.rem_euclid(86_400) / 3600,
+            secs.rem_euclid(3600) / 60,
+            secs.rem_euclid(60),
+            ms.rem_euclid(1000)
+        )
+    }
+
+    /// An assistant line stamped `at` (epoch ms).
+    fn stamped(transcript: &Path, id: &str, input: u64, at: i64) {
+        let line = serde_json::json!({
+            "type": "assistant",
+            "timestamp": stamp(at),
+            "message": { "id": id, "usage": { "input_tokens": input, "output_tokens": 0 } },
+        });
+        let mut text = std::fs::read_to_string(transcript).unwrap_or_default();
+        text.push_str(&format!("{line}\n"));
+        std::fs::write(transcript, text).unwrap();
+    }
+
+    fn reading(daemon: &Daemon, id: &AgentId, cost: f64) {
+        let raw = serde_json::json!({ "cost": { "total_cost_usd": cost } });
+        daemon.ledger_on_statusline(id, &nebula_core::usage::claude_statusline(&raw), &raw);
+    }
+
+    /// A daemon restart on the same database: the new daemon counts a
+    /// session older than itself from its own start. The old daemon's
+    /// transcript lines (stamped before the restart) are history, and the
+    /// session's first estimate after the restart is taken as counted, so
+    /// only what the next turn adds lands on the row.
+    #[test]
+    fn after_a_restart_a_session_older_than_the_daemon_counts_from_the_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config.json");
+        std::fs::write(&config, r#"{"usage_ledger": true}"#).unwrap();
+        let _env = EnvGuard::set_all(&[
+            (env::DATA_DIR, dir.path().to_str().unwrap()),
+            (env::CONFIG_FILE, config.to_str().unwrap()),
+        ]);
+        let db = dir.path().join("nebula.db");
+        let transcript = dir.path().join("sid.jsonl");
+        let open = || {
+            Daemon::new(
+                Arc::new(Store::open(&db).unwrap()),
+                HookEnv {
+                    port: 0,
+                    token: String::new(),
+                },
+            )
+        };
+        let note = |daemon: &Daemon, id: &AgentId| {
+            daemon.transcripts.lock().insert(
+                id.clone(),
+                TranscriptRef::from_payload(transcript.to_str(), Some("sid")).unwrap(),
+            );
+        };
+
+        // The first daemon sees the session start and its first turn whole.
+        let first = open();
+        let id = AgentId::generate();
+        let created = ledger::created_ms(id.as_str()).unwrap();
+        seed(&first.store, dir.path(), &id, AgentKind::Claude);
+        note(&first, &id);
+        stamped(&transcript, "msg_1", 1000, created);
+        reading(&first, &id, 0.50);
+        first.ledger_on_turn_end(&id);
+        drop(first);
+
+        // A restart five seconds on: the session is older than the daemon.
+        let second = open();
+        second.ledger.lock().started_ms = created + 5_000;
+        note(&second, &id);
+        assert!(second.ledger.lock().predates(&id));
+        // Its first reading is the estimate the first daemon counted.
+        reading(&second, &id, 0.50);
+        stamped(&transcript, "msg_2", 200, created + 6_000);
+        reading(&second, &id, 0.58);
+        second.ledger_on_turn_end(&id);
+
+        let rows = second.usage_ledger(None, None, None).unwrap();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        let s = &rows[0].spend;
+        assert_eq!(
+            (s.input_tokens, s.turns),
+            (1200, 2),
+            "msg_1 is not read again"
+        );
+        assert!(
+            (s.cost_usd - 0.58).abs() < 1e-9,
+            "the 0.50 is not counted again: {}",
+            s.cost_usd
+        );
+    }
+
+    /// The history cutoff is the later of the session's creation and the
+    /// daemon's start: a session created after the daemon started has its
+    /// own lines counted and a resumed conversation's older lines skipped,
+    /// while a session older than the daemon starts at the daemon.
+    #[test]
+    fn the_history_cutoff_is_the_later_of_creation_and_the_daemon_start() {
+        let book = LedgerBook {
+            started_ms: 1_000_000,
+            sessions: HashMap::new(),
+        };
+        let fresh = AgentId::generate();
+        let created = ledger::created_ms(fresh.as_str()).unwrap();
+        assert_eq!(book.since(&fresh), Some(created));
+        assert!(!book.predates(&fresh));
+        let late = LedgerBook {
+            started_ms: created + 60_000,
+            sessions: HashMap::new(),
+        };
+        assert_eq!(late.since(&fresh), Some(created + 60_000));
+        assert!(late.predates(&fresh));
+        // An id that is no ULID has no cutoff: every line counts.
+        assert_eq!(book.since(&AgentId("a".into())), None);
+    }
+
+    #[test]
+    fn other_harnesses_are_not_in_the_ledger() {
+        let dir = tempfile::tempdir().unwrap();
+        let (daemon, transcript, _env) = daemon_with_session(dir.path(), true, AgentKind::Codex);
+        turn(&daemon, &transcript, "msg_1", 100, 0.05, 1);
+        daemon.ledger_on_turn_end(&AgentId("a".into()));
+        assert!(rows(&daemon).is_empty());
     }
 }
