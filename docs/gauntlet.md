@@ -82,7 +82,7 @@ The word sets the row's tone. Case and outer spaces do not matter.
 | `approve`, `approved`, `pass` | Done | a check mark |
 | `reject`, `rejected`, `regenerate`, `fail` | Failed | a cross |
 | `split`, `third-reviewer` | Needs you | the ember, the only place the Gauntlet uses it |
-| anything else, or no word | Plain | the word as written, no glyph |
+| anything else, or no word | Plain | the word as written, with a dot |
 
 ## Open in Studio
 
@@ -107,11 +107,11 @@ A verdict's `evidence` names are looked up under the manifest's `evidence` folde
 Click Gauntlet in the rail.
 
 - **Kind tabs.** One per folder under `signoffs`.
-- **Filters.** A verdict word (all words, or one that appears in the kind) and an age: 24 hours, 7 days or all. Age is read from `at`.
+- **Filters.** A verdict word (all words, or one that appears in the kind) and an age: 24 hours, 7 days or all. Age is read from `at`, else from the file's modified time. A verdict with neither shows only under all.
 - **Rows.** Id, verdict word with its tone, by, at, and the first line of the note.
 - **Detail.** Click a row. It shows the note, the tags, the reconciled file and the evidence list. Open in Studio sits there when the link exists.
 - **Evidence entries.** Open in Kete opens the file in Kete's file view. Show in Explorer reveals it in Explorer.
-- **Row menu.** Right-click a row: Open in Studio, Copy id, Copy path, Show evidence. Open in Studio is absent without a link. Show evidence is absent without an `evidence` folder.
+- **Row menu.** Right-click a row: Open in Studio, Copy id, Copy path, Show evidence. Open in Studio is absent without a link. Show evidence is absent when the verdict names no evidence.
 
 The board's last-verdict cell opens the Gauntlet on that verdict.
 
@@ -123,10 +123,13 @@ Open it with the `gauntlet_view` verb. Rebind it in [keys](keys.md).
 |---|---|
 | `Tab`, `Shift+Tab` | Next and previous kind |
 | `↑`, `↓` | Move between rows |
-| `Enter` | Open the detail |
+| `Enter` | Open or close the detail |
+| `PgUp`, `PgDn` | Scroll a long detail |
 | `o` | Open in Studio |
 | `/` | Filter the rows |
-| `Esc` | Close |
+| `r` | Read the files again |
+| `Esc` | Back out: the detail, then a typed filter, then the view |
+| `q` | Close (it types while the filter is open) |
 
 A click on a row does what `Enter` does.
 
