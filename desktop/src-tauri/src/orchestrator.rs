@@ -59,6 +59,9 @@ pub struct StartSpec {
     /// Replace a running orchestrator (it stays, as a worker).
     #[serde(default)]
     pub replace: bool,
+    /// A role card of the project's `.kete/roles.toml`; needs a 66 daemon.
+    #[serde(default)]
+    pub role: Option<String>,
 }
 
 fn some(s: Option<String>) -> Option<String> {
@@ -68,6 +71,10 @@ fn some(s: Option<String>) -> Option<String> {
 /// Start the orchestrator in the daemon's own workspace; its agent id.
 pub async fn start_orchestrator_in(client: &Client, cfg: &Config, spec: StartSpec) -> Res<String> {
     require_orchestrator(client)?;
+    let role = crate::roles::role_of(spec.role);
+    if role.is_some() {
+        crate::roles::require_roles(client)?;
+    }
     let launch = settings::launch_args(cfg, spec.kind.trim(), some(spec.model), some(spec.effort))?;
     let profile = some(spec.profile);
     let created = ack(client, |req_id| ClientRequest::StartOrchestrator {
@@ -80,7 +87,7 @@ pub async fn start_orchestrator_in(client: &Client, cfg: &Config, spec: StartSpe
         project: some(spec.project).map(nebula_core::ProjectId),
         name: some(spec.name),
         replace: spec.replace,
-        role_card: None,
+        role_card: role,
     })
     .await?;
     Ok(created_id(created))
@@ -219,6 +226,33 @@ mod tests {
         assert_eq!(project.as_ref().map(|p| p.0.as_str()), Some("p1"));
         assert_eq!(*name, None, "a blank name is the daemon's");
         assert!(*replace);
+    }
+
+    #[tokio::test]
+    async fn a_role_goes_only_to_a_66_daemon() {
+        let spec = || StartSpec {
+            kind: "claude".into(),
+            role: Some(" lead ".into()),
+            ..Default::default()
+        };
+        let (client, mut rx) = connected(65);
+        let out = start_orchestrator_in(&client, &Config::default(), spec()).await;
+        assert_eq!(out.unwrap_err(), crate::roles::TOO_OLD);
+        assert!(rx.try_recv().is_err(), "nothing may reach a 65 daemon");
+        let (client, mut rx) = connected(nebula_core::STUDIO_PROTOCOL);
+        let cfg = Config::default();
+        let (out, seen) = testkit::run(
+            &client,
+            &mut rx,
+            start_orchestrator_in(&client, &cfg, spec()),
+            |_| Ok(Some(EntityId::Agent(AgentId("orch".into())))),
+        )
+        .await;
+        out.unwrap();
+        assert!(matches!(
+            seen.as_slice(),
+            [ClientRequest::StartOrchestrator { role_card: Some(c), .. }] if c == "lead"
+        ));
     }
 
     #[tokio::test]

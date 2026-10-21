@@ -48,6 +48,10 @@ kete profile list
 kete profile default max2                                         # launches with no pick take it
 kete profile disable max2                                         # never picked unless named
 kete profile enable max2
+kete profile reserve main                                         # yours: the orchestrator and scripts never pick it
+kete profile unreserve main
+kete profile pick [--dry-run] [--json]                            # the account a scripted launch should take
+kete profile list --json                                          # every account and its windows, for scripts
 kete profile duplicate max2 max3                                  # same harness and variables, its own login
 kete profile rename max3 work                                     # its home and project defaults follow
 kete profile remove max2 [--purge]                                # --purge deletes its home too
@@ -57,7 +61,9 @@ kete session move-account fix-auth work                           # restart a se
 
 - **`add`:** `--use-default` points the profile at the CLI's own default config (`~/.claude`, `~/.codex`, `~/.copilot`). It moves no dir and copies nothing, so the login you already have becomes one of the profiles the picker cycles through. `--default` makes the profile what a launch takes when it names none; there is one default per harness. `--env KEY=VALUE` (repeatable) fills its `env`.
 - **`login`:** runs the harness's own sign-in in the current terminal with the profile's environment applied: `claude auth login --claudeai`, `codex login` or `copilot login`. The CLI opens your browser for the OAuth flow and takes the callback, or prints the URL and asks for the code. The credentials it writes land in the profile's home. Anything after `--` is passed on: `kete profile login max2 -- --email you@example.com`.
-- **`list`:** every account (each profile, then each harness's own login that has a reading, e.g. `claude (own login)`): harness, `*` for the default and `(off)` for a disabled one, a bar and percent for its session (5h) and weekly use (Copilot: its monthly allowances), and whether it is signed in. One that is not shows the `kete profile login <name>` to run. The account spread in force is printed last.
+- **`list`:** every account (each profile, then each harness's own login that has a reading, e.g. `claude (own login)`): harness, `*` for the default, `(off)` for a disabled one and `(yours)` for a reserved one, a bar and percent for its session (5h) and weekly use (Copilot: its monthly allowances), and whether it is signed in. One that is not shows the `kete profile login <name>` to run. The account spread in force is printed last.
+- **`reserve` / `unreserve`:** see [Reserved accounts](#reserved-accounts).
+- **`pick` and `list --json`:** see [Scripted picks](#scripted-picks).
 - **`enable` / `disable`:** a disabled profile is never picked for a launch that names no profile (not as the default, not by a spread) and pickers leave it out. Sessions already under it keep it, and a launch that names it still runs.
 - **`remove`:** drops the entry and keeps the home, so adding the name back signs nothing in again. `--purge` also deletes the home, and only ever a directory directly inside `<data dir>/profiles`. An adopted login's config is never touched.
 - **`duplicate`:** a new profile with the source's harness, variables and kind of login, but not its default star or its off switch, in an empty home of its own: sign it in separately.
@@ -67,7 +73,7 @@ kete session move-account fix-auth work                           # restart a se
 
 ## In the apps
 
-The desktop window's **Accounts** view (`Shift+U`, or Settings → Accounts → **Manage accounts**) and the TUI's Accounts overlay (`⇧U`) do everything the commands above do: add (with variables), edit, duplicate, rename, switch on or off, make default, use for a repo, sign in, move a session onto it, set the spread, and remove, with a choice to delete the home too. Both run the same `nebula_core::profiles` functions as the CLI. A rename is offered greyed, its tooltip naming the sessions in the way, while a session names the account. Editing keeps the variables unless they are replaced; **Clear** (desktop) or `Del` (TUI) drops them all.
+The desktop window's **Accounts** view (`Shift+U`, or Settings → Accounts → **Manage accounts**) and the TUI's Accounts overlay (`⇧U`) do everything the commands above do: add (with variables), edit, duplicate, rename, switch on or off, reserve for yourself, make default, use for a repo, sign in, move a session onto it, set the spread, and remove, with a choice to delete the home too. Both run the same `nebula_core::profiles` functions as the CLI. A rename is offered greyed, its tooltip naming the sessions in the way, while a session names the account. Editing keeps the variables unless they are replaced; **Clear** (desktop) or `Del` (TUI) drops them all.
 
 ## In the TUI
 
@@ -141,6 +147,105 @@ launch that names none, from the desktop window, the TUI, `kete spawn` and the o
 A window past its reset time counts as empty. The apps say which account a launch took and why
 (`claude: max2 (failover: main at 92%)`).
 
+## Reserved accounts
+
+A reserved account is kept for the sessions you start yourself. It stays the default for your own
+launches from the apps and your own shell, and it is never picked for a launch the orchestrator or a
+script starts.
+
+| Launch | Who starts it | A reserved account |
+|---|---|---|
+| Quick prompt, New session, `kete spawn`, the orchestrator you start, each without a role card | you | taken as the default, as before |
+| The orchestrator's `kete orchestrator spawn`, a renewal, any launch with a role card, `kete profile pick` | automation | never picked |
+| Any launch that names the account (`--profile main`) | either | used: a name always wins |
+
+Switching an account off (`disable`) takes it away from every launch that names none, yours
+included. Reserving takes it away from automation only.
+
+Automation picks under its own rules:
+
+- Reserved and switched-off profiles are never candidates. A project default that is reserved is skipped.
+- `manual` is read as `least_used`: under manual every lane would get the default, which is usually the reserved account.
+- `least_used` ranks the higher of the 5-hour and weekly percent in 10-point bands (20% and 28% tie, 20% and 31% do not), then by load (live sessions plus pick holds), then by name.
+- `failover` keeps its order over the profiles left.
+- When nothing is left, the launch runs on the harness's own login, as with no profiles. It is refused instead when that own login is itself the reserved account (a reserved `use_default` profile): name an account with `--profile`, or unreserve one.
+
+Reserve an account with `kete profile reserve <name>`, **Reserve for me** on its row in the
+desktop Accounts view or its account menu, or `y` in the TUI Accounts overlay (also **Reserve for
+me** / **Stop reserving** in the account menu). A reserved row reads `(yours)` in the TUI and
+`reserved` in the desktop list.
+
+## Scripted picks
+
+`kete profile pick` names the account a scripted launch should take, by the automation rules above:
+
+```sh
+kete orchestrator spawn --project app --profile "$(kete profile pick)" "fix the login redirect"
+```
+
+It prints the profile name. Each pick holds that account for 10 minutes in
+`<data dir>/profiles/.picks.json`, so under least used (and manual) three picks in a row spread over the accounts before their
+readings move. `--dry-run` holds nothing and prints every candidate:
+
+```
+ACCOUNT                 USED  LIVE HOLDS  WHY
+main                      0%     1     0  reserved
+max2                     70%     0     0  eligible
+max3                     20%     0     1  picked
+
+pick: claude: max3 (least used, 20%) (dry run: nothing held)
+```
+
+`--harness` picks for another harness (default `claude`). `--project <id, name or path>` lets that
+project's default account count when it is not reserved. Live sessions are counted from a running
+daemon; with none, load is holds alone, and no daemon is started. The exit code is 3 when no
+account is eligible.
+
+`kete profile pick --json`:
+
+```json
+{
+  "harness": "claude",
+  "profile": "max3",
+  "reason": "least_used",
+  "line": "claude: max3 (least used, 20%)",
+  "candidates": [
+    { "name": "main", "eligible": false, "why": "reserved", "percent": 0.0, "live_sessions": 1, "holds": 0 },
+    { "name": "max3", "eligible": true, "why": "picked", "percent": 20.0, "live_sessions": 0, "holds": 0 }
+  ],
+  "held_until": 1792580966
+}
+```
+
+`reason` is one of `least_used`, `under_threshold`, `failed_over`, `all_over`, `project_default` or
+`none`. `why` is `picked`, `eligible`, `reserved` or `disabled`. `profile` and `held_until` are
+`null` when nothing is eligible or nothing was held.
+
+`kete profile list --json` prints every profile, then each harness's own login in use:
+
+```json
+{
+  "spread": "manual",
+  "threshold": 90,
+  "accounts": [
+    {
+      "name": "max2", "harness": "claude", "kind": "profile",
+      "default": false, "disabled": false, "reserved": false, "signed_in": true,
+      "email": "you@example.com",
+      "windows": [
+        { "kind": "session", "label": null, "percent": 70.0, "resets_at": 1792590000, "estimated": false, "read_at": 1792580000 },
+        { "kind": "weekly", "label": null, "percent": 12.0, "resets_at": 1793000000, "estimated": false, "read_at": 1792580000 }
+      ],
+      "live_sessions": 0,
+      "holds": 1
+    }
+  ]
+}
+```
+
+`kind` is `profile` or `own_login` (named `@claude`). A window's `percent` is `null` once it has
+aged out with no reset time to go by.
+
 ## Configuration
 
 ```json
@@ -161,3 +266,4 @@ A window past its reset time counts as empty. The apps say which account a launc
 | `default` | The profile a launch on this harness takes when it names none. |
 | `use_default` | Adopt the CLI's default login instead of a home of its own. |
 | `disabled` | Never picked for a launch that names no profile. |
+| `reserved` | Never picked for a launch the orchestrator or a script starts; still the default for yours. |

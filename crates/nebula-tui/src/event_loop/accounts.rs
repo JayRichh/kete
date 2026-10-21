@@ -244,7 +244,8 @@ const RENAME_OFFLINE: &str =
     "not connected to the kete daemon: a rename checks the sessions on the account first";
 
 /// The list's keys: j/k move, Space/e switch a profile on or off, d/*
-/// make it the default, a add, Enter edit, c duplicate, r rename, x/Delete
+/// make it the default, y keeps it for your own sessions (or gives it
+/// back), a add, Enter edit, c duplicate, r rename, x/Delete
 /// remove, l sign in, p use for a repo, m move the grid's session onto it,
 /// s/t the spread and its threshold, w wakes the account now, Tab turns to
 /// the Wake view, Esc (or q) closes.
@@ -275,6 +276,7 @@ fn list_key(app: &mut App, key: KeyEvent, out: &mut Vec<ClientRequest>) -> Done 
         }
         KeyCode::Char(' ') | KeyCode::Char('e') => said(view.toggle_enabled()),
         KeyCode::Char('d') | KeyCode::Char('*') => said(view.set_default()),
+        KeyCode::Char('y') => said(view.toggle_reserved()),
         KeyCode::Char('a') => {
             view.open_add();
             None
@@ -2112,6 +2114,89 @@ mod tests {
                 let flash = app.chrome.flash.clone().unwrap_or_default();
                 assert!(flash.contains("still loading"), "{flash}");
                 assert!(out.is_empty());
+            },
+        );
+    }
+
+    /// A reserved account says `(yours)` on its own row and the button names
+    /// what `y` does next, at both sizes the visual pass walks; the others
+    /// carry no mark.
+    #[test]
+    fn a_reserved_account_is_marked_yours_at_80x24_and_120x40() {
+        with_config_json(
+            r#"{"profiles":[{"name":"work","harness":"claude","reserved":true},{"name":"home","harness":"claude"}]}"#,
+            || {
+                let mut app = App::new();
+                seed_tree(&mut app);
+                let mut out = Vec::new();
+                open_overlay(&mut app, &mut out);
+                assert!(view(&app).rows[0].reserved() && !view(&app).rows[1].reserved());
+                for (w, h) in [(80u16, 24u16), (120, 40)] {
+                    let text = draw_at(&mut app, w, h);
+                    let area = view(&app).area;
+                    let inside: Vec<String> = text
+                        .lines()
+                        .map(|l| {
+                            l.chars()
+                                .skip(usize::from(area.x))
+                                .take(usize::from(area.width))
+                                .collect()
+                        })
+                        .collect();
+                    for want in ["Accounts", "Spread [s]", "[a] add", "[y] stop reserving"] {
+                        assert!(text.contains(want), "{w}x{h}: {want}\n{text}");
+                    }
+                    let yours: Vec<&String> =
+                        inside.iter().filter(|l| l.contains("(yours)")).collect();
+                    assert_eq!(yours.len(), 1, "{w}x{h}: {text}");
+                    assert!(yours[0].contains("work"), "{w}x{h}: {}", yours[0]);
+                    // Under the cursor, the unreserved account offers the key.
+                    view_mut(&mut app).cursor = 1;
+                    let text = draw_at(&mut app, w, h);
+                    assert!(text.contains("[y] reserve for me"), "{w}x{h}: {text}");
+                    view_mut(&mut app).cursor = 0;
+                }
+            },
+        );
+    }
+
+    /// `y` and a click on its button both reach `toggle_reserved`: the file
+    /// takes the flag, then loses the key again; an own login is refused in
+    /// words and writes nothing.
+    #[test]
+    fn y_and_its_button_toggle_reserved() {
+        with_config_json(
+            r#"{"profiles":[{"name":"work","harness":"claude"},{"name":"home","harness":"claude"}]}"#,
+            || {
+                let mut app = App::new();
+                seed_tree(&mut app);
+                let mut out = Vec::new();
+                open_overlay(&mut app, &mut out);
+                click(&mut app, AccountsHit::Row(1), &mut out);
+                key(&mut app, KeyCode::Char('y'), &mut out);
+                assert_eq!(
+                    app.chrome.flash.as_deref(),
+                    Some("home is reserved: kept for your own sessions")
+                );
+                assert_eq!(saved()["profiles"][1]["reserved"], true);
+                assert!(view(&app).rows[1].reserved());
+                click(&mut app, AccountsHit::Key(KeyCode::Char('y')), &mut out);
+                assert_eq!(
+                    app.chrome.flash.as_deref(),
+                    Some("home can be picked by scripts again")
+                );
+                assert!(saved()["profiles"][1].get("reserved").is_none());
+                assert!(!view(&app).rows[1].reserved());
+                // Another account's own login is not a profile.
+                app.launcher.account_usage = vec![own_login(5.0)];
+                app.launcher.usage_pushed = true;
+                refresh(&mut app);
+                let own = view(&app).rows.len() - 1;
+                view_mut(&mut app).cursor = own;
+                key(&mut app, KeyCode::Char('y'), &mut out);
+                let flash = app.chrome.flash.clone().unwrap_or_default();
+                assert!(flash.contains("own login"), "{flash}");
+                assert!(saved()["profiles"][0].get("reserved").is_none());
             },
         );
     }

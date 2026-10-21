@@ -9,6 +9,7 @@
   import { sendToOrchestrator } from './orch.svelte';
   import { whileCutting } from './worktrees/rows.svelte';
   import { recentCheckouts, type RecentCheckout } from './recent';
+  import RolePicker from './roles/RolePicker.svelte';
 
   // The quick prompt: pinned under the main column. Pick where and with
   // what, type the task, Enter starts it (Shift+Enter for a new line). P
@@ -29,6 +30,8 @@
   let model = $state('');
   let effort = $state('');
   let preset = $state('');
+  /** A role card of the repo, or null. */
+  let role = $state<string | null>(null);
   let prompt = $state('');
   let busy = $state(false);
   let focused = $state(false);
@@ -102,6 +105,12 @@
   });
   $effect(() => {
     if (efforts.length && !efforts.includes(effort)) effort = efforts.includes(info?.choices?.effort ?? '') ? info!.choices!.effort : efforts[0];
+  });
+
+  // A role belongs to its repo: a new repo starts with none.
+  $effect(() => {
+    void project;
+    role = null;
   });
 
   const ready = $derived(app.model.connected && !busy && (toOrch ? !!orch && !!prompt.trim() : !!worktree));
@@ -235,7 +244,9 @@
         model: !isTerminal && model && model !== c?.model ? model : null,
         effort: !isTerminal && efforts.length && effort && effort !== c?.effort ? effort : null,
         preset: !isTerminal && preset ? preset : null,
-      });
+        role: !isTerminal && role ? role : null,
+        // shortcut: `role` rides past QuickLaunch's type until api.ts names it.
+      } as Parameters<typeof api.quickLaunch>[0]);
       // A new worktree shows as a placeholder in its repo while git cuts it.
       const out = await (worktree === NEW_WT ? whileCutting(project, 'new worktree', launch) : launch());
       const follow = app.launch.follow !== false;
@@ -248,6 +259,7 @@
       if (worktree === NEW_WT && !app.launch.new_worktree) worktree = out.worktree;
       prompt = '';
       preset = '';
+      role = null;
       picked = false;
       queueMicrotask(grow);
       box?.blur();
@@ -356,6 +368,7 @@
           </select>
           {@render chevron()}
         </span>
+        {#if !isTerminal}<RolePicker repo={project} bind:value={role} bar />{/if}
         <label class="flex items-center gap-2 border-r border-rule px-3 text-[12px] text-ink">
           <input
             type="checkbox"

@@ -356,6 +356,39 @@ pub fn scope_segments(app: &App) -> Vec<(String, ScopeKeep)> {
     out
 }
 
+/// The role label a session's card and pane header lead with
+/// (`runner · claude@max2 haiku`): the label of the role card it launched
+/// under, from the daemon's `SessionRoles`. None for a session with no role
+/// and on a daemon that never pushes them.
+pub fn role_chip(app: &App, agent: &AgentId) -> Option<String> {
+    app.session_roles.get(agent).map(|r| r.label.clone())
+}
+
+#[cfg(test)]
+mod role_chip_tests {
+    use super::*;
+
+    #[test]
+    fn the_chip_is_the_role_label_and_a_roleless_session_has_none() {
+        let mut app = App::new();
+        let runner = AgentId("a1".into());
+        app.session_roles.insert(
+            runner.clone(),
+            nebula_core::studio::wire::SessionRole {
+                agent: runner.clone(),
+                card: "runner".into(),
+                label: "Runner".into(),
+                tier: 3,
+                department: None,
+                permission: "allowlist".into(),
+                context_budget: None,
+            },
+        );
+        assert_eq!(role_chip(&app, &runner).as_deref(), Some("Runner"));
+        assert_eq!(role_chip(&app, &AgentId("a2".into())), None);
+    }
+}
+
 /// The pull request on checkout `worktree`, as its cards show it.
 pub fn worktree_pr(app: &App, worktree: &WorktreeId) -> Option<RowPr> {
     let w = app.tree.worktrees.iter().find(|w| &w.id == worktree)?;
