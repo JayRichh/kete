@@ -31,7 +31,7 @@ describe('the 0.60 views keep Workshop', () => {
   for (const file of FILES) {
     it(file, () => {
       const text = read(file);
-      expect(text, 'an em dash').not.toContain('—');
+      expect(text, 'an em dash').not.toContain(String.fromCharCode(0x2014));
       expect(text.match(/\b(shadow|rounded)(-[a-z0-9]+)?\b/g)?.filter((c) => c !== 'rounded-none') ?? [], 'shadows or round corners').toEqual([]);
       expect(text.match(/error[^}\n]*\?\s*'[^']*ember/g) ?? [], 'an error in ember').toEqual([]);
     });
