@@ -29,6 +29,7 @@ kete ado <cmd>            Azure DevOps tasks, task worktrees, PRs     (see Azure
 kete studio <cmd>         studio mode: inbox, autonomy, queue, notes  (see Studio mode)
 kete roles <cmd>          what each role card gets; bypass acceptance (see Studio mode)
 kete usage                tokens, estimated cost and turns per session per day
+kete state                a studio repo's state map: the tree, a slice   (agents run this)
 kete config <cmd>         back up, restore or locate this machine's settings
 kete profile <cmd>        several accounts per harness: add, sign in, rename, spread, remove
 kete wake <cmd>           start accounts' 5-hour windows early at an hour you pick (Whakaoho)
@@ -310,9 +311,13 @@ kete usage [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--project P] [--by session
                                 # the usage ledger: tokens, estimated cost, tool uses and turns,
                                 # one row per session per local day. Today by session unless told
                                 # otherwise; both dates are inclusive; --csv prints every row as CSV
+kete state [<repo>] [--slice <node>] [--json]
+                                # the state map the daemon keeps in .kete/state-map.json: the tree,
+                                # or one node's slice (under 2 KB) an agent reads; --json prints the
+                                # map, or the node and its edges. <repo> defaults to where you are
 ```
 
-`--role <id>` is also a flag of `kete spawn`, `kete orchestrator spawn` and `kete orchestrator start`, and `kete orchestrator renew` hands the orchestrator over (see [What agents run for you](#what-agents-run-for-you)). More: [Studio queue](studio-queue.md), [Roles](roles.md), [Usage ledger](usage-ledger.md), [Triage](triage.md).
+`--role <id>` is also a flag of `kete spawn`, `kete orchestrator spawn` and `kete orchestrator start`, and `kete orchestrator renew` hands the orchestrator over (see [What agents run for you](#what-agents-run-for-you)). More: [Studio queue](studio-queue.md), [Roles](roles.md), [Usage ledger](usage-ledger.md), [Triage](triage.md), [State map](state-map.md).
 
 ## Wake-up (Whakaoho)
 

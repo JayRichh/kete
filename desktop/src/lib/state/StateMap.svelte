@@ -257,6 +257,7 @@
             <div
               class="flex min-w-0 items-stretch border-b border-l-2 border-b-rule last:border-b-0 {on ? 'border-l-ink bg-raised' : 'border-l-transparent'}"
               role="treeitem"
+              data-state-node={nd.id}
               aria-selected={on}
               aria-level={r.depth + 1}
               aria-expanded={r.hasChildren ? open : undefined}

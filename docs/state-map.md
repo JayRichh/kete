@@ -159,7 +159,7 @@ The rebuild runs off the event path. It rebuilds every studio repo and writes ea
 
 ## In the desktop app
 
-The state map panel (`desktop/src/lib/state/StateMap.svelte`) reads `.kete/state-map.json` from the repo's checkout when it opens, every 10 seconds while the page is visible, and when you press Reload (`StateMap.svelte:21`). It writes nothing.
+The state map panel (`desktop/src/lib/state/StateMap.svelte`) sits on the Studio page, under the board. It reads `.kete/state-map.json` from the repo's checkout when it opens, every 10 seconds while the page is visible, and when you press Reload (`StateMap.svelte:21`). It writes nothing.
 
 The header shows the repo, when the map was built and the node count. A repo layer note shows under it. A map with no file says: "No state map yet. Kete builds one while studio mode is on for this repo." A file that cannot be read shows the reason, marked with a cross.
 
@@ -179,9 +179,7 @@ Copy slice puts the slice for the selected node on the clipboard and says "Copie
 
 ## In the TUI and the CLI
 
-The TUI overlay and the `kete state` command are wired by the main thread; until then the desktop panel and the file are the surfaces.
-
-The TUI overlay (`crates/nebula-tui/src/state_overlay.rs`) draws the same tree. Roots start open. The footer names the keys.
+Press `s` on the studio board (or pick State map from its menu) to open the TUI overlay (`crates/nebula-tui/src/state_overlay.rs`). It draws the same tree. Roots start open. The footer names the keys. Esc goes back to the board.
 
 | Key | What it does |
 |---|---|
@@ -192,7 +190,7 @@ The TUI overlay (`crates/nebula-tui/src/state_overlay.rs`) draws the same tree. 
 | `Home` `End` `PgUp` `PgDn` | Jump. |
 | `c` | Copies the selected node's slice. |
 | `r` | Reads the file again. |
-| `Esc` or `q` | Closes the overlay. |
+| `Esc` or `q` | Goes back to the board. |
 
 | Command | Prints |
 |---|---|
@@ -200,6 +198,8 @@ The TUI overlay (`crates/nebula-tui/src/state_overlay.rs`) draws the same tree. 
 | `kete state --json` | The whole map. |
 | `kete state --slice <node>` | The slice for the node. |
 | `kete state --slice <node> --json` | The node, the nodes joined to it, and those edges, as a map. |
+
+`kete state` reads the map of the repo you are in, from any of its worktrees, or of the repo you name (`kete state ../game`). It reads the file in the repo's main checkout (`crates/nebula/src/state.rs`). With no map it says so and exits 1. Sessions may run it without a prompt, like `kete usage`.
 
 ## The slice
 

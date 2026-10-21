@@ -152,6 +152,7 @@ Studio mode keeps its state on this machine. Nothing here is exported or sent ov
 
 - [Studio queue](studio-queue.md): the idle notes, the autonomy control and the queue runner's state.
 - [Studio board](studio-board.md): one page with each department's queue, lead, runners and last verdict.
+- [State map](state-map.md): what the repo holds and who is on it, as a tree, with the slice an agent reads.
 - [Gauntlet](gauntlet.md): every verdict by kind, with its evidence.
 - [Triage](triage.md): file a note from one line and have the triage desk route it.
 - [Roles](roles.md): role cards, permission profiles and the guard.
