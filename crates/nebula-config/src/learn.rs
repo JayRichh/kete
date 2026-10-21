@@ -122,7 +122,7 @@ pub const WHATS_NEW: &[Release] = &[
         items: &[
             "kete studio enable <repo> lets the orchestrator work through an inbox when it is idle, within the autonomy level you set (A0 to A3).",
             "Role cards in .kete/roles.toml set a session's model, tools, prompt and permissions; kete roles check shows them.",
-            "The Studio board and Gauntlet view read your repo's notes and verdicts; the triage strip files a note in one line.",
+            "The Studio board, state map and Gauntlet view read your repo's notes and verdicts; the triage strip files a note in one line.",
             "kete usage --csv exports tokens, estimated cost and tool uses per session per day.",
             "kete orchestrator renew --from <note> hands the orchestrator over to a fresh session.",
         ],
