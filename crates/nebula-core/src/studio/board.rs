@@ -115,7 +115,9 @@ pub struct BoardFiles {
     /// Why the manifest could not be read, in its own words.
     pub error: Option<String>,
     pub departments: Vec<Department>,
-    /// The inbox's open notes (new or open), in file-name order.
+    /// The inbox's open notes (new or open), in file-name order. Left out
+    /// of the JSON when empty, so a reply can carry its own `notes`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<InboxNote>,
     /// The newest verdict per department slug, over the kinds mapped to it.
     pub verdicts: BTreeMap<String, Verdict>,
@@ -269,15 +271,15 @@ pub struct LiveSession {
     pub context_tokens: Option<u64>,
 }
 
-/// Everything [`build`] joins.
-#[derive(Debug, Clone, Default)]
-pub struct BoardInputs {
-    pub files: BoardFiles,
+/// Everything [`build`] joins, borrowed from where the client keeps it.
+#[derive(Debug, Clone, Copy)]
+pub struct BoardInputs<'a> {
+    pub files: &'a BoardFiles,
     /// The repo's live sessions only.
-    pub sessions: Vec<LiveSession>,
-    pub roles: HashMap<AgentId, SessionRole>,
+    pub sessions: &'a [LiveSession],
+    pub roles: &'a HashMap<AgentId, SessionRole>,
     /// The latest spend row per session; only today's counts.
-    pub spend: HashMap<AgentId, SpendRow>,
+    pub spend: &'a HashMap<AgentId, SpendRow>,
 }
 
 /// One session in a column.
@@ -364,7 +366,7 @@ fn to_is(n: &InboxNote, who: &str) -> bool {
 /// Join the file half with the live sessions at `now` (epoch ms).
 pub fn build(inputs: &BoardInputs, now: i64) -> Board {
     let today = crate::usage_ledger::local_day(now.div_euclid(1000));
-    let files = &inputs.files;
+    let files = inputs.files;
     let cell = |s: &LiveSession| {
         let role = inputs.roles.get(&s.agent);
         SessionCell {
@@ -393,7 +395,7 @@ pub fn build(inputs: &BoardInputs, now: i64) -> Board {
     };
 
     let mut by_dept: HashMap<&str, Vec<&LiveSession>> = HashMap::new();
-    for s in &inputs.sessions {
+    for s in inputs.sessions {
         let dept = inputs
             .roles
             .get(&s.agent)
@@ -648,9 +650,28 @@ Every aspect has one department.
 
     const NOW: i64 = 1_792_000_000_000;
 
-    fn fixture() -> BoardInputs {
+    struct Fixture {
+        files: BoardFiles,
+        sessions: Vec<LiveSession>,
+        roles: HashMap<AgentId, SessionRole>,
+        spend: HashMap<AgentId, SpendRow>,
+    }
+
+    impl Fixture {
+        fn board(&self) -> Board {
+            let inputs = BoardInputs {
+                files: &self.files,
+                sessions: &self.sessions,
+                roles: &self.roles,
+                spend: &self.spend,
+            };
+            build(&inputs, NOW)
+        }
+    }
+
+    fn fixture() -> Fixture {
         let today = crate::usage_ledger::local_day(NOW / 1000);
-        BoardInputs {
+        Fixture {
             files: BoardFiles {
                 root: "/repo".into(),
                 manifest: true,
@@ -735,7 +756,7 @@ Every aspect has one department.
 
     #[test]
     fn build_fills_each_department_column() {
-        let board = build(&fixture(), NOW);
+        let board = fixture().board();
         let slugs: Vec<&str> = board
             .columns
             .iter()
@@ -782,7 +803,7 @@ Every aspect has one department.
 
     #[test]
     fn needs_you_lists_sessions_then_notes_then_refusals_then_a_renewal() {
-        let board = build(&fixture(), NOW);
+        let board = fixture().board();
         let kinds: Vec<String> = board
             .needs_you
             .iter()
@@ -807,9 +828,9 @@ Every aspect has one department.
 
     #[test]
     fn no_sessions_without_a_department_means_no_unassigned_column() {
-        let mut inputs = fixture();
-        inputs.sessions.retain(|s| s.agent.0.starts_with("lead"));
-        let board = build(&inputs, NOW);
+        let mut fx = fixture();
+        fx.sessions.retain(|s| s.agent.0.starts_with("lead"));
+        let board = fx.board();
         assert!(board
             .columns
             .iter()
