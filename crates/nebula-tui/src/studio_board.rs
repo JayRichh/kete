@@ -92,7 +92,9 @@ pub struct BoardView {
     pub scroll: usize,
     /// The read the view waits on; an older one landing is dropped.
     ticket: u64,
-    inbox: Arc<Mutex<Option<Landed>>>,
+    /// Every read that finished since the last [`sync`]; a queue, not a
+    /// slot, so an old read waking late never pushes out a newer one.
+    inbox: Arc<Mutex<Vec<Landed>>>,
 }
 
 /// A fresh view on `repo`, or on the first studio repo.
@@ -140,15 +142,15 @@ fn read(view: &mut BoardView, jobs: Option<Jobs>, delay: Duration) {
                 std::thread::sleep(delay);
                 let inbox = inbox.upgrade()?;
                 let files = board::read_files(&root);
-                *inbox.lock().ok()? = Some(Landed { ticket, files });
+                inbox.lock().ok()?.push(Landed { ticket, files });
                 Some(Answer::Slow {
                     ticket: crate::view_jobs::ticket(),
                 })
             });
         }
         None => {
-            if let Ok(mut slot) = view.inbox.lock() {
-                *slot = Some(Landed {
+            if let Ok(mut q) = view.inbox.lock() {
+                q.push(Landed {
                     ticket,
                     files: board::read_files(&root),
                 });
@@ -160,8 +162,12 @@ fn read(view: &mut BoardView, jobs: Option<Jobs>, delay: Duration) {
 
 /// Land a finished read, and queue the next one. Every draw and key runs it.
 pub(crate) fn sync(jobs: Option<Jobs>, view: &mut BoardView) {
-    let landed = view.inbox.lock().ok().and_then(|mut slot| slot.take());
-    let Some(landed) = landed.filter(|l| l.ticket == view.ticket) else {
+    let landed: Vec<Landed> = view
+        .inbox
+        .lock()
+        .map(|mut q| q.drain(..).collect())
+        .unwrap_or_default();
+    let Some(landed) = landed.into_iter().find(|l| l.ticket == view.ticket) else {
         return;
     };
     view.files = Some(Arc::new(landed.files));
@@ -917,15 +923,41 @@ mod tests {
     }
 
     #[test]
-    fn a_stale_read_is_dropped() {
+    fn a_stale_read_is_dropped_and_never_hides_the_current_one() {
         let (_dir, mut app) = fixture();
         let v = view_mut(&mut app).unwrap();
         let before = v.files.clone();
-        *v.inbox.lock().unwrap() = Some(Landed {
-            ticket: v.ticket.wrapping_sub(1),
+        let old = v.ticket.wrapping_sub(1);
+        let stale = || Landed {
+            ticket: old,
             files: BoardFiles::default(),
-        });
+        };
+        v.inbox.lock().unwrap().push(stale());
         sync(None, v);
-        assert_eq!(v.files, before);
+        assert_eq!(v.files, before, "a stale read alone changes nothing");
+
+        let fresh = |root: &str| BoardFiles {
+            root: root.into(),
+            ..BoardFiles::default()
+        };
+        // Either order: the read the view waits on lands.
+        for (i, current_first) in [true, false].into_iter().enumerate() {
+            let current = Landed {
+                ticket: v.ticket,
+                files: fresh(&format!("current {i}")),
+            };
+            let mut q = v.inbox.lock().unwrap();
+            if current_first {
+                q.push(current);
+                q.push(stale());
+            } else {
+                q.push(stale());
+                q.push(current);
+            }
+            drop(q);
+            sync(None, v);
+            assert_eq!(v.files.as_ref().unwrap().root, format!("current {i}"));
+            assert!(v.inbox.lock().unwrap().is_empty(), "drained");
+        }
     }
 }
