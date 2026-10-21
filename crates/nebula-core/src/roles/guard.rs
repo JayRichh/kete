@@ -25,6 +25,12 @@ pub fn command_of(payload: &Value) -> Option<&str> {
 /// repo's level; a session outside any studio repo passes `A3`, which
 /// denies nothing of its own.
 pub fn check(command: &str, autonomy: Autonomy) -> Result<(), String> {
+    if config_env_forces(command) {
+        return Err(
+            "kete guard: GIT_CONFIG variables that can force a push are refused in this session"
+                .into(),
+        );
+    }
     check_line(command, autonomy, 0)
 }
 
@@ -141,15 +147,6 @@ fn check_words(words: &[String], autonomy: Autonomy, depth: usize) -> Result<(),
             return Ok(());
         };
         if is_assignment(word) {
-            // `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_KEY_<n>`: config given
-            // through the environment, refused like `-c`.
-            if let Some((name, value)) = word.split_once('=') {
-                if name.starts_with("GIT_CONFIG") && mentions_forcing_key(value) {
-                    return Err(format!(
-                        "kete guard: `{name}` sets git config that can force a push, refused in this session"
-                    ));
-                }
-            }
             i += 1;
         } else if WRAPPERS.contains(&program(word).as_str()) {
             i += 1;
@@ -278,12 +275,18 @@ fn forcing_key(entry: &str) -> bool {
         || (key.starts_with("remote.") && (key.ends_with(".mirror") || key.ends_with(".push")))
 }
 
-/// [`forcing_key`] anywhere in an environment value
-/// (`GIT_CONFIG_PARAMETERS` quotes its keys).
-fn mentions_forcing_key(value: &str) -> bool {
-    let v = value.to_ascii_lowercase();
-    v.contains("alias.")
-        || (v.contains("remote.") && (v.contains(".mirror") || v.contains(".push")))
+/// Whether a command line mentions `GIT_CONFIG` (any case: PowerShell's
+/// `$env:` names ignore it) together with a key or value that can force a
+/// push: `alias.*`, `remote.<r>.mirror`, `remote.<r>.push`, `push.default`,
+/// or a `+` refspec. Read over the whole line, so an `export` or `$env:`
+/// set earlier in it counts as much as a prefix does.
+fn config_env_forces(line: &str) -> bool {
+    let v = line.to_ascii_lowercase();
+    v.contains("git_config")
+        && (v.contains("alias.")
+            || (v.contains("remote.") && (v.contains(".mirror") || v.contains(".push")))
+            || v.contains("push.default")
+            || ["=+", "'+", "\"+", " +"].iter().any(|m| v.contains(m)))
 }
 
 /// Whether `name` is `full` or an abbreviation git takes for it: git
@@ -543,6 +546,11 @@ mod tests {
             "git config --global alias.pf 'push --force'",
             "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.mirror GIT_CONFIG_VALUE_0=true git push origin",
             "GIT_CONFIG_PARAMETERS=\"'remote.origin.push'='+HEAD:main'\" git push origin",
+            "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.mirror GIT_CONFIG_VALUE_0=true; git push origin",
+            "export GIT_CONFIG_KEY_0=remote.origin.push GIT_CONFIG_VALUE_0=+HEAD:main && git push origin",
+            "$env:GIT_CONFIG_COUNT='1'; $env:GIT_CONFIG_KEY_0='remote.origin.mirror'; $env:GIT_CONFIG_VALUE_0='true'; git push origin",
+            "$Env:git_config_key_0 = 'push.default'; $Env:git_config_value_0 = 'matching'; git push",
+            "$env:GIT_CONFIG_VALUE_0 = '+HEAD:main'; git push origin",
         ] {
             for level in Autonomy::ALL {
                 assert!(check(cmd, level).is_err(), "{cmd} at {level}");

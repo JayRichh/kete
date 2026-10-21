@@ -75,7 +75,8 @@ Path rules are written in the absolute form Claude matches: `C:\Code\my-game\DEC
 
 - any force flag, a `+` refspec and `--mirror`, including the shortened spellings git accepts (`--forc`, `--force-w`, `--mirro`);
 - deleting `main` or `master` on a remote;
-- git config that defines a command or forces a push (`alias.*`, `remote.<r>.mirror`, `remote.<r>.push`), whether given with `-c`, with `--config-env`, through `GIT_CONFIG_*` variables, or written with `git config`;
+- git config that defines a command or forces a push (`alias.*`, `remote.<r>.mirror`, `remote.<r>.push`), given with `-c` or `--config-env`, or written with `git config`;
+- any command line that mentions `GIT_CONFIG` (in any case, so `$env:` forms too) together with `alias.`, `remote.<r>.mirror`, `remote.<r>.push`, `push.default` or a `+` refspec, wherever the variable is set in the line (`export`, `$env:` or a prefix);
 - an encoded PowerShell command;
 - what the repo's autonomy level denies (see [Studio mode](studio.md)).
 
