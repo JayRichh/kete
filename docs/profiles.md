@@ -184,7 +184,7 @@ kete orchestrator spawn --project app --profile "$(kete profile pick)" "fix the 
 ```
 
 It prints the profile name. Each pick holds that account for 10 minutes in
-`<data dir>/profiles/.picks.json`, so three picks in a row spread over the accounts before their
+`<data dir>/profiles/.picks.json`, so under least used (and manual) three picks in a row spread over the accounts before their
 readings move. `--dry-run` holds nothing and prints every candidate:
 
 ```
