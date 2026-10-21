@@ -92,36 +92,51 @@ fn scheduled_line(state: &RenewState, now: bool) -> String {
 }
 
 /// `--pick`: the account `kete profile pick` would name for a Claude
-/// launch the orchestrator starts, held like its pick so the next one
-/// spreads. Refused, with the reason, when no account is eligible.
+/// launch the orchestrator starts, counting live sessions and holds as
+/// load, and held like its pick so the next one spreads. Refused, with
+/// the reason, when no account is eligible.
+fn pick_account() -> Result<String> {
+    let root = nebula_core::profiles::profiles_root();
+    let now = nebula_core::clock::now_secs() as i64;
+    let live = crate::profile::live_sessions_per_account();
+    let all = nebula_core::profiles::load();
+    let policy = nebula_core::accounts::load_policy();
+    let Some(name) = choose(&all, policy, &root, now, &live) else {
+        bail!(
+            "--pick found no eligible claude account: every one is reserved or switched off,              or none is set up (kete profile list)"
+        );
+    };
+    nebula_core::accounts::holds::add_in(&root, &name, now).context("hold the pick")?;
+    Ok(name)
+}
+
 // shortcut: picks for Claude, the only harness role cards and the
 // orchestrator's guidance target in 0.60; ask the daemon for the old
 // orchestrator's harness if renewals reach other harnesses.
-fn pick_account() -> Result<String> {
+fn choose(
+    all: &[nebula_core::profiles::Profile],
+    policy: nebula_core::accounts::Policy,
+    root: &Path,
+    now: i64,
+    live: &std::collections::BTreeMap<String, u32>,
+) -> Option<String> {
     use nebula_core::accounts::{self, holds, Launcher};
-    use nebula_core::profiles;
-    let all = profiles::load();
-    let root = profiles::profiles_root();
-    let now = nebula_core::clock::now_secs() as i64;
-    let held = holds::active_in(&root, now);
-    let choice = accounts::pick_for(
-        &all,
+    let held = holds::active_in(root, now);
+    let count = |map: &std::collections::BTreeMap<String, u32>, name: &str| {
+        map.get(name).copied().unwrap_or(0)
+    };
+    accounts::pick_for(
+        all,
         "claude",
         None,
-        accounts::load_policy(),
+        policy,
         Launcher::Automation,
         now,
-        |name| nebula_core::usage::read_account_in(&root, name),
-        |name| held.get(name).copied().unwrap_or(0),
-    );
-    let Some(name) = choice.profile.map(|p| p.name.trim().to_string()) else {
-        bail!(
-            "--pick found no eligible claude account: every one is reserved or switched off, \
-             or none is set up (kete profile list)"
-        );
-    };
-    holds::add_in(&root, &name, now).context("hold the pick")?;
-    Ok(name)
+        |name| nebula_core::usage::read_account_in(root, name),
+        |name| count(live, name) + count(&held, name),
+    )
+    .profile
+    .map(|p| p.name.trim().to_string())
 }
 
 #[cfg(test)]
@@ -144,5 +159,31 @@ mod tests {
         assert!(scheduled_line(&RenewState::Scheduled, false).contains("End your turn"));
         assert!(!scheduled_line(&RenewState::Scheduled, true).contains("End your turn"));
         assert_eq!(state_word(&RenewState::Scheduled), "scheduled");
+    }
+
+    #[test]
+    fn the_pick_counts_live_sessions_as_load() {
+        let p = |name: &str| nebula_core::profiles::Profile {
+            name: name.into(),
+            harness: "claude".into(),
+            env: Default::default(),
+            default: false,
+            use_default: false,
+            disabled: false,
+            reserved: false,
+        };
+        let all = vec![p("alpha"), p("beta")];
+        let root = std::env::temp_dir().join(format!("kete-renew-pick-{}", std::process::id()));
+        let policy = nebula_core::accounts::Policy::default();
+        let idle = std::collections::BTreeMap::new();
+        assert_eq!(
+            choose(&all, policy, &root, 0, &idle).as_deref(),
+            Some("alpha")
+        );
+        let busy = std::collections::BTreeMap::from([("alpha".to_string(), 2)]);
+        assert_eq!(
+            choose(&all, policy, &root, 0, &busy).as_deref(),
+            Some("beta")
+        );
     }
 }
