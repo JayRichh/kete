@@ -653,6 +653,39 @@ pub fn neighbourhood(map: &StateMap, id: &str) -> Option<StateMap> {
     })
 }
 
+/// What `kete state` prints for the repo at `repo_root`: the tree, or with
+/// `slice_of` that node's slice; with `json`, the map or the node's
+/// neighbourhood as JSON. Err is the line to print instead.
+pub fn cli_text(
+    repo_root: &Path,
+    slice_of: Option<&str>,
+    json: bool,
+    now: i64,
+) -> Result<String, String> {
+    let map = read(repo_root)?.ok_or_else(|| {
+        format!(
+            "No state map at {}. Kete builds it while studio mode is on for this repo.",
+            repo_root.join(MAP_PATH).display()
+        )
+    })?;
+    let no_node = |id: &str| format!("No node {id} in the state map.");
+    let to_json = |m: &StateMap| serde_json::to_string_pretty(m).map_err(|e| e.to_string());
+    match (slice_of, json) {
+        (None, true) => to_json(&map).map(|t| t + "\n"),
+        (None, false) => {
+            let mut out = tree_text(&map);
+            if let Some(note) = &map.note {
+                out.push_str(&format!("Repo layer: {note}\n"));
+            }
+            Ok(out)
+        }
+        (Some(id), true) => {
+            to_json(&neighbourhood(&map, id).ok_or_else(|| no_node(id))?).map(|t| t + "\n")
+        }
+        (Some(id), false) => slice(&map, id, now).ok_or_else(|| no_node(id)),
+    }
+}
+
 /// `<repo_root>/.kete/state-map.json`. A missing file is `Ok(None)`.
 pub fn read(repo_root: &Path) -> Result<Option<StateMap>, String> {
     let path = repo_root.join(MAP_PATH);
@@ -941,6 +974,38 @@ mod tests {
         let text = slice(&map(nodes, edges), &id, 0).unwrap();
         assert!(text.len() <= SLICE_MAX_BYTES, "{} bytes", text.len());
         assert!(text.ends_with("has them all.\n"));
+    }
+
+    #[test]
+    fn the_cli_prints_the_tree_a_slice_or_json() {
+        let dir = std::env::temp_dir().join(format!("kete-state-cli-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let none = cli_text(&dir, None, false, 0).unwrap_err();
+        assert!(none.starts_with("No state map at "), "{none}");
+        let mut m = map(
+            vec![n("dept", NodeKind::Department), n("sys", NodeKind::System)],
+            vec![edge("dept", "sys", EdgeKind::Owns)],
+        );
+        m.note = Some("the extractor ran past 30 s".into());
+        write(&dir, &m).unwrap();
+        assert_eq!(
+            cli_text(&dir, None, false, 0).unwrap(),
+            "department dept\n  system sys\nRepo layer: the extractor ran past 30 s\n"
+        );
+        let all: StateMap = serde_json::from_str(&cli_text(&dir, None, true, 0).unwrap()).unwrap();
+        assert_eq!(all, m);
+        assert_eq!(
+            cli_text(&dir, Some("sys"), false, 0),
+            Ok(slice(&m, "sys", 0).unwrap())
+        );
+        let near: StateMap =
+            serde_json::from_str(&cli_text(&dir, Some("sys"), true, 0).unwrap()).unwrap();
+        assert_eq!(near.edges.len(), 1);
+        assert_eq!(
+            cli_text(&dir, Some("nope"), false, 0),
+            Err("No node nope in the state map.".into())
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
