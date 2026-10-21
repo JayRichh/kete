@@ -123,6 +123,21 @@ impl Daemon {
                 agent.kind.as_str()
             ));
         }
+        // A permissions flag on the Claude harness (a user override) rides
+        // every launch ahead of `--permission-mode`, and would skip every
+        // prompt on an account that never accepted bypass mode.
+        let harness = super::resolve_harness(agent.kind, agent.custom_harness.as_deref())
+            .map_err(|e| e.to_string())?;
+        if let Some(flag) = harness
+            .permissions_flag
+            .as_deref()
+            .filter(|f| !f.trim().is_empty())
+        {
+            return Err(format!(
+                "the {} harness passes `{flag}`, which skips Claude's permission checks: clear its permissions flag in Settings to launch role or studio sessions",
+                harness.id
+            ));
+        }
         let root = &project.repo_path;
         let file = self.roles_file(root)?;
         let card = match card_id {
@@ -538,6 +553,19 @@ permission = "unattended"
             .overlay_for(&a, &none.project)
             .unwrap_err()
             .contains("has no committed"));
+    }
+
+    #[test]
+    fn a_harness_that_skips_permission_checks_is_refused() {
+        let f = fixture(Some(ROLES));
+        std::fs::write(
+            f.data.path().join("config.json"),
+            r#"{"harnesses": {"claude": {"permissions_flag": "--dangerously-skip-permissions"}}}"#,
+        )
+        .unwrap();
+        let a = agent(&f, "r1", Some("runner"));
+        let why = f.daemon.overlay_for(&a, &f.project).unwrap_err();
+        assert!(why.contains("--dangerously-skip-permissions"), "{why}");
     }
 
     #[test]

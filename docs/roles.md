@@ -48,10 +48,12 @@ Limits: 64 roles, 65,536 bytes, an 8,192-byte prompt, tiers 0 to 3. A key Kete d
 | Profile | Claude flag | Allow rules | Deny rules |
 |---|---|---|---|
 | `prompt` | none (Claude's own starting mode) | the role's `allow` | built-in, governance, autonomy, the role's `deny` |
-| `allowlist` | `--permission-mode dontAsk` | the role's `allow`: the only calls that run | the same, plus `AskUserQuestion` |
+| `allowlist` | `--permission-mode dontAsk` | the role's `allow`; anything that would prompt is denied | the same, plus `AskUserQuestion` |
 | `unattended` | `--permission-mode bypassPermissions` | none: Claude ignores allow rules in this mode | the same, plus `AskUserQuestion` |
 
-Deny rules hold in every mode, bypass included. `AskUserQuestion` is denied to allowlist and unattended sessions because nobody is there to answer it. Their prompts should say to write `pending Jay: A | B` into the inbox instead.
+Claude's own starting mode is auto mode from Claude Code 2.1.283 on: a classifier, not you, approves most actions in a `prompt` session. Allow rules from Claude's other settings (the account's user settings, the repo's `.claude/settings.json`, and Kete's own rules for `kete spawn`, `kete rename`, `kete worktree` and `kete open`) still apply on top of the role's, so an allowlist session runs those calls too.
+
+Deny rules hold in every mode, bypass included. A role launch is refused when the Claude harness carries a permissions flag (a `harnesses` override in Settings), since that flag would skip every check. `AskUserQuestion` is denied to allowlist and unattended sessions because nobody is there to answer it. Their prompts should say to write `pending Jay: A | B` into the inbox instead.
 
 Every role session gets its own settings file, `<data dir>/sessions/<agent id>/claude-settings.json`, passed with `--settings`. It holds Kete's status line, the rules and the guard. Rules never go on the command line.
 
@@ -98,6 +100,7 @@ The rules and the guard read the command Claude writes. They are not a sandbox.
 - A git alias in your own git config (for example `pf = push --force`) passes the guard.
 - `Edit` deny rules cover Claude's file tools, the shell file commands Claude recognises and redirects, not a program that writes files on its own.
 - A session can run `kete spawn` without a role. Inside a studio repo the orchestrator's own spawns are restricted; a sibling another session starts without a role is not.
+- Allow rules in your other Claude settings files pre-approve calls in an allowlist session too.
 - A mod you install for Claude can approve a call a deny rule or the guard refused, unless managed settings or a Team or Enterprise login are in force.
 
 ## kete roles check
