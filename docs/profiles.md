@@ -155,7 +155,7 @@ script starts.
 
 | Launch | Who starts it | A reserved account |
 |---|---|---|
-| Quick prompt, New session, `kete spawn`, the orchestrator you start | you | taken as the default, as before |
+| Quick prompt, New session, `kete spawn`, the orchestrator you start, each without a role card | you | taken as the default, as before |
 | The orchestrator's `kete orchestrator spawn`, a renewal, any launch with a role card, `kete profile pick` | automation | never picked |
 | Any launch that names the account (`--profile main`) | either | used: a name always wins |
 
