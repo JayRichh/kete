@@ -49,6 +49,8 @@ struct SessionBook {
     cost_counted: Option<f64>,
     /// PostToolUse hooks since the last turn end.
     tool_uses: u32,
+    /// Turns that ended before anything they spent had landed.
+    turns_pending: u32,
 }
 
 impl LedgerBook {
@@ -117,9 +119,10 @@ impl Daemon {
     /// Count what `agent` spent since the last count, at `now_ms`: add it
     /// to the day's row and push the row to clients. A turn end counts one
     /// turn and the turn's tool uses; a late reading counts tokens and
-    /// cost only, and nothing when it adds nothing. With `usage_ledger`
-    /// off the state still moves on, so turning it back on never counts
-    /// what was spent while it was off.
+    /// cost. A turn end that finds nothing spent yet writes nothing: its
+    /// turn is counted with the reading that brings its messages. With
+    /// `usage_ledger` off the state still moves on, so turning it back on
+    /// never counts what was spent while it was off.
     pub(crate) fn ledger_record(&self, agent: &AgentId, turn_end: bool, now_ms: i64) {
         // Claude sessions only; a wake-up session has no row.
         let Ok(Some(row)) = self.store.get_agent(agent) else {
@@ -133,8 +136,7 @@ impl Daemon {
             .lock()
             .get(agent)
             .map(|t| t.transcript_path.clone());
-        let on = crate::config::Config::load_quiet().usage_ledger();
-        let (tokens, cost, tool_uses) = {
+        let (tokens, cost, tool_uses, turns) = {
             let mut book = self.ledger.lock();
             let since = book.since(agent);
             let s = book.sessions.entry(agent.clone()).or_default();
@@ -148,13 +150,22 @@ impl Daemon {
                 s.cost_counted = s.cost_now;
             }
             let tool_uses = if turn_end {
+                s.turns_pending += 1;
                 std::mem::take(&mut s.tool_uses)
             } else {
                 0
             };
-            (tokens, cost, tool_uses)
+            if tokens.is_zero() && cost == 0.0 && tool_uses == 0 {
+                return;
+            }
+            (
+                tokens,
+                cost,
+                tool_uses,
+                std::mem::take(&mut s.turns_pending),
+            )
         };
-        if !on || (!turn_end && tokens.is_zero() && cost == 0.0) {
+        if !crate::config::Config::load_quiet().usage_ledger() {
             return;
         }
         let worktree = self.store.get_worktree(&row.worktree_id).ok().flatten();
@@ -176,7 +187,7 @@ impl Daemon {
             cache_write_tokens: tokens.cache_write_tokens,
             cost_usd: cost,
             tool_uses,
-            turns: u32::from(turn_end),
+            turns,
             at: now_ms,
         };
         match self.store.add_spend(&delta) {
@@ -393,10 +404,19 @@ mod tests {
             .store
             .set_agent_status(&a, AgentStatus::Finished)
             .unwrap();
-        // The turn's last statusLine lands after its Stop.
+        // The second turn ends before anything it spent has landed: no
+        // row change, and no push of an empty one.
+        let mut events = daemon.events.subscribe();
+        daemon.ledger_on_turn_end(&a);
+        assert!(
+            events.try_recv().is_err(),
+            "an empty turn end pushes nothing"
+        );
+        assert_eq!(rows(&daemon)[0].spend.turns, 1);
+        // Its statusLine and transcript line land after its Stop.
         turn(&daemon, &transcript, "msg_2", 40, 0.07, 0);
         let s = &rows(&daemon)[0].spend;
-        assert_eq!((s.input_tokens, s.turns), (140, 1));
+        assert_eq!((s.input_tokens, s.turns), (140, 2));
         assert!((s.cost_usd - 0.07).abs() < 1e-9, "{}", s.cost_usd);
     }
 

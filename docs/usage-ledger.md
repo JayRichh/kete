@@ -17,7 +17,7 @@ Kete adds to a session's row for today each time one of its turns ends.
 
 A day is your local date when the turn ends. A turn that runs past midnight lands on the new day.
 
-Claude writes its transcript asynchronously and runs the statusLine about 300 ms after the last message. A turn's last message can therefore land after the turn has ended. Kete counts a reading that arrives while the session is idle straight away, without a turn, so nothing is lost. A turn that starts just before midnight can still put its last few tokens on the next day.
+Claude writes its transcript asynchronously and runs the statusLine about 300 ms after the last message. A turn's last message can therefore land after the turn has ended. Kete counts a reading that arrives while the session is idle straight away, so nothing is lost. A turn end that finds nothing spent yet writes nothing, and its turn is counted with the reading that brings its messages. A turn that starts just before midnight can still put its last few tokens on the next day.
 
 Only Claude sessions are counted. Other harnesses report no per-message usage that Kete reads.
 
