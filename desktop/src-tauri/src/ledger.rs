@@ -32,7 +32,11 @@ async fn rows(
         until,
         project: repo.map(ProjectId),
     };
-    match client.rpc_reply(req_id, req).await.map_err(|e| e.to_string())? {
+    match client
+        .rpc_reply(req_id, req)
+        .await
+        .map_err(|e| e.to_string())?
+    {
         ServerEvent::UsageLedgerRows { rows, .. } => Ok(rows),
         _ => Err("the daemon answered the usage ledger with something else".into()),
     }
@@ -48,10 +52,13 @@ pub async fn usage_export(app: tauri::AppHandle, client: State<'_, Arc<Client>>)
     let rows = rows(&client, Some(day.clone()), Some(day.clone()), None).await?;
     let path = crate::editors::blocking(move || -> Res<std::path::PathBuf> {
         let dir = nebula_core::paths::data_dir().join("exports");
-        std::fs::create_dir_all(&dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
         let path = dir.join(format!("usage-{day}.csv"));
-        let mut out = std::fs::File::create(&path).map_err(|e| format!("could not write {}: {e}", path.display()))?;
-        nebula_core::usage_ledger::write_csv(&rows, &mut out).map_err(|e| format!("could not write {}: {e}", path.display()))?;
+        let mut out = std::fs::File::create(&path)
+            .map_err(|e| format!("could not write {}: {e}", path.display()))?;
+        nebula_core::usage_ledger::write_csv(&rows, &mut out)
+            .map_err(|e| format!("could not write {}: {e}", path.display()))?;
         Ok(path)
     })
     .await??;
