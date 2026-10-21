@@ -79,27 +79,52 @@ fn land(strip: &mut Strip) {
     }
 }
 
+/// Whether the strip's keys reach it: the orchestrator view is up and
+/// its pane is unlocked (`handle_view_key` returns early otherwise).
+fn takes_keys(app: &App) -> bool {
+    crate::orchestrator_view::active(app) && !app.pane.term_locked
+}
+
 /// Whether the row offers `t`: the chips have the keys and someone can
 /// take a note.
 fn hint(app: &App) -> bool {
-    crate::orchestrator_view::active(app)
-        && !app.pane.term_locked
-        && crate::event_loop::verbs::triage_available(app)
+    takes_keys(app) && crate::event_loop::verbs::triage_available(app)
+}
+
+/// The strip as the row shows it: a field the keys cannot reach is drawn
+/// closed, so a typed line never lands in the orchestrator by mistake.
+fn shown(app: &App) -> Strip {
+    let mut s = with(|s| s.clone());
+    s.open &= takes_keys(app);
+    s
 }
 
 /// Rows the strip takes at the bottom of the orchestrator view.
 pub fn rows(app: &App) -> u16 {
-    let busy = with(|s| s.open || s.pending.is_some() || s.line.is_some());
-    u16::from(busy || hint(app))
+    let s = shown(app);
+    u16::from(s.open || s.pending.is_some() || s.line.is_some() || hint(app))
 }
 
-/// Open the triage line (chip mode `t`, the `triage_note` verb).
+/// Open the triage line (chip mode `t`, the `triage_note` verb). The
+/// field lives on the orchestrator view's bottom row: from anywhere else
+/// it flashes the way there instead.
 pub fn open(app: &mut App) {
     if !crate::event_loop::verbs::triage_available(app) {
         app.chrome.flash = Some("triage: start an orchestrator or a triage desk first".into());
     } else if project_of(app).is_none() {
         app.chrome.flash = Some("triage: no repo to file into".into());
+    } else if !crate::orchestrator_view::active(app) {
+        let way = if crate::orchestrator_view::orchestrator(app).is_some() {
+            "triage: F10 opens the orchestrator view, then ^q t"
+        } else {
+            "triage: no orchestrator view to type in; kete studio note files from a shell"
+        };
+        app.chrome.flash = Some(way.into());
     } else {
+        // Step the keys out of the orchestrator's session to the strip, as
+        // the view's `^q` does (`event_loop::orchestrator::unlock_to_strip`).
+        app.pane.term_locked = false;
+        app.nav.focus = crate::app::Focus::Terminal;
         with(|s| {
             s.open = true;
             s.line = None;
@@ -217,8 +242,7 @@ fn submit(app: &mut App, text: String) {
 /// Draw the strip into `area` (the rows [`rows`] asked for).
 pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     let th = app.chrome.theme;
-    let shown = with(|s| s.clone());
-    let line = strip_line(&shown, hint(app), area.width as usize, th);
+    let line = strip_line(&shown(app), hint(app), area.width as usize, th);
     f.render_widget(Paragraph::new(line), area);
 }
 
@@ -848,6 +872,29 @@ mod tests {
         }
     }
 
+    /// The orchestrator view up, its pane locked: where F10 leaves it.
+    fn in_view(app: &mut App) {
+        app.tree.agents.push(orchestrator("orch"));
+        app.orch.view = true;
+        app.pane.collapsed = true;
+        app.pane.term = Some(crate::app::AttachedTerm::new(
+            nebula_core::SessionRef::Agent(AgentId("orch".into())),
+            80,
+            24,
+        ));
+        app.pane.term_locked = true;
+        app.nav.focus = crate::app::Focus::Terminal;
+    }
+
+    fn run_triage_verb(app: &mut App) {
+        crate::event_loop::verbs::run_verb(
+            app,
+            crate::keymap::Action::TriageNote,
+            &crate::event_loop::verbs::Target::Global,
+            &mut Vec::new(),
+        );
+    }
+
     /// INPUT PARITY: the `triage_note` verb and chip mode's `t` both land on
     /// [`open`] (event_loop/orchestrator.rs calls it for `t`); each leaves
     /// the same strip and flash.
@@ -857,15 +904,10 @@ mod tests {
             STRIP.with(|s| *s.borrow_mut() = Strip::default());
             let mut app = app_with_orchestrator();
             if with_orch {
-                app.tree.agents.push(orchestrator("orch"));
+                in_view(&mut app);
             }
             if via_verb {
-                crate::event_loop::verbs::run_verb(
-                    &mut app,
-                    crate::keymap::Action::TriageNote,
-                    &crate::event_loop::verbs::Target::Global,
-                    &mut Vec::new(),
-                );
+                run_triage_verb(&mut app);
             } else {
                 open(&mut app);
             }
@@ -881,6 +923,51 @@ mod tests {
             Some("triage: start an orchestrator or a triage desk first")
         );
         assert_eq!(run(false, false), refused);
+    }
+
+    /// The verb from the grid: no field is opened (none could take the
+    /// keys), and the flash says how to reach one.
+    #[test]
+    fn the_verb_off_the_view_opens_nothing_and_says_the_way() {
+        STRIP.with(|s| *s.borrow_mut() = Strip::default());
+        let mut app = app_with_orchestrator();
+        app.tree.agents.push(orchestrator("orch"));
+        run_triage_verb(&mut app);
+        assert!(!with(|s| s.open));
+        assert_eq!(
+            app.chrome.flash.as_deref(),
+            Some("triage: F10 opens the orchestrator view, then ^q t")
+        );
+        // A field left open is drawn closed while the pane is locked.
+        let mut app = app_with_orchestrator();
+        in_view(&mut app);
+        STRIP.with(|s| s.borrow_mut().open = true);
+        assert!(!shown(&app).open);
+        assert_eq!(rows(&app), 0);
+    }
+
+    /// The verb in the view, then real keys through the loop's dispatcher:
+    /// the strip takes the line and files it; nothing reaches the
+    /// orchestrator's session.
+    #[test]
+    fn the_verb_hands_the_keys_to_the_strip() {
+        use crossterm::event::Event;
+        STRIP.with(|s| *s.borrow_mut() = Strip::default());
+        let mut app = app_with_orchestrator();
+        in_view(&mut app);
+        run_triage_verb(&mut app);
+        assert!(shown(&app).open, "{:?}", app.chrome.flash);
+        let mut out = Vec::new();
+        for code in [KeyCode::Char('x'), KeyCode::Enter] {
+            crate::event_loop::dispatch_terminal_event(&mut app, Event::Key(key(code)), &mut out);
+        }
+        let s = with(|s| s.clone());
+        assert!(s.pending.is_some() && !s.open, "{s:?}");
+        assert_eq!(s.line, Some(sending_line(Target::Desk)));
+        assert!(
+            !out.iter().any(|r| matches!(r, ClientRequest::Input { .. })),
+            "{out:?}"
+        );
     }
 
     #[test]
