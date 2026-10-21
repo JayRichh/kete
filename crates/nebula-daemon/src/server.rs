@@ -1994,6 +1994,51 @@ mod tests {
         }
     }
 
+    /// The role sessions ride beside a Snapshot to a 66 subscriber and
+    /// never to a 65 one, whose decoder would drop the connection on them.
+    #[tokio::test]
+    async fn session_roles_follow_a_snapshot_only_to_peers_that_decode_them() {
+        for (peer, expect) in [(65u32, false), (66, true)] {
+            let daemon = test_daemon();
+            let (tx, mut out) = mpsc::channel(16);
+            assert!(send_snapshot(&daemon, &tx, peer).await);
+            drop(tx);
+            let mut got = Vec::new();
+            while let Some(ev) = out.recv().await {
+                got.push(ev);
+            }
+            assert!(matches!(got.first(), Some(ServerEvent::Snapshot { .. })));
+            assert_eq!(
+                got.iter()
+                    .any(|ev| matches!(ev, ServerEvent::SessionRoles { .. })),
+                expect,
+                "peer {peer}: {got:?}"
+            );
+            assert!(got.iter().all(|ev| ev.decodable_by(peer)));
+        }
+    }
+
+    /// The orchestrator renewing itself is checked as its caller; a renewal
+    /// with no caller is a person's and takes the provisioning check.
+    #[test]
+    fn a_renewal_is_privileged_only_when_it_names_a_caller() {
+        let renew = |caller| ClientRequest::RenewOrchestrator {
+            req_id: 9,
+            caller,
+            note: std::path::PathBuf::from("handover.md"),
+            profile: None,
+            model: None,
+            keep_old: false,
+            now: false,
+        };
+        let orch = nebula_core::AgentId("orch".into());
+        assert_eq!(
+            privileged_caller(&renew(Some(orch.clone()))),
+            Some((9, orch))
+        );
+        assert_eq!(privileged_caller(&renew(None)), None);
+    }
+
     /// Usage events reach a 55 subscriber and never a 54 one, whose
     /// decoder would fail on the unknown variant and drop the connection.
     #[tokio::test]

@@ -123,8 +123,8 @@ Autonomy is how much the studio may do in a repo. There are four levels. A1 is t
 | Level | Name | What Kete enforces |
 |---|---|---|
 | A0 | Hold | No idle notes. New orchestrator and sibling spawns into the repo are refused with "autonomy A0 (Hold) for <repo>". Sessions already running carry on, but every shell command they run is checked against the A1 list, so their pushes and tags stop. |
-| A1 | Plan | Idle notes go out. Sessions the orchestrator spawns in the repo, and role sessions, are denied `git push`, `gh pr`, `gh release`, `git tag`, `kete ship` and `kete ado pr`. |
-| A2 | Deliver | Idle notes go out. Those sessions are denied `git tag`, `gh release`, `git push --tags` and pushes of `refs/tags/`. |
+| A1 | Plan | Idle notes go out. Sessions the orchestrator spawns in the repo, and role sessions, are denied `git push`, `gh pr`, `gh release`, `git tag`, `kete ship` and `kete ado pr` (and the same through `bro`). |
+| A2 | Deliver | Idle notes go out. Those sessions are denied `git tag`, `gh release`, `git push --tags`, `git push --follow-tags` and pushes of `refs/tags/`. |
 | A3 | Release | Idle notes go out. Autonomy adds no denials. |
 
 These apply at every level: no force-push in any form, and no edits to Kete's own data and config folders. With a [roles file](roles.md), its governance paths are protected too.
