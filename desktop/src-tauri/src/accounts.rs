@@ -36,6 +36,9 @@ pub struct AccountRow {
     /// dimmed, "default (disabled)", on one that is off.
     pub flagged_default: bool,
     pub disabled: bool,
+    /// Kept for the person's own sessions: the orchestrator and scripts
+    /// never pick it. False for an own login.
+    pub reserved: bool,
     pub use_default: bool,
     /// Credentials found or not: not proof that they still work.
     pub login: LoginState,
@@ -86,6 +89,7 @@ pub fn rows(
                     default: false,
                     flagged_default: false,
                     disabled: p.disabled,
+                    reserved: p.reserved,
                     use_default: p.use_default,
                     login: LoginState::Unknown,
                     expired: false,
@@ -104,6 +108,7 @@ pub fn rows(
                 flagged_default: profiles::flagged_default(all, &harness)
                     .is_some_and(|d| d.name == p.name),
                 disabled: p.disabled,
+                reserved: p.reserved,
                 use_default: p.use_default,
                 login: check.state,
                 expired: check.expired,
@@ -131,6 +136,7 @@ pub fn rows(
             default: false,
             flagged_default: false,
             disabled: false,
+            reserved: false,
             use_default: true,
             login: check.state,
             expired: check.expired,
@@ -170,6 +176,10 @@ fn list_at(config: &Path, root: &Path, model: &crate::daemon::Model) -> Vec<Acco
 
 pub fn set_enabled_at(config: &Path, name: &str, enabled: bool) -> Res<()> {
     profiles::set_enabled_in_file(config, name, enabled)
+}
+
+pub fn set_reserved_at(config: &Path, name: &str, reserved: bool) -> Res<()> {
+    profiles::set_reserved_in_file(config, name, reserved)
 }
 
 /// The account email of a Claude login whose config dir is `dir`.
@@ -234,6 +244,13 @@ pub fn profile_set_enabled(name: String, enabled: bool) -> Res<()> {
     // The layer the profiles come from, under the config lock, as every
     // other profile edit.
     crate::profiles::on_layer(|config, _| set_enabled_at(config, &name, enabled))
+}
+
+// registered in main.rs by the main thread (accounts lane PR)
+#[allow(dead_code)]
+#[tauri::command]
+pub fn profile_set_reserved(name: String, reserved: bool) -> Res<()> {
+    crate::profiles::on_layer(|config, _| set_reserved_at(config, &name, reserved))
 }
 
 /// A new shell in `worktree` with `line` typed into it and Enter pressed;
@@ -506,6 +523,33 @@ mod tests {
         let raw = std::fs::read_to_string(&config).unwrap();
         assert!(!raw.contains("disabled") && raw.contains("colour"), "{raw}");
         assert!(set_enabled_at(&config, "nope", true).is_err());
+    }
+
+    #[test]
+    fn reserving_writes_the_flag_in_place_and_rows_carry_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config.json");
+        std::fs::write(
+            &config,
+            r#"{"profiles":[{"name":"work","harness":"claude","colour":"red"}]}"#,
+        )
+        .unwrap();
+        let model = crate::daemon::Model::default();
+        assert!(!list_at(&config, dir.path(), &model)[0].reserved);
+        set_reserved_at(&config, "work", true).unwrap();
+        assert!(list_at(&config, dir.path(), &model)[0].reserved);
+        set_reserved_at(&config, "work", false).unwrap();
+        let raw = std::fs::read_to_string(&config).unwrap();
+        assert!(!raw.contains("reserved") && raw.contains("colour"), "{raw}");
+        assert!(set_reserved_at(&config, "nope", true).is_err());
+    }
+
+    #[test]
+    fn a_reserved_profile_row_says_so_and_an_own_login_never_is() {
+        let mut work = profile("work", "claude");
+        work.reserved = true;
+        let rows = rows(&[work], &[], &["claude".into()], signed_in);
+        assert!(rows[0].reserved && !rows[1].reserved);
     }
 
     /// The switch lands in config.local.json when that layer's list is the

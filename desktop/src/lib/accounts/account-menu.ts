@@ -20,11 +20,13 @@ import {
   renameBlocked,
   runLogin,
   setAccountEnabled,
+  setAccountReserved,
   setDefaultAccount,
   setProjectAccount,
 } from './actions';
 import { openAddAccount } from './add.svelte';
 import { editRequest } from './edit.svelte';
+import { withReserveRow } from './reserve';
 import { liveUsage, mergeRows, ownLoginSessionHarnesses, sessionsOn } from './usage';
 import { projectAccount } from './view';
 
@@ -92,7 +94,9 @@ export function accountOpened(key: string, extra: { edit?: () => void } = {}): O
       editRequest.key = r.key;
       openAccounts();
     });
-  return { items: accountItems(stateOf(r), verbsOf(r, edit), registryRows('account', tableOf(r))), label: r.name };
+  // The reserve row is this half's: menus/account.ts's rows do not know the flag yet.
+  const items = withReserveRow(accountItems(stateOf(r), verbsOf(r, edit), registryRows('account', tableOf(r))), r, () => void setAccountReserved(r));
+  return { items, label: r.name };
 }
 
 setRowBuilder('account', (key) => accountOpened(key));
