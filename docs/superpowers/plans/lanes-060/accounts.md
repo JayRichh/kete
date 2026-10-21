@@ -55,3 +55,6 @@ The studio manager picks an account from a script, the pick spreads over account
 ## Stop condition
 
 A green PR against `release/0.60`, its body per Lane rule 14, with the docs/profiles.md sections named and the toggle key for docs/keys.md.
+
+## Finding from the foundation review (2026-10-21)
+`profiles.rs` `update_in_file` strips absent keys before merging but `reserved` is not in that list, so a write with `reserved: false` never clears a stored `true`. Do not fix by adding it to the list: `desktop/src-tauri/src/profiles.rs` `profile_of` and `crates/nebula-tui/src/accounts_overlay.rs` both hardcode `reserved: false`, so any profile edit would silently un-reserve Jay's account. Fix: `set_reserved` sets or removes the key directly with `edit_file`; both form builders keep the stored value; add a test that reserves then unreserves a profile.
