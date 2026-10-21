@@ -128,6 +128,18 @@ pub enum Reason {
     ProjectDefault,
 }
 
+/// Who is starting a launch: a person (Jay, from the apps or his own
+/// shell) or automation (the orchestrator's spawns, a renewal, any launch
+/// with a role card). Passed down every launch path so the pick can tell
+/// them apart (a reserved profile is a person's own); 0.60's foundation
+/// threads it through and the pick does not read it yet.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Launcher {
+    #[default]
+    Person,
+    Automation,
+}
+
 /// A spread's choice.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pick<'a> {
@@ -263,6 +275,7 @@ pub fn pick_for_project<'a>(
     harness: &str,
     project_default: Option<&str>,
     policy: Policy,
+    launcher: Launcher,
     now_secs: i64,
     usage: impl Fn(&str) -> Option<AccountUsage>,
 ) -> Pick<'a> {
@@ -277,6 +290,7 @@ pub fn pick_for_project<'a>(
             };
         }
     }
+    let _ = launcher;
     pick(all, harness, policy, now_secs, usage)
 }
 
@@ -286,12 +300,14 @@ pub fn pick_for_project<'a>(
 /// for the harness, else the ACCOUNT SPREAD's pick, which under `manual` is
 /// the harness's default profile, else none (the CLI's own login). `Err`
 /// says why a named profile cannot be used.
+#[allow(clippy::too_many_arguments)]
 pub fn resolve_launch<'a>(
     all: &'a [Profile],
     harness: &str,
     asked: Option<&str>,
     project_default: Option<&str>,
     policy: Policy,
+    launcher: Launcher,
     now_secs: i64,
     usage: impl Fn(&str) -> Option<AccountUsage>,
 ) -> Result<Pick<'a>, String> {
@@ -306,6 +322,7 @@ pub fn resolve_launch<'a>(
         harness,
         project_default,
         policy,
+        launcher,
         now_secs,
         usage,
     ))
@@ -578,6 +595,7 @@ pub fn resolve_launch_now<'a>(
     harness: &str,
     asked: Option<&str>,
     project_default: Option<&str>,
+    launcher: Launcher,
 ) -> Result<Pick<'a>, String> {
     resolve_launch(
         all,
@@ -585,6 +603,7 @@ pub fn resolve_launch_now<'a>(
         asked,
         project_default,
         load_policy(),
+        launcher,
         crate::clock::now_secs() as i64,
         crate::usage::read_account,
     )
@@ -604,6 +623,7 @@ mod tests {
             default,
             use_default: false,
             disabled: false,
+            reserved: false,
         }
     }
 
@@ -731,8 +751,17 @@ mod tests {
         let u = usage(&[("main", 99.0, 99.0), ("proj", 50.0, 50.0)]);
         let manual = policy(Spread::Manual);
         let launch = |asked, project, policy| {
-            resolve_launch(&all, "claude", asked, project, policy, 0, &u)
-                .map(|p| (p.profile.map(|p| p.name.clone()), p.reason))
+            resolve_launch(
+                &all,
+                "claude",
+                asked,
+                project,
+                policy,
+                Launcher::Person,
+                0,
+                &u,
+            )
+            .map(|p| (p.profile.map(|p| p.name.clone()), p.reason))
         };
         // Named wins over everything, a switched-off one too.
         assert_eq!(
@@ -770,7 +799,15 @@ mod tests {
             launch(None, None, manual).unwrap(),
             (Some("main".into()), Reason::Default)
         );
-        let p = pick_for_project(&all, "claude", Some("proj"), manual, 0, &u);
+        let p = pick_for_project(
+            &all,
+            "claude",
+            Some("proj"),
+            manual,
+            Launcher::Person,
+            0,
+            &u,
+        );
         assert_eq!(p.describe("claude"), "claude: proj (project default)");
     }
 

@@ -31,7 +31,9 @@ pub struct Refusal {
 
 /// `<data dir>/studio/refusals.jsonl`.
 pub fn refusals_path() -> PathBuf {
-    crate::paths::data_dir().join("studio").join("refusals.jsonl")
+    crate::paths::data_dir()
+        .join("studio")
+        .join("refusals.jsonl")
 }
 
 /// Appends a refusal to the real log.
@@ -52,8 +54,8 @@ pub fn append_in(path: &Path, refusal: &Refusal) -> Result<(), String> {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("could not create {}: {e}", parent.display()))?;
     }
-    let mut line = serde_json::to_string(refusal)
-        .map_err(|e| format!("could not write the refusal: {e}"))?;
+    let mut line =
+        serde_json::to_string(refusal).map_err(|e| format!("could not write the refusal: {e}"))?;
     line.push('\n');
     let mut file = std::fs::OpenOptions::new()
         .create(true)
@@ -153,7 +155,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("r.jsonl");
         append_in(&path, &refusal(1, "a")).unwrap();
-        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
         f.write_all(b"not json at all\n{\"at\":1}\n").unwrap();
         drop(f);
         append_in(&path, &refusal(2, "b")).unwrap();

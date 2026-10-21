@@ -1220,7 +1220,8 @@ pub(crate) mod tests {
         let cwd = Some(Path::new(TEST_CWD));
         let s = |v: &[&str]| v.iter().map(|a| a.to_string()).collect::<Vec<_>>();
 
-        let plain = agent_spawn_command_with(&claude, None, cwd, None, None, None, None, None, true);
+        let plain =
+            agent_spawn_command_with(&claude, None, cwd, None, None, None, None, None, true);
         assert_eq!(
             plain,
             (

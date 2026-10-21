@@ -23,13 +23,16 @@ pub mod project_file;
 pub mod protocol;
 pub mod remote;
 pub mod review_base;
+pub mod roles;
 pub mod scope;
 pub mod session_snapshot;
 pub mod settings;
 pub mod shell;
 pub mod stop;
+pub mod studio;
 pub mod tracked_settings;
 pub mod usage;
+pub mod usage_ledger;
 pub mod usage_window;
 pub mod wake;
 

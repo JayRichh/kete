@@ -66,6 +66,12 @@ pub struct Profile {
     /// off). A session already running under it keeps it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub disabled: bool,
+    /// Kept for the person's own launches (0.60): still the default for a
+    /// launch Jay starts, never picked for one the orchestrator or a script
+    /// starts (`accounts::Launcher::Automation`). Left off the file when
+    /// false, so a 0.59 build reads the entry unchanged.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub reserved: bool,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -673,6 +679,7 @@ pub fn duplicate_in_file(path: &Path, from: &str, name: &str) -> Result<Profile,
         default: false,
         use_default: source.use_default,
         disabled: false,
+        reserved: false,
     };
     add_to_file(path, &copy)?;
     Ok(copy)
@@ -1257,7 +1264,28 @@ mod tests {
             default: false,
             use_default: false,
             disabled: false,
+            reserved: false,
         }
+    }
+
+    /// 0.60's `reserved` round-trips, reads as false from a 0.59 entry,
+    /// and is left off the file when false, so 0.59 reads the entry as
+    /// it wrote it.
+    #[test]
+    fn reserved_round_trips_and_is_absent_when_false() {
+        let old: Profile =
+            serde_json::from_str(r#"{"name": "jayrich", "harness": "claude", "default": true}"#)
+                .unwrap();
+        assert!(!old.reserved);
+        assert!(!serde_json::to_string(&old).unwrap().contains("reserved"));
+        let mine = Profile {
+            reserved: true,
+            ..old
+        };
+        let text = serde_json::to_string(&mine).unwrap();
+        assert!(text.contains("\"reserved\":true"), "{text}");
+        let back: Profile = serde_json::from_str(&text).unwrap();
+        assert_eq!(back, mine);
     }
 
     #[test]

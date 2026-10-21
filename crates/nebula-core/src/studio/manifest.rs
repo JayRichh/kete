@@ -62,8 +62,8 @@ pub fn load(repo_root: &Path) -> Result<Option<StudioManifest>, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("could not read {MANIFEST_PATH}: {e}")),
     };
-    let text = String::from_utf8(bytes)
-        .map_err(|_| format!("{MANIFEST_PATH} is not valid UTF-8 text"))?;
+    let text =
+        String::from_utf8(bytes).map_err(|_| format!("{MANIFEST_PATH} is not valid UTF-8 text"))?;
     parse(&text).map(Some)
 }
 
@@ -89,7 +89,10 @@ pub fn parse(text: &str) -> Result<StudioManifest, String> {
             match e.span() {
                 Some(span) => {
                     let end = span.start.min(text.len());
-                    let line = 1 + text.as_bytes()[..end].iter().filter(|b| **b == b'\n').count();
+                    let line = 1 + text.as_bytes()[..end]
+                        .iter()
+                        .filter(|b| **b == b'\n')
+                        .count();
                     Err(format!("{MANIFEST_PATH} line {line}: {message}"))
                 }
                 None => Err(format!("{MANIFEST_PATH}: {message}")),
@@ -152,22 +155,34 @@ sound = "/sound?id={id}"
         let m = parse(FULL).unwrap();
         assert_eq!(m.version, 1);
         assert_eq!(m.inbox.as_deref(), Some("Design/Studio/inbox"));
-        assert_eq!(m.departments.as_deref(), Some("Design/Production/DEPARTMENTS.md"));
+        assert_eq!(
+            m.departments.as_deref(),
+            Some("Design/Production/DEPARTMENTS.md")
+        );
         assert_eq!(m.signoffs.as_deref(), Some("Design/Reviews/signoffs"));
         assert_eq!(m.evidence.as_deref(), Some("Design/Reviews/evidence"));
         assert_eq!(m.studio_url.as_deref(), Some("http://127.0.0.1:5173"));
         assert_eq!(m.recipients, vec!["orchestrator", "manager"]);
         assert_eq!(m.kinds.get("art").map(String::as_str), Some("art-and-3d"));
         assert_eq!(m.kinds.len(), 2);
-        assert_eq!(m.links.get("sound").map(String::as_str), Some("/sound?id={id}"));
-        let again = parse(&toml::to_string(&m).unwrap()).unwrap();
-        assert_eq!(again, m);
+        assert_eq!(
+            m.links.get("sound").map(String::as_str),
+            Some("/sound?id={id}")
+        );
+        let json = serde_json::to_string(&m).unwrap();
+        assert_eq!(serde_json::from_str::<StudioManifest>(&json).unwrap(), m);
     }
 
     #[test]
     fn only_version_is_required() {
         let m = parse("version = 1\n").unwrap();
-        assert_eq!(m, StudioManifest { version: 1, ..Default::default() });
+        assert_eq!(
+            m,
+            StudioManifest {
+                version: 1,
+                ..Default::default()
+            }
+        );
     }
 
     #[test]
