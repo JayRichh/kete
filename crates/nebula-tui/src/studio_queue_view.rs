@@ -377,6 +377,27 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
     true
 }
 
+/// A key on the studio board for `repo`: `[` and `]` work the control,
+/// opened on `repo` when it is not already, and a raise waiting for a yes
+/// on `repo` takes every key. True when it took the key.
+pub fn board_key(app: &mut App, repo: Option<&ProjectId>, key: KeyEvent) -> bool {
+    let bracket = matches!(key.code, KeyCode::Char('[' | ']'))
+        && !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+    let (here, asking) = state().control.as_ref().map_or((false, false), |c| {
+        let here = Some(&c.repo) == repo;
+        (here, here && c.pending.is_some())
+    });
+    if !asking && !bracket {
+        return false;
+    }
+    if !here {
+        open_autonomy(app, repo.cloned());
+    }
+    handle_key(app, key)
+}
+
 /// Write `level` for `repo` on a background job, show it at once, and say
 /// in the footer how it went.
 fn apply(app: &mut App, repo: ProjectId, name: String, level: Autonomy) {
@@ -730,6 +751,32 @@ mod tests {
             Some("Autonomy can only change in the running Kete")
         );
         assert_eq!(state().rows[0].autonomy, Autonomy::A2);
+
+        // On the board: a raise asks there, and its yes or no is the
+        // control's, never the board's `n` note; other keys pass.
+        let other = ProjectId("other".into());
+        assert!(
+            !board_key(&mut app, Some(&p), ch('n')),
+            "idle, n is the board's"
+        );
+        state().control = None;
+        assert!(
+            board_key(&mut app, Some(&p), ch(']')),
+            "] opens the control and raises"
+        );
+        assert_eq!(
+            text(&header_line(&app, Some(&p))),
+            "Raise to A3 Release? y confirm · n cancel"
+        );
+        assert!(
+            !board_key(&mut app, Some(&other), ch('n')),
+            "another repo's board keeps its keys"
+        );
+        assert!(
+            board_key(&mut app, Some(&p), ch('n')),
+            "n answers the raise"
+        );
+        assert_eq!(text(&header_line(&app, Some(&p))), ready);
         *state() = State::EMPTY;
     }
 }

@@ -434,7 +434,15 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
         }
     }
 
-    let hint = " Enter open · l lead · v verdict · n note · m menu · s map · r reload · Esc close";
+    let full = " Enter open · l lead · v verdict · n note · m menu · s map · [ ] autonomy · r reload · Esc close";
+    // Narrow, the department keys give way (the menu lists them) so the
+    // autonomy keys and Esc stay in view.
+    let short = " Enter open · m menu · s map · [ ] autonomy · r reload · Esc close";
+    let hint = if full.chars().count() <= width {
+        full
+    } else {
+        short
+    };
     if let Some(r) = row_rect(inner, inner.height.saturating_sub(1) as usize) {
         f.render_widget(
             Paragraph::new(Span::styled(

@@ -21,7 +21,7 @@
         onchange={(to) => (row ? q.setLevel(to) : toast('The queue has not loaded yet'))}
       />
     {/if}
-    <p class="m-0 min-w-0 flex-1 basis-[200px] self-center text-[13px] {q.error ? 'text-ember-ink' : 'text-muted'}" data-queue-state>{line}</p>
+    <p class="m-0 min-w-0 flex-1 basis-[200px] self-center text-[13px] {q.error ? 'text-fail' : 'text-muted'}" data-queue-state>{line}</p>
     {#if row}
       <p class="m-0 self-center text-[13px] text-muted">
         {row.open} open

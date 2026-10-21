@@ -479,6 +479,11 @@ fn step(app: &mut App, by: i64) {
 
 /// Keys over the board.
 pub fn handle_key(app: &mut App, key: KeyEvent, out: &mut Vec<ClientRequest>) {
+    // The header's autonomy control: `[` lower, `]` raise, and its yes or no.
+    let repo = view_mut(app).and_then(|v| v.root.is_some().then(|| v.repo.clone()).flatten());
+    if repo.is_some() && crate::studio_queue_view::board_key(app, repo.as_ref(), key) {
+        return;
+    }
     let jobs = app.jobs.view_jobs.clone();
     let Some(view) = view_mut(app) else {
         return;
