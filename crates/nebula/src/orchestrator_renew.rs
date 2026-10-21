@@ -91,6 +91,10 @@ fn scheduled_line(state: &RenewState, now: bool) -> String {
     }
 }
 
+/// Why `--pick` refuses.
+const NO_ACCOUNT: &str = "--pick found no eligible claude account: every one is reserved or \
+                          switched off, or none is set up (kete profile list)";
+
 /// `--pick`: the account `kete profile pick` would name for a Claude
 /// launch the orchestrator starts, counting live sessions and holds as
 /// load, and held like its pick so the next one spreads. Refused, with
@@ -102,9 +106,7 @@ fn pick_account() -> Result<String> {
     let all = nebula_core::profiles::load();
     let policy = nebula_core::accounts::load_policy();
     let Some(name) = choose(&all, policy, &root, now, &live) else {
-        bail!(
-            "--pick found no eligible claude account: every one is reserved or switched off,              or none is set up (kete profile list)"
-        );
+        bail!("{NO_ACCOUNT}");
     };
     nebula_core::accounts::holds::add_in(&root, &name, now).context("hold the pick")?;
     Ok(name)
@@ -185,5 +187,11 @@ mod tests {
             choose(&all, policy, &root, 0, &busy).as_deref(),
             Some("beta")
         );
+    }
+
+    #[test]
+    fn the_refusal_reads_as_one_sentence() {
+        assert!(!NO_ACCOUNT.contains("  "), "{NO_ACCOUNT}");
+        assert!(NO_ACCOUNT.contains("switched off, or none is set up"));
     }
 }

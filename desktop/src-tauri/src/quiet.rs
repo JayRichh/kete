@@ -233,6 +233,8 @@ mod tests {
         assert!(!browser_keys(false, Some("on")));
     }
 
+    // The merge exists in debug builds only (`take_driver_args`).
+    #[cfg(debug_assertions)]
     #[test]
     fn the_drivers_arguments_join_wrys_with_one_disable_features() {
         let driver = "--disable-features=IgnoreDuplicateNavs,Prewarm --enable-automation --remote-debugging-port=0";

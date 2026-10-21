@@ -215,7 +215,18 @@ for (const theme of ['light', 'dark']) {
 
         await d.click('[aria-label="Home view"] button', 'Board');
         await d.el(`[data-target="agent:${runner}"]`);
+        // The card's lane may sit past the board's own scroll: bring it in,
+        // and say so if the chip is still not wholly in the window.
+        const chip = await d.wd.exec(
+          `const card = document.querySelector(arguments[0]);
+           card.scrollIntoView({ block: 'nearest', inline: 'center' });
+           const c = [...card.querySelectorAll('*')].find((e) => e.children.length === 0 && e.textContent.trim() === 'Runner');
+           const r = c?.getBoundingClientRect();
+           return r && r.left >= 0 && r.right <= innerWidth ? null : 'the Runner chip not wholly in the window';`,
+          `[data-target="agent:${runner}"]`,
+        );
         await shoot(d, theme, w, 'board-role-chips', 'main', seen);
+        if (chip) seen.at(-1).bad.push(chip);
 
         // The orchestrator's menu is its header's, in the orchestrator view.
         await d.click('[data-target="orchestrator:rail"]');
