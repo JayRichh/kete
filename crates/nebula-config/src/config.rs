@@ -66,7 +66,9 @@ pub const CRITTER_SIZES: &[&str] = &["small", "medium", "large"];
 pub const CRITTER_VISITS: &[&str] = &["rare", "normal", "busy"];
 /// What **Keep finished subagents** cycles through (the daemon reads the
 /// same key): how long an ended subagent stays listed.
-pub use nebula_core::settings::{DEFAULT_SUBAGENT_RETENTION, SUBAGENT_RETENTIONS};
+pub use nebula_core::settings::{
+    DEFAULT_STUDIO_IDLE_AFTER, DEFAULT_SUBAGENT_RETENTION, STUDIO_IDLE_AFTERS, SUBAGENT_RETENTIONS,
+};
 
 /// Inline graphics choices (Settings → Appearance).
 pub const INLINE_GRAPHICS: &[&str] = crate::choices::INLINE_GRAPHICS_MODES;
@@ -460,6 +462,8 @@ pub enum SettingKind {
     CrittersOften,
     HideDoneSubagents,
     SubagentRetention,
+    StudioIdleAfter,
+    UsageLedger,
 }
 
 /// One harness field row in the Agents tab. The tab renders one section
@@ -569,6 +573,7 @@ impl SettingKind {
                 (2026, 10, 16)
             }
             SettingKind::HideDoneSubagents | SettingKind::SubagentRetention => (2026, 10, 18),
+            SettingKind::StudioIdleAfter | SettingKind::UsageLedger => (2026, 10, 21),
         }
     }
 
@@ -653,6 +658,12 @@ pub const SETTINGS_TABS: &[SettingsTab] = &[
                 label: "Show tips",
                 hint: "A one-line tip the first time you meet something (the ? menu, the scope chip, the board's lanes, drag, the review), each once; off hides them all",
                 group: "",
+            },
+            SettingSpec {
+                kind: SettingKind::StudioIdleAfter,
+                label: "Idle note after",
+                hint: "How long the orchestrator sits idle before kete hands it a note naming new studio inbox notes (only for repos with studio mode on)",
+                group: "Studio",
             },
         ]),
     },
@@ -754,6 +765,12 @@ pub const SETTINGS_TABS: &[SettingsTab] = &[
                 label: "Usage status line",
                 hint: "Claude sessions get kete's status line, which reads plan usage and context for the accounts list (your own statusLine still runs and prints; off = only the on-screen usage notice)",
                 group: "Accounts",
+            },
+            SettingSpec {
+                kind: SettingKind::UsageLedger,
+                label: "Usage ledger",
+                hint: "Record each session's tokens, estimated cost, tool uses and turns per day for kete usage (off keeps what is recorded and adds nothing)",
+                group: "Usage",
             },
         ]),
     },
@@ -1423,6 +1440,13 @@ pub struct Config {
     /// daemon keeps an ended subagent before its sweep drops it. Read
     /// through [`Config::subagent_retention_word`]; default `1h`.
     pub subagent_retention: String,
+    /// IDLE NOTE AFTER ([`STUDIO_IDLE_AFTERS`]): how long the orchestrator
+    /// sits idle before the studio queue runner hands it an idle note.
+    /// Read through [`Config::studio_idle_after`]; default `45s`.
+    pub studio_idle_after: String,
+    /// USAGE LEDGER: record each session's spend per day (`kete usage`).
+    /// On by default; off keeps the rows already recorded.
+    pub usage_ledger: bool,
     /// The key of the **Focused panel tint** SETTING (Settings →
     /// Appearance, through 0.34): whether the faint accent wash behind
     /// whatever keys land in — the card under the cursor, or the session
@@ -1832,6 +1856,8 @@ impl Default for Config {
             usage_statusline: true,
             hide_done_subagents: true,
             subagent_retention: DEFAULT_SUBAGENT_RETENTION.into(),
+            studio_idle_after: DEFAULT_STUDIO_IDLE_AFTER.into(),
+            usage_ledger: true,
             focus_tint: true,
             show_workspaces: true,
             hide_projects: false,
@@ -2186,6 +2212,26 @@ impl Config {
             .copied()
             .find(|w| w.eq_ignore_ascii_case(stored))
             .unwrap_or(CRITTER_SIZES[1])
+    }
+
+    /// `studio_idle_after` as one of [`STUDIO_IDLE_AFTERS`].
+    pub fn studio_idle_after_word(&self) -> &'static str {
+        let stored = self.studio_idle_after.trim();
+        STUDIO_IDLE_AFTERS
+            .iter()
+            .copied()
+            .find(|w| w.eq_ignore_ascii_case(stored))
+            .unwrap_or(DEFAULT_STUDIO_IDLE_AFTER)
+    }
+
+    /// How long the orchestrator must sit idle before an idle note.
+    pub fn studio_idle_after(&self) -> std::time::Duration {
+        nebula_core::settings::studio_idle_after(self.studio_idle_after_word())
+    }
+
+    /// Whether the usage ledger records anything new.
+    pub fn usage_ledger(&self) -> bool {
+        self.usage_ledger
     }
 
     /// `subagent_retention` as one of [`SUBAGENT_RETENTIONS`].
@@ -3076,6 +3122,8 @@ impl Config {
             SettingKind::CrittersOften => self.critters_often_word().into(),
             SettingKind::HideDoneSubagents => shown_hidden(self.hide_done_subagents).into(),
             SettingKind::SubagentRetention => self.subagent_retention_word().into(),
+            SettingKind::StudioIdleAfter => self.studio_idle_after_word().into(),
+            SettingKind::UsageLedger => on_off(self.usage_ledger).into(),
         }
     }
 
@@ -3275,6 +3323,13 @@ impl Config {
             SettingKind::SubagentRetention => {
                 let now = self.subagent_retention_word();
                 self.subagent_retention = cycle_choice(now, SUBAGENT_RETENTIONS, step).into();
+            }
+            SettingKind::StudioIdleAfter => {
+                let now = self.studio_idle_after_word();
+                self.studio_idle_after = cycle_choice(now, STUDIO_IDLE_AFTERS, step).into();
+            }
+            SettingKind::UsageLedger => {
+                self.usage_ledger = !self.usage_ledger;
             }
         }
     }

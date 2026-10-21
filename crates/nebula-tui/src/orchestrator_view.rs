@@ -107,11 +107,13 @@ pub fn chips(app: &App) -> Vec<Chip> {
         .collect()
 }
 
-/// The strip's row, carved off the top of `body` while the view is up;
-/// None leaves the body whole.
-pub fn split(app: &App, body: Rect) -> (Option<Rect>, Rect) {
+/// The strip's row, carved off the top of `body` while the view is up,
+/// and the TRIAGE STRIP's rows (`triage_strip::rows`, 0.60) carved off its
+/// bottom; None leaves that part out. The middle is the orchestrator's
+/// pane.
+pub fn split(app: &App, body: Rect) -> (Option<Rect>, Rect, Option<Rect>) {
     if !active(app) || body.height < 4 {
-        return (None, body);
+        return (None, body, None);
     }
     let strip = Rect { height: 1, ..body };
     let rest = Rect {
@@ -119,7 +121,21 @@ pub fn split(app: &App, body: Rect) -> (Option<Rect>, Rect) {
         height: body.height - 1,
         ..body
     };
-    (Some(strip), rest)
+    // The pane keeps at least 3 rows whatever the triage strip asks.
+    let triage = crate::triage_strip::rows(app).min(rest.height.saturating_sub(3));
+    if triage == 0 {
+        return (Some(strip), rest, None);
+    }
+    let pane = Rect {
+        height: rest.height - triage,
+        ..rest
+    };
+    let bottom = Rect {
+        y: rest.y + pane.height,
+        height: triage,
+        ..rest
+    };
+    (Some(strip), pane, Some(bottom))
 }
 
 /// What a narrow strip says instead of chips: the count, and how many
@@ -495,6 +511,7 @@ mod tests {
             default: false,
             use_default: false,
             disabled: false,
+            reserved: false,
         }
     }
 

@@ -36,6 +36,8 @@ pub mod icons;
 #[rustfmt::skip]
 pub mod icons_table;
 pub mod ipc;
+// 0.60: the studio requests' one-shot clients.
+pub mod ipc_studio;
 pub mod issues;
 // The JSONC reader lives with the settings now, so the desktop window
 // reads VS Code's files with the same one; this path stays for callers.
@@ -51,6 +53,12 @@ pub mod localhost;
 pub mod markdown;
 pub mod orchestrator_view;
 pub mod order;
+// 0.60, one module per lane (placeholders from the foundation):
+// the gauntlet lane's view, the ledger lane's export, the renew lane's
+// view, the board lane's overlay, the queue lane's header and autonomy
+// control, and the triage lane's strip.
+pub mod gauntlet_view;
+pub mod ledger_export;
 pub mod overlay_close;
 pub mod palette;
 pub mod perf;
@@ -63,11 +71,14 @@ pub mod preset_overlays;
 pub mod pull_request;
 pub mod quick_prompt;
 pub mod remote;
+pub mod renew_view;
 pub mod review;
 pub mod review_modal;
 pub mod settings_io;
 pub mod ship_view;
 pub mod splash;
+pub mod studio_board;
+pub mod studio_queue_view;
 pub mod subagents;
 pub mod sweep;
 pub mod syntax;
@@ -75,6 +86,7 @@ pub mod terminal_tail;
 pub mod text_input;
 pub mod theme;
 pub mod tree_browser;
+pub mod triage_strip;
 pub mod ui;
 pub mod update_check;
 pub mod view_jobs;
@@ -136,17 +148,24 @@ pub fn run_open(files: Vec<String>) -> Result<()> {
 /// <ref>]]` — start a new agent session beside the current one, or in
 /// another worktree of its project (see
 /// `ipc::spawn_sibling_for_current_agent`). `kind` is the CLI's `--kind`,
-/// already parsed where the flag is.
+/// already parsed where the flag is; `role` its `--role` (0.60).
 pub fn run_spawn(
     task: String,
     kind: Option<nebula_core::AgentKind>,
     worktree: Option<String>,
     base: Option<String>,
     profile: Option<String>,
+    role: Option<String>,
 ) -> Result<()> {
     runtime()?.block_on(ipc::spawn_sibling_for_current_agent(
-        &task, kind, worktree, base, profile,
+        &task, kind, worktree, base, profile, role,
     ))
+}
+
+/// Block on one of `ipc_studio`'s one-shot clients (or any future) from
+/// the CLI, on a runtime of its own.
+pub fn block_on<F: std::future::Future>(future: F) -> Result<F::Output> {
+    Ok(runtime()?.block_on(future))
 }
 
 pub fn run_sessions(json: bool) -> Result<()> {

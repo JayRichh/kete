@@ -103,6 +103,8 @@ fn handle_overlay_mouse(
         Overlay::Accounts(_) => accounts::handle_mouse(app, mouse, out),
         Overlay::Ship(_) => ship::handle_mouse(app, mouse, mouse_pos, out),
         Overlay::CritterLog(_) => crate::critters::log_mouse(app, &mouse),
+        Overlay::StudioBoard(_) => crate::studio_board::handle_mouse(app, mouse, out),
+        Overlay::Gauntlet(_) => crate::gauntlet_view::handle_mouse(app, mouse, out),
         _ => true,
     }
 }

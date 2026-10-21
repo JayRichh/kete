@@ -285,6 +285,21 @@ pub enum Action {
     /// ASK ASIDE: a side question about the session, answered by a new
     /// session beside it in the same checkout that changes no files.
     AskAside,
+    // 0.60: studio mode.
+    /// The STUDIO BOARD: each department's queue, lead, runners, last
+    /// verdict and spend, read from the repo's own files.
+    StudioBoard,
+    /// The GAUNTLET VIEW: every verdict by kind, with its evidence.
+    GauntletView,
+    /// The TRIAGE line under the orchestrator: one line becomes an inbox
+    /// note the triage desk routes.
+    TriageNote,
+    /// A studio repo's AUTONOMY control, A0 to A3.
+    StudioAutonomy,
+    /// RENEW the orchestrator from a handover note.
+    RenewOrchestrator,
+    /// Export the USAGE LEDGER as CSV and show the file.
+    UsageCsv,
 }
 
 /// What a verb acts on.
@@ -2096,6 +2111,97 @@ pub const ACTIONS: &[ActionSpec] = &[
         surface: Surface::Both,
         desktop: &[],
     },
+    // 0.60, appended and unbound: studio mode.
+    ActionSpec {
+        action: Action::StudioBoard,
+        id: "studio_board",
+        label: "Studio board",
+        hint: "A studio repo's departments side by side: each one's inbox queue, lead, runners, last verdict, what waits on you and what it cost today; from a repo, on that repo",
+        group: "VIEWS",
+        scope: Scope::Global,
+        defaults: &[],
+        word: "studio",
+        destructive: false,
+        applies_to: &[AppliesTo::Global, AppliesTo::Repo],
+        works_in: &[WorksIn::Grid, WorksIn::Board, WorksIn::Pane],
+        surface: Surface::Both,
+        desktop: &[],
+    },
+    ActionSpec {
+        action: Action::GauntletView,
+        id: "gauntlet_view",
+        label: "Gauntlet view",
+        hint: "Every verdict in a studio repo's sign-off folders, by kind and newest first, with its evidence and a link into the review app",
+        group: "VIEWS",
+        scope: Scope::Global,
+        defaults: &[],
+        word: "gauntlet",
+        destructive: false,
+        applies_to: &[AppliesTo::Global, AppliesTo::Repo],
+        works_in: &[WorksIn::Grid, WorksIn::Board, WorksIn::Pane],
+        surface: Surface::Both,
+        desktop: &[],
+    },
+    ActionSpec {
+        action: Action::TriageNote,
+        id: "triage_note",
+        label: "Triage note",
+        hint: "Type one line for the studio: it is filed as an inbox note and the triage desk routes it in one turn",
+        group: "SESSIONS",
+        scope: Scope::Global,
+        defaults: &[],
+        word: "triage",
+        destructive: false,
+        applies_to: &[AppliesTo::Global],
+        works_in: &[WorksIn::Grid, WorksIn::Board, WorksIn::Pane],
+        surface: Surface::Both,
+        desktop: &[],
+    },
+    ActionSpec {
+        action: Action::StudioAutonomy,
+        id: "studio_autonomy",
+        label: "Studio autonomy",
+        hint: "How far a studio repo's agents may go without you: A0 Hold, A1 Plan, A2 Deliver or A3 Release",
+        group: "PROJECTS & WORKTREES",
+        scope: Scope::Global,
+        defaults: &[],
+        word: "autonomy",
+        destructive: false,
+        applies_to: &[AppliesTo::Repo],
+        works_in: &[WorksIn::Grid, WorksIn::Board],
+        surface: Surface::Both,
+        desktop: &[],
+    },
+    ActionSpec {
+        action: Action::RenewOrchestrator,
+        id: "renew_orchestrator",
+        label: "Renew orchestrator",
+        hint: "Hand the orchestrator over to a fresh session that starts on a handover note, once its turn ends; the old one is archived",
+        group: "SESSIONS",
+        scope: Scope::Global,
+        defaults: &[],
+        word: "renew",
+        destructive: false,
+        applies_to: &[AppliesTo::Session],
+        works_in: &[WorksIn::Grid, WorksIn::Board, WorksIn::Pane],
+        surface: Surface::Both,
+        desktop: &[],
+    },
+    ActionSpec {
+        action: Action::UsageCsv,
+        id: "usage_csv",
+        label: "Export usage CSV",
+        hint: "Write the usage ledger (tokens, estimated cost, tool uses and turns per session per day) to a CSV file and show it",
+        group: "GENERAL",
+        scope: Scope::Global,
+        defaults: &[],
+        word: "usage csv",
+        destructive: false,
+        applies_to: &[AppliesTo::Global],
+        works_in: &[WorksIn::Grid, WorksIn::Board, WorksIn::Pane],
+        surface: Surface::Both,
+        desktop: &[],
+    },
 ];
 
 pub fn spec_at(index: usize) -> Option<&'static ActionSpec> {
@@ -2388,6 +2494,12 @@ pub const MENU_LABELS: &[(&str, Option<AppliesTo>, &str)] = &[
     ("activate", None, "Open"),
     ("follow_up", None, "Follow-up prompt\u{2026}"),
     ("ask_aside", None, "Ask aside\u{2026}"),
+    ("studio_board", None, "Studio board"),
+    ("gauntlet_view", None, "Gauntlet"),
+    ("triage_note", None, "Triage note\u{2026}"),
+    ("studio_autonomy", None, "Autonomy\u{2026}"),
+    ("renew_orchestrator", None, "Renew orchestrator\u{2026}"),
+    ("usage_csv", None, "Export usage (CSV)"),
     ("restart", None, "Restart agent"),
     ("duplicate_session", None, "Duplicate"),
     ("move_session", None, "Move to\u{2026}"),
@@ -2519,6 +2631,7 @@ pub const MENUS: &[(AppliesTo, &[&str])] = &[
             "duplicate_session",
             "rename",
             "pin_orchestrator",
+            "renew_orchestrator",
             "move_session",
             "move_to_account",
             "reorder_up",
@@ -2576,6 +2689,9 @@ pub const MENUS: &[(AppliesTo, &[&str])] = &[
             "issues",
             "azure_devops",
             "refresh_pull_requests",
+            "studio_board",
+            "gauntlet_view",
+            "studio_autonomy",
             "open_worktree",
             "open_in_vscode",
             "open_in_visual_studio",
@@ -2632,14 +2748,18 @@ pub const MENUS: &[(AppliesTo, &[&str])] = &[
             "quick_prompt",
             "add_project",
             "command_palette",
+            "triage_note",
             "home_overview",
             "home_board",
             "toggle_kanban",
             "toggle_orchestrator_view",
+            "studio_board",
+            "gauntlet_view",
             "accounts",
             "wake_schedule",
             "toggle_archived",
             "settings",
+            "usage_csv",
             "mark_seen",
             "critters",
             "archive_done",
@@ -2676,6 +2796,7 @@ pub const MENU_SECTIONS: &[(&str, Option<AppliesTo>, MenuSection)] = &[
     ("activate", None, MenuSection::Act),
     ("follow_up", None, MenuSection::Act),
     ("ask_aside", None, MenuSection::Act),
+    ("triage_note", None, MenuSection::Act),
     ("new", None, MenuSection::Act),
     ("quick_prompt", None, MenuSection::Act),
     ("new_terminal", None, MenuSection::Act),
@@ -2702,6 +2823,8 @@ pub const MENU_SECTIONS: &[(&str, Option<AppliesTo>, MenuSection)] = &[
     ("home_board", None, MenuSection::Go),
     ("toggle_kanban", None, MenuSection::Go),
     ("toggle_orchestrator_view", None, MenuSection::Go),
+    ("studio_board", None, MenuSection::Go),
+    ("gauntlet_view", None, MenuSection::Go),
     ("toggle_archived", None, MenuSection::Go),
     ("settings", None, MenuSection::Go),
     // The view on the background; beside Wake up now on an account.
@@ -2718,6 +2841,8 @@ pub const MENU_SECTIONS: &[(&str, Option<AppliesTo>, MenuSection)] = &[
     ("open_in_browser", None, MenuSection::Open),
     ("open_with_default", None, MenuSection::Open),
     ("dock_editor", None, MenuSection::Open),
+    // It writes the file, then shows it in the file manager.
+    ("usage_csv", None, MenuSection::Open),
     ("copy_path", None, MenuSection::Copy),
     ("copy_relative_path", None, MenuSection::Copy),
     ("copy_branch", None, MenuSection::Copy),
@@ -2727,6 +2852,9 @@ pub const MENU_SECTIONS: &[(&str, Option<AppliesTo>, MenuSection)] = &[
     ("duplicate_session", None, MenuSection::Change),
     ("rename", None, MenuSection::Change),
     ("pin_orchestrator", None, MenuSection::Change),
+    ("renew_orchestrator", None, MenuSection::Change),
+    // In the repo's Studio submenu, beside the board and the gauntlet.
+    ("studio_autonomy", None, MenuSection::Go),
     ("switch_branch", None, MenuSection::Change),
     ("wake_account", None, MenuSection::Change),
     ("critters", None, MenuSection::Change),
@@ -2799,6 +2927,18 @@ pub const MENU_GROUPS: &[MenuGroup] = &[
             ("refresh_pull_requests", "Refresh pull requests"),
         ],
     },
+    // A studio repo's own pages and its autonomy control (0.60): shown
+    // only for a repo with a manifest or a `studio` entry.
+    MenuGroup {
+        id: "studio",
+        title: "Studio",
+        on: &[AppliesTo::Repo],
+        rows: &[
+            ("studio_board", "Board"),
+            ("gauntlet_view", "Gauntlet"),
+            ("studio_autonomy", "Autonomy\u{2026}"),
+        ],
+    },
     MenuGroup {
         id: "open_in",
         title: "Open in",
@@ -2842,6 +2982,8 @@ pub const MENU_GROUPS: &[MenuGroup] = &[
             ("home_board", "Board"),
             ("toggle_kanban", "Board or bands"),
             ("toggle_orchestrator_view", "Orchestrator"),
+            ("studio_board", "Studio board"),
+            ("gauntlet_view", "Gauntlet"),
             ("accounts", "Accounts"),
             ("wake_schedule", "Whakaoho"),
             ("toggle_archived", "Archived sessions"),
@@ -3547,7 +3689,7 @@ mod tests {
         // jump, the window's Ctrl+K is `command_palette`; `move_up` walks
         // the cursor where the window's reorders, `reorder_up`): the
         // window's key ids are their own namespace.
-        assert_eq!(ACTIONS.len(), 107);
+        assert_eq!(ACTIONS.len(), 113);
         // The 0.54/0.55 slots, appended in this order and unbound.
         let tail: Vec<&str> = ACTIONS[91..102].iter().map(|s| s.id).collect();
         assert_eq!(
@@ -3572,9 +3714,20 @@ mod tests {
             matrix,
             ["mark_seen", "copy_pr_url", "archive_done", "wake_schedule"]
         );
-        // 0.56's, after those.
+        // 0.56's, then 0.60's studio verbs, after those.
         let sessions: Vec<&str> = ACTIONS[106..].iter().map(|s| s.id).collect();
-        assert_eq!(sessions, ["ask_aside"]);
+        assert_eq!(
+            sessions,
+            [
+                "ask_aside",
+                "studio_board",
+                "gauntlet_view",
+                "triage_note",
+                "studio_autonomy",
+                "renew_orchestrator",
+                "usage_csv",
+            ]
+        );
         assert!(ACTIONS[91..]
             .iter()
             .all(|s| s.defaults.is_empty() && s.desktop.is_empty() && !s.destructive));
@@ -3810,20 +3963,23 @@ mod tests {
         // a live card (Unarchive is an archived one's), the fullest
         // checkout a linked one (Switch branch is the root's). A live
         // card's 15 are its registry rows with Mark seen and Make
-        // orchestrator both showing (0.56 adds Ask aside); read, with
-        // another session pinned, it is 13, and each app adds the
-        // checkout's row after (14). A
+        // orchestrator both showing (0.56 adds Ask aside; 0.60's Renew
+        // orchestrator shows only on the orchestrator, never beside Make
+        // orchestrator); read, with another session pinned, it is 13, and
+        // each app adds the checkout's row after (14). A studio repo's
+        // menu has the Studio submenu too (15), and the background's 10
+        // are its own with the triage line and the usage export (0.60). A
         // file's and a folder's never fold.
         let top = |kind: AppliesTo| {
-            let not_with = match kind {
-                AppliesTo::Session => "unarchive",
-                AppliesTo::Worktree => "switch_branch",
-                _ => "",
+            let not_with: &[&str] = match kind {
+                AppliesTo::Session => &["unarchive", "renew_orchestrator"],
+                AppliesTo::Worktree => &["switch_branch"],
+                _ => &[],
             };
             let ids: Vec<&str> = menu_of(kind)
                 .iter()
                 .copied()
-                .filter(|id| *id != not_with)
+                .filter(|id| !not_with.contains(id))
                 .collect();
             let folded: usize = MENU_GROUPS
                 .iter()
@@ -3841,12 +3997,12 @@ mod tests {
         for (kind, most) in [
             (AppliesTo::Session, 15),
             (AppliesTo::Worktree, 15),
-            (AppliesTo::Repo, 14),
+            (AppliesTo::Repo, 15),
             (AppliesTo::Terminal, 4),
             (AppliesTo::File, 7),
             (AppliesTo::Folder, 4),
             (AppliesTo::Account, 4),
-            (AppliesTo::Global, 8),
+            (AppliesTo::Global, 10),
         ] {
             assert!(top(kind) <= most, "{kind:?} runs to {} rows", top(kind));
         }

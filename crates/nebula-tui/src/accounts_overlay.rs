@@ -843,6 +843,7 @@ impl AccountsView {
             default: form.make_default,
             use_default: form.adopt,
             disabled: false,
+            reserved: false,
         };
         if let Some(problem) = profile.problem() {
             return Err(problem);
@@ -1281,6 +1282,7 @@ mod tests {
             default,
             use_default: false,
             disabled: false,
+            reserved: false,
         }
     }
 

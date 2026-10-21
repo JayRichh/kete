@@ -73,6 +73,15 @@ pub struct Config {
     /// it (`nebula_core::settings::SUBAGENT_RETENTIONS`). Read through
     /// [`Config::subagent_retention_ms`].
     pub subagent_retention: String,
+    /// IDLE NOTE AFTER (Settings, General, Studio): how long the
+    /// orchestrator sits idle before the studio queue runner hands it an
+    /// idle note (`nebula_core::settings::STUDIO_IDLE_AFTERS`). Read
+    /// through [`Config::studio_idle_after`].
+    pub studio_idle_after: String,
+    /// USAGE LEDGER (Settings, Sessions, Usage): record each session's
+    /// tokens, estimated cost, tool uses and turns per day. Off keeps the
+    /// rows already recorded and adds nothing.
+    pub usage_ledger: bool,
 }
 
 /// One project's entry under `projects` — the rows of the TUI's Project
@@ -108,6 +117,8 @@ impl Default for Config {
             port_block: nebula_core::ports::DEFAULT_BLOCK,
             usage_statusline: true,
             subagent_retention: nebula_core::settings::DEFAULT_SUBAGENT_RETENTION.into(),
+            studio_idle_after: nebula_core::settings::DEFAULT_STUDIO_IDLE_AFTER.into(),
+            usage_ledger: true,
         }
     }
 }
@@ -149,6 +160,16 @@ impl Config {
     /// `subagent_retention` in milliseconds; None keeps ended subagents.
     pub fn subagent_retention_ms(&self) -> Option<i64> {
         nebula_core::settings::subagent_retention_ms(&self.subagent_retention)
+    }
+
+    /// How long the orchestrator must sit idle before an idle note.
+    pub fn studio_idle_after(&self) -> std::time::Duration {
+        nebula_core::settings::studio_idle_after(&self.studio_idle_after)
+    }
+
+    /// Whether the usage ledger records anything new.
+    pub fn usage_ledger(&self) -> bool {
+        self.usage_ledger
     }
 
     /// The configured WORKTREE BASE BRANCH, or None for the default

@@ -1111,6 +1111,13 @@ mod tests {
                             | Action::ArchiveDone
                             | Action::WakeSchedule
                             | Action::AskAside
+                            // 0.60: the studio verbs, menu and palette rows.
+                            | Action::StudioBoard
+                            | Action::GauntletView
+                            | Action::TriageNote
+                            | Action::StudioAutonomy
+                            | Action::RenewOrchestrator
+                            | Action::UsageCsv
                     ),
                     "{} ships with no chord",
                     spec.id

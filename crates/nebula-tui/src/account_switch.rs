@@ -290,6 +290,7 @@ mod tests {
             default: false,
             use_default: false,
             disabled: false,
+            reserved: false,
         }
     }
 

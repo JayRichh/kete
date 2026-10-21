@@ -130,6 +130,8 @@ fn every_config_key_is_a_row_or_named_as_not_one() {
         "harnesses",
         "profiles",
         "browsers",
+        // machine-local, written only through the daemon's SetStudio
+        "studio",
         // the Agents tab's per-harness rows write these legacy keys
         "claude_model",
         "claude_effort",
@@ -593,4 +595,71 @@ fn the_wake_map_stays_local_through_settings_writes() {
     nebula_core::wake::set_in(&path, &local, "work", None).unwrap();
     assert_eq!(read(&path)["editor"], "nvim");
     assert_eq!(read(&path)["kanban"], true);
+}
+
+/// 0.60's two rows: Idle note after in General's Studio group, and Usage
+/// ledger in Sessions' Usage group, each with its key, choices and
+/// default, written through the shared writer.
+#[test]
+fn the_studio_and_ledger_rows_sit_in_their_tabs_and_groups() {
+    let place = |kind: SettingKind| {
+        all_settings()
+            .find(|(_, _, spec)| spec.kind == kind)
+            .map(|(tab, _, spec)| (nebula_config::SETTINGS_TABS[tab].title, spec.group))
+            .unwrap()
+    };
+    assert_eq!(place(SettingKind::StudioIdleAfter), ("General", "Studio"));
+    assert_eq!(place(SettingKind::UsageLedger), ("Sessions", "Usage"));
+    assert_eq!(SettingKind::StudioIdleAfter.key(), "studio_idle_after");
+    assert_eq!(SettingKind::UsageLedger.key(), "usage_ledger");
+    for kind in [SettingKind::StudioIdleAfter, SettingKind::UsageLedger] {
+        assert_eq!(kind.added_on(), (2026, 10, 21));
+    }
+    let cfg = Config::default();
+    assert_eq!(cfg.studio_idle_after(), std::time::Duration::from_secs(45));
+    assert!(cfg.usage_ledger());
+    assert_eq!(
+        nebula_config::STUDIO_IDLE_AFTERS,
+        ["30s", "45s", "60s", "120s"]
+    );
+
+    let (_dir, path, local) = layers();
+    let global = |key: &str| Target::Global { key: key.into() };
+    set_in(&path, &local, &global("studio_idle_after"), &json!("120s")).unwrap();
+    set_in(&path, &local, &global("usage_ledger"), &json!(false)).unwrap();
+    let cfg = Config::load_at(&path, &local);
+    assert_eq!(cfg.studio_idle_after(), std::time::Duration::from_secs(120));
+    assert!(!cfg.usage_ledger());
+    let odd = Config {
+        studio_idle_after: "7s".into(),
+        ..Config::default()
+    };
+    assert_eq!(odd.studio_idle_after_word(), "45s", "a word off the list");
+}
+
+/// The studio map lives in `config.local.json` under `studio`, which
+/// `Config` has no field for: a settings write from either app keeps it
+/// there and never copies it into `config.json`, and the studio writer
+/// keeps every setting.
+#[test]
+fn the_studio_map_stays_local_through_settings_writes() {
+    use nebula_core::studio::{settings, Autonomy, StudioSettings};
+    let (_dir, path, local) = layers();
+    std::fs::write(&path, r#"{"editor": "hx"}"#).unwrap();
+    let entry = StudioSettings {
+        studio_inbox: "notes/inbox".into(),
+        autonomy: Autonomy::A2,
+        queue_exclude: Vec::new(),
+    };
+    let repo = Path::new("/code/wheako");
+    settings::write_in(&path, &local, repo, Some(&entry)).unwrap();
+    let global = |key: &str| Target::Global { key: key.into() };
+    set_in(&path, &local, &global("kanban"), &json!(true)).unwrap();
+    Config::update_in(&path, &local, |c| c.editor = "nvim".into()).unwrap();
+    assert!(read(&path).get("studio").is_none(), "{}", read(&path));
+    assert_eq!(settings::for_repo_in(&local, repo), Some(entry));
+    settings::write_in(&path, &local, repo, None).unwrap();
+    assert_eq!(read(&path)["editor"], "nvim");
+    assert_eq!(read(&path)["kanban"], true);
+    assert_eq!(settings::for_repo_in(&local, repo), None);
 }
