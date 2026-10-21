@@ -103,6 +103,9 @@ jobs:
     # Not a gate yet: on the hosted runner tauri-driver cannot start the
     # WebView2 window ("DevToolsActivePort file doesn't exist"). The suite
     # passes locally (npm run e2e in desktop/); run it there before a release.
+    # Skipped (not red) until the repo variable DESKTOP_E2E is 'on', which
+    # is meant for a self-hosted Windows runner with a desktop session.
+    if: vars.DESKTOP_E2E == 'on'
     continue-on-error: true
 
     env:

@@ -17,7 +17,10 @@ jobs:
     # foreign code), so the action can't authenticate and every contributor PR
     # shows a red check. Skip the job there: the check reports "skipped"
     # instead of "failure", and same-repo branches are reviewed as before.
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    # Also skipped until the repo variable CLAUDE_REVIEW is 'on' and the
+    # CLAUDE_CODE_OAUTH_TOKEN secret is set; without the token the action
+    # fails in seconds and paints every PR red.
+    if: github.event.pull_request.head.repo.full_name == github.repository && vars.CLAUDE_REVIEW == 'on'
 
     runs-on: ubuntu-latest
     permissions:
