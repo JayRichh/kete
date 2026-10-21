@@ -2,14 +2,14 @@
   // One row over the board: autonomy, the runner's state, and Send now.
   import { app, toast } from '../../store.svelte';
   import AutonomyControl from './AutonomyControl.svelte';
-  import { queueState, stateLine } from './queue.svelte';
+  import { offLine, queueState, stateLine } from './queue.svelte';
 
   let props: { repo: string | null } = $props();
 
   const q = queueState(() => props.repo);
   const info = $derived(app.studioRepos.find((r) => r.repo === props.repo));
   const row = $derived(q.row);
-  const line = $derived(q.error ?? (q.loaded ? stateLine(row, Date.now()) : 'Reading the queue'));
+  const line = $derived(q.error ?? (!q.loaded ? 'Reading the queue' : row ? stateLine(row, Date.now()) : offLine(info?.name ?? '<repo>')));
 </script>
 
 {#if props.repo}

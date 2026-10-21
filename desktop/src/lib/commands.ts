@@ -507,7 +507,7 @@ export function paletteCommands(): Command[] {
           cmd('gauntlet', menuLabel('gauntlet_view', 'global'), 'Window', () => openGauntlet(), undefined, 'verdicts sign-offs reviews'),
         ]
       : []),
-    ...(triageAvailable() ? [cmd('triage-note', menuLabel('triage_note', 'global'), 'Window', focusTriage, undefined, 'inbox note studio')] : []),
+    ...(triageAvailable() ? [cmd('triage-note', menuLabel('triage_note', 'global'), 'Window', focusTriage, undefined, 'inbox note desk')] : []),
     cmd('usage-csv', menuLabel('usage_csv', 'global'), 'Window', () => void exportUsage(), undefined, 'ledger spend cost tokens export'),
     cmd('next-attention', 'Next session needing you', 'Window', () => jumpAttention(1), 'next_attention', 'attention jump feedback'),
     cmd('prev-attention', 'Previous session needing you', 'Window', () => jumpAttention(-1), 'prev_attention', 'attention jump feedback'),

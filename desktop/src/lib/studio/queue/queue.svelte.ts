@@ -38,9 +38,14 @@ const hhmm = (ms: number) => {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 };
 
+/** The line for a repo with studio mode off, naming the command for it. */
+export function offLine(name: string): string {
+  return `Studio is off for this repo. Run kete studio enable ${name} to turn it on`;
+}
+
 /** The runner's state in one line. `fmt` is for tests: epoch ms to a clock time. */
 export function stateLine(row: StudioQueueRow | null, _nowMs: number, fmt: (ms: number) => string = hhmm): string {
-  if (!row) return 'Studio is off for this repo. Run kete studio enable to turn it on';
+  if (!row) return offLine('<repo>');
   const n = row.unannounced;
   const head = row.held ? `Holding: ${row.held}` : `Ready: ${n} new ${n === 1 ? 'note' : 'notes'} for the next idle note`;
   return row.last_note_at != null ? `${head} \u00b7 last idle note at ${fmt(row.last_note_at)}` : head;
