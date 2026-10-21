@@ -95,11 +95,13 @@ impl Daemon {
             s.cost_now = Some(cost);
             s.cost_counted != Some(cost)
         };
-        let idle = matches!(
-            self.store.get_agent(agent),
-            Ok(Some(row)) if row.status != AgentStatus::Running
-        );
-        if uncounted && idle {
+        let idle = || {
+            matches!(
+                self.store.get_agent(agent),
+                Ok(Some(row)) if row.status != AgentStatus::Running
+            )
+        };
+        if uncounted && idle() {
             self.ledger_record(agent, false, nebula_core::clock::now_ms());
         }
     }
@@ -194,6 +196,16 @@ impl Daemon {
             Ok(spend) => self.broadcast(ServerEvent::SessionSpend { rows: vec![spend] }),
             Err(e) => tracing::warn!(agent = %agent, error = %e, "usage ledger row not added"),
         }
+    }
+
+    /// Today's row for every session that has one: what a client that
+    /// connects after the turns ended needs for `SessionSpend`.
+    pub fn today_spend(&self) -> Vec<nebula_core::studio::wire::SpendRow> {
+        let today = ledger::local_day(nebula_core::clock::now_secs() as i64);
+        self.store
+            .spend_rows(Some(&today), Some(&today), None)
+            .map(|rows| rows.into_iter().map(|r| r.spend).collect())
+            .unwrap_or_default()
     }
 
     /// `UsageLedger`: the ledger's rows from `since` to `until` (local
@@ -344,6 +356,7 @@ mod tests {
         assert_eq!(rows[0].project, "demo");
         assert_eq!(rows[0].session, "fix login");
         assert_eq!(rows[0].branch.as_deref(), Some("main"));
+        assert_eq!(daemon.today_spend(), [rows[0].spend.clone()]);
     }
 
     #[test]

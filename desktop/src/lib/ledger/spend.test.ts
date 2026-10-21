@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { SpendRow } from '../studio/types';
-import { spendLine } from './spend';
+import { localDay, spendLine } from './spend';
 
 const row = (over: Partial<SpendRow>): SpendRow => ({
   agent: 'a',
-  day: '2026-10-22',
+  day: localDay(),
   input_tokens: 0,
   output_tokens: 0,
   cache_read_tokens: 0,
@@ -18,6 +18,12 @@ const row = (over: Partial<SpendRow>): SpendRow => ({
 describe('spendLine', () => {
   it('says nothing without a row', () => {
     expect(spendLine(undefined)).toBeNull();
+  });
+
+  it("says nothing for another day's row", () => {
+    expect(spendLine(row({ day: '2026-10-21', turns: 3 }), '2026-10-22')).toBeNull();
+    expect(spendLine(row({ day: '2026-10-22', turns: 3 }), '2026-10-22')).toContain('3 turns');
+    expect(localDay(new Date(2026, 9, 2, 23, 59))).toBe('2026-10-02');
   });
 
   it('words the day: k tokens, two decimals of USD, counts', () => {

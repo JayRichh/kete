@@ -9,14 +9,15 @@ use super::harness::{Options, Tui, ENTER, WAIT};
 use std::time::{Duration, Instant};
 
 pub const TESTS: &[(&str, fn())] = &[(
-    "ledger_two_turns_make_one_row_and_a_turn_with_the_ledger_off_adds_nothing",
-    ledger_two_turns_make_one_row_and_a_turn_with_the_ledger_off_adds_nothing,
+    "ledger_two_turns_make_one_row_off_adds_nothing_and_the_tui_exports_it",
+    ledger_two_turns_make_one_row_off_adds_nothing_and_the_tui_exports_it,
 )];
 
 /// Two turns of one session sum into today's one row: 1,500 input and
 /// 300 output tokens, the cost estimate Claude reported last (0.08), two
-/// turns. With `usage_ledger` off, a third turn adds nothing.
-fn ledger_two_turns_make_one_row_and_a_turn_with_the_ledger_off_adds_nothing() {
+/// turns. With `usage_ledger` off, a third turn adds nothing. The TUI
+/// exports the same rows.
+fn ledger_two_turns_make_one_row_off_adds_nothing_and_the_tui_exports_it() {
     let tui = Tui::spawn(Options {
         script: "usage:1000,200,0.05;stop;\
                  gate:second;prompt:the second turn;usage:500,100,0.08;stop;\
@@ -63,6 +64,20 @@ fn ledger_two_turns_make_one_row_and_a_turn_with_the_ledger_off_adds_nothing() {
     std::thread::sleep(Duration::from_secs(3));
     let after = usage_csv(&tui);
     assert_eq!(after, csv, "the ledger is off: nothing new");
+
+    // The terminal app's Export usage CSV, from the command palette, writes
+    // the same rows to the exports folder without holding the screen.
+    tui.send(&[0x0b]);
+    tui.type_str("usage csv");
+    tui.wait_for_text("Export usage CSV");
+    tui.send(ENTER);
+    tui.wait_for_text("Usage CSV written");
+    let day = nebula_core::usage_ledger::local_day(nebula_core::clock::now_secs() as i64);
+    let file = tui
+        .data_dir
+        .join("exports")
+        .join(format!("usage-{day}.csv"));
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), csv);
 }
 
 /// The quick prompt, `task` typed and sent.

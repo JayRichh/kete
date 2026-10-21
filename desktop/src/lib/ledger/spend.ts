@@ -10,10 +10,17 @@ function short(n: number): string {
 
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
+/** Today's local date, `YYYY-MM-DD`, as the ledger names its days. */
+export function localDay(d: Date = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 /** `today: 412k tokens, est. US$3.10, 58 tool uses, 9 turns`. Tokens are
- *  input plus output; cache tokens are left out (pending Jay). */
-export function spendLine(row: SpendRow | undefined): string | null {
-  if (!row) return null;
+ *  input plus output; cache tokens are left out (pending Jay). Nothing for
+ *  no row, or for a row from another day (yesterday's, past midnight). */
+export function spendLine(row: SpendRow | undefined, today: string = localDay()): string | null {
+  if (!row || row.day !== today) return null;
   const tokens = row.input_tokens + row.output_tokens;
   const words = tokens === 1 ? 'token' : 'tokens';
   return [
