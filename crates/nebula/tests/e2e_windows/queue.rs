@@ -285,7 +285,7 @@ fn queue_a0_refuses_every_spawn() {
     }
 
     // The orchestrator's own command, as it runs it.
-    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_kete"));
+    let mut cmd = tui.kete_command();
     cmd.args(["orchestrator", "spawn", "--project", "game", "x"])
         .env(nebula_core::env::RUNTIME_DIR, &tui.runtime_dir)
         .env(nebula_core::env::DATA_DIR, &tui.data_dir)

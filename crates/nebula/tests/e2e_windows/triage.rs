@@ -5,7 +5,7 @@
 
 use super::harness::{git, Options, Tui, WAIT};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Child, Output, Stdio};
 use std::time::{Duration, Instant};
 
 pub const TESTS: &[(&str, fn())] = &[
@@ -61,7 +61,7 @@ fn ok(out: &Output) {
 
 /// `kete <args>` beside the harness's TUI, left running.
 fn kete_child(t: &Tui, args: &[&str]) -> Child {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_kete"));
+    let mut cmd = t.kete_command();
     cmd.args(args)
         .env(nebula_core::env::RUNTIME_DIR, &t.runtime_dir)
         .env(nebula_core::env::DATA_DIR, &t.data_dir)

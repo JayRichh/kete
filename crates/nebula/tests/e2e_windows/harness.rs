@@ -227,6 +227,12 @@ impl Tui {
         self.kete_with(args, &[])
     }
 
+    /// A bare `kete` command with this harness's home and no login
+    /// variable, for a flow that sets the rest itself.
+    pub fn kete_command(&self) -> std::process::Command {
+        kete_command(&self.launch.base)
+    }
+
     /// [`Tui::kete`] with `env` on top: `NEBULA_AGENT_ID` names the
     /// session an orchestrator verb runs as.
     pub fn kete_with(&self, args: &[&str], env: &[(&str, &str)]) -> std::process::Output {
