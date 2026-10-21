@@ -117,7 +117,7 @@ When nothing holds, the TUI reads `A1 Plan · ready: 3 new notes` until the next
 | Where | What it holds |
 |---|---|
 | `config.local.json`, key `studio` | One entry per repo: its inbox, its autonomy and the notes to leave out. Machine-local: never exported, never sent over `kete ssh`. |
-| `<data dir>/studio/queue-state.json` | The notes already announced, when the last idle note went out and the times of the idle notes in the last hour, and when the last context nudge went out. It survives a restart. |
+| `<data dir>/studio/queue-state.json` | The notes already announced, when the last idle note went out (overall and for each repo) and the times of the idle notes in the last hour, and when the last context nudge went out. It survives a restart. |
 | `<data dir>/studio/refusals.jsonl` | One line for each spawn refused at A0, and for each refused unattended launch. |
 
 See [Configuration](configuration.md#the-studio-map) for the `studio` map.
